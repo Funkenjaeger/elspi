@@ -91,6 +91,16 @@ GitHub interface convenience only — the "forked from" banner, the Sync fork
 button, and the ability to open a pull request against upstream, which we will
 never do.
 
+### Before making this public
+
+The intent is to make this repository public once it is moderately mature. Two
+things to do first, neither of which is urgent while it is private:
+
+- Generalize the **Remotes** section below. `dserver` and `/mnt/git` are our git
+  hosting, not something a reader of a Pi image builder needs.
+- Re-check the tree for anything internal. As of 2026-08-17 there are no
+  credentials, keys, or LAN addresses in any file we have added.
+
 Upstream's EOL release branches (`bookworm`, `bullseye`, `buster`, `jessie` and
 their `-arm64` variants) were deleted from this repo so that its branch list means
 "our lines." They remain available at any time as `upstream/<name>` after a

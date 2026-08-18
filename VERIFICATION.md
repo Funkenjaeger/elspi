@@ -69,8 +69,23 @@ The harness must print this list rather than leave it implicit. A check that
 cannot fail on the thing you care about reports a confident clean over exactly
 the state it could not see — so Tier 3 stays mandatory no matter how green CI is.
 
-## Runner choice — decide before building the workflow
+## Runner choice — GitHub-hosted, unless the build turns out to be very long
 
-GitHub-hosted minutes are **metered on a private repository**, and a pi-gen build
-is not short. A self-hosted runner on dserver has no metering, far more disk, and
-matches the estate convention that homelab work runs on dserver. Not yet decided.
+Decided 2026-08-17: default to **GitHub-hosted**. The free allowance on a private
+repo is 2000 minutes/month, which is roomy at this cadence, and the metering
+disappears entirely once the repo goes public — which is the intent as soon as it
+is moderately mature.
+
+The number nobody has yet is *our* build's duration, and there is a specific
+reason to expect it to exceed ospi's: **we compile Kivy from source under
+QEMU-emulated armhf**, which ospi never pays for (see `RUNTIME-INVENTORY.md`).
+Emulated Cython compilation is slow. Measure the first manual build before
+assuming the allowance is generous — though even at two hours a build, 2000
+minutes is roughly 16 builds a month, and GitHub's 6-hour job ceiling is not
+close.
+
+Revisit a self-hosted runner on dserver only if that measured number comes back
+bad. Persisting pi-gen's `work/` directory between runs would make iteration much
+faster there, but note that cuts against the point of this harness: a verification
+build should start clean, or it stops proving the image is reproducible from
+scratch.
