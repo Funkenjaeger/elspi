@@ -1,0 +1,170 @@
+# What the image has to produce
+
+Captured **2026-08-17** from the live elspi, from `C:\projects\reflex\ui`, and from
+`bartei/ospi@main` for comparison. This is the input spec for our custom stage.
+Re-verify before trusting it — it is a snapshot of a machine, not a contract.
+
+Nothing here has been decided. Open decisions are collected at the bottom.
+
+## The target
+
+Raspberry Pi 5 Model B Rev 1.0 · Raspbian GNU/Linux 13 (trixie) · kernel
+`6.18.34+rpt-rpi-v8` (`aarch64`) over an **`armhf` userland** — every dpkg entry is
+`:armhf`. System `python3` is **3.13.5**.
+
+`reflex-ui` runs as **root** from `/reflex-ui` (a symlink to
+`/home/default/projects/reflex/ui`), unit `/etc/systemd/system/reflex-ui.service`,
+`ExecStart=/reflex-ui/start.sh`, `Restart=on-failure`,
+`After=network.target auditd.service`.
+
+## Kivy must be compiled, not downloaded
+
+The single most consequential finding. The installed
+`Kivy-2.3.1.dist-info/WHEEL` reads `Tag: cp313-cp313-linux_armv7l` — **no such
+wheel exists on PyPI**. It was built from sdist on the device.
+
+ospi does not hit this: on its Python version `rotary-controller-python` pulls a
+prebuilt wheel, so its stage installs *runtime* SDL2 packages only. Ours cannot.
+The stage needs the build toolchain as well:
+
+```
+libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev
+libmtdev-dev python3-dev build-essential pkg-config
+```
+
+(Cython arrives transiently through build isolation; it is not installed on elspi
+as a package.)
+
+## Packages
+
+ospi's graphics stage (`stage-base/40-rotary-controller/00-packages`) is the right
+starting point but is **incomplete for us**:
+
+```
+python3-virtualenv libgl1 libgles2 libegl1 libmtdev1t64
+libsdl2-2.0-0 libsdl2-gfx-1.0-0 libsdl2-image-2.0-0
+libsdl2-mixer-2.0-0 libsdl2-net-2.0-0 libsdl2-ttf-2.0-0
+```
+
+Add, with reasons:
+
+| Package | Why |
+|---|---|
+| the `-dev` set above | Kivy compiles from source here |
+| `libgbm1`, `libdrm2` | SDL2's `kmsdrm` driver dlopens both. They arrive as Mesa/SDL2 dependencies today, i.e. by accident of resolution — name them if KMS/DRM is a requirement rather than a coincidence |
+| `libgl1-mesa-dri`, `mesa-libgallium` | the actual V3D DRI driver (`OpenGL renderer V3D 7.1.7.0`). Without it you get llvmpipe or a hard EGL failure. A lean pi-gen base may not seed these |
+| `network-manager` | the `nmcli` **Python** package shells out to the `nmcli` **binary**. No Python manifest declares this. ospi enables the service but never lists the package — it inherits it from the Raspberry Pi OS base |
+
+Two things **not** to do:
+
+- **Do not install `libinput`.** It is absent on the working machine. Kivy's touch
+  path is `MTD`/`ProbeSysfs` on `/dev/input/event6` via **libmtdev**.
+- **Do not strip the X11 client libraries.** `libsdl2-2.0-0` carries hard `NEEDED`
+  links to `libX11`, `libXext`, `libXcursor`, `libXi`, `libXfixes`, `libXrandr`,
+  `libXss`, `libxkbcommon`, `libdecor-0` and the Wayland client libs. They come in
+  as its dependencies and must stay. What must be absent is the X *server* and any
+  Wayland *compositor* — see the SDL fallback note below.
+
+## The application
+
+`pyproject.toml` (hatchling, `requires-python = ">=3.11,<4.0"`), resolved through
+`uv.lock` — there is no `requirements.txt` and no `poetry.lock`:
+
+```
+cachetools 7.0.5 · keke 0.2.0 · kivy 2.3.1 · kivy-garden 0.1.5
+minimalmodbus 2.1.1 · nmcli 1.7.0 · pydantic 2.12.5 · pyserial 3.5
+pyyaml 6.0.3 · aiohttp 3.13.3 · sentry-sdk 2.55.0 · transitions 0.9.3
+```
+
+The venv at `/reflex-ui/.venv` is **uv-created and has no `pip`**. `uv` itself is a
+hand-placed ~50 MB binary at `/home/default/.local/bin/uv` (version 0.11.23) — it
+is not a Debian package and nothing provisions it today.
+
+The live venv also carries the `dev` group (pytest, coverage,
+python-semantic-release, python-gitlab, gitpython, rich, …) because elspi runs
+`uv sync` against a live checkout. An image should install the main group only —
+roughly 20 fewer packages.
+
+## Launch environment
+
+`deploy/start.sh` on the desktop is **byte-identical** to the live
+`/reflex-ui/start.sh`. It exports exactly:
+
+```sh
+export KCFG_KIVY_KEYBOARD_MODE="systemanddock"
+export KCFG_KIVY_LOG_DIR="/var/log"
+export KCFG_GRAPHICS_WIDTH=1024
+export KCFG_GRAPHICS_HEIGHT=600
+export KCFG_GRAPHICS_FULLSCREEN=auto
+export REFLEX_CONFIG_DIR=/var/lib/reflex-config
+```
+
+then sources `$UI_DIR/.venv/bin/activate` and `exec python -m reflex.main`.
+
+**KMS/DRM is selected by absence, not by configuration.** There is no
+`SDL_VIDEODRIVER`, no `DISPLAY`, no `KIVY_WINDOW`, no `KIVY_GL_BACKEND`. SDL2 falls
+back to `kmsdrm` only because neither `DISPLAY` nor `WAYLAND_DISPLAY` exists. If
+the image ever ships a compositor, the backend changes silently.
+
+Runtime confirmation from `/var/log/kivy_26-08-17_6.txt`: `Window: Provider: sdl2`,
+`GL: Backend used <sdl2>`, `OpenGL version 3.1 Mesa 25.0.7-2+rpt4`, vendor
+`Broadcom`, renderer `V3D 7.1.7.0`, `virtual keyboard allowed, single mode, docked`.
+
+## Boot configuration
+
+Live `/boot/firmware/config.txt` differs from stock pi-gen in exactly these ways:
+
+```
+dtparam=i2c_arm=on          # stock ships this COMMENTED
+dtparam=spi=on              # stock ships this COMMENTED
+enable_uart=1               # not in stock
+camera_auto_detect=0        # stock ships =1
+disable_splash=1            # not in stock
+usb_max_current_enable=1    # local addition: "Force high current USB mode to
+                            # mitigate brownouts of USB-attached touchscreen display"
+```
+
+`cmdline.txt`: `console=tty1 root=… rootfstype=ext4 fsck.repair=yes rootwait quiet
+splash logo.nologo plymouth.ignore-serial-consoles`.
+
+Keep upstream's `[pi5] dtoverlay=nospi10` block — elspi is a Pi 5 that uses SPI,
+and this is one of the two lines ospi dropped.
+
+`usb_max_current_enable=1` is a **hardware workaround for the real display** and
+must survive into the image; it exists nowhere in ospi or upstream.
+
+## Found while inventorying: audio is broken on elspi right now
+
+Not a provisioning issue — a live defect, recorded here because it was found here
+and because it changes what "reproduce the machine" should mean.
+
+```
+[CRITICAL] AudioSDL2: Unable to open mixer: ALSA: Couldn't open audio device:
+           Unknown error 524
+```
+
+plus a failed `snap.wav` load. Elspi's `/etc/asound.conf` is a single malformed
+line — `defaults.pcm.card 1 defaults.ctl.card 1` run together — where ospi ships a
+proper `stage-base/14-asound` file. So the image should take **ospi's** approach
+rather than copying elspi's current state, which would faithfully reproduce a bug.
+
+## Open decisions — do not resolve these silently
+
+1. **The image-vs-deltas seam.** Everything above has to land on one side or the
+   other. This is the first blocking decision and it is Evan's.
+2. **`uv` or `python3-venv` + `pip`?** The machine uses `uv` (unpackaged, hand
+   placed, pinned nowhere). ospi uses `python3-virtualenv` + `pip install .`.
+   Falling back to pip resolves versions differently from `uv.lock`.
+3. **Pillow.** The live Kivy log shows `img_pil` among active image providers, but
+   `pillow>=10.0.0` is declared only in the **dev** group. Installing the main
+   group alone silently drops that provider. Promote it, or accept `img_sdl2`.
+4. **Pin `SDL_VIDEODRIVER=kmsdrm`?** Today the requirement is enforced by absence.
+   Pinning makes it a stated contract; not pinning keeps upstream's flexibility.
+
+## Unknown
+
+**`/root/.kivy/` was not readable** by the SSH user, and `reflex-ui` runs as root —
+so a `config.ini` there could be overriding graphics settings and would be invisible
+to any rebuild. This needs a `sudo ls -la /root/.kivy/` on elspi by hand. It is
+recorded as unknown rather than assumed empty, because an image built against the
+wrong assumption would come up subtly different with nothing pointing at why.
