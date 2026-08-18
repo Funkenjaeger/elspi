@@ -161,10 +161,43 @@ rather than copying elspi's current state, which would faithfully reproduce a bu
 4. **Pin `SDL_VIDEODRIVER=kmsdrm`?** Today the requirement is enforced by absence.
    Pinning makes it a stated contract; not pinning keeps upstream's flexibility.
 
-## Unknown
+## Resolved: `/root/.kivy/config.ini` exists, and is stock
 
-**`/root/.kivy/` was not readable** by the SSH user, and `reflex-ui` runs as root —
-so a `config.ini` there could be overriding graphics settings and would be invisible
-to any rebuild. This needs a `sudo ls -la /root/.kivy/` on elspi by hand. It is
-recorded as unknown rather than assumed empty, because an image built against the
-wrong assumption would come up subtly different with nothing pointing at why.
+Checked 2026-08-18 (needed root). The file is present, dated 22 March — written
+when the machine was set up and never hand-edited since. Its contents are Kivy's
+own defaults at `config_version = 27`.
+
+It does **not** silently override the launch environment, because `KCFG_*`
+environment variables take precedence over `config.ini` — and there is direct
+evidence of that on this machine rather than just documentation: `config.ini` says
+`log_dir = logs`, `start.sh` exports `KCFG_KIVY_LOG_DIR=/var/log`, and the live
+logs are in `/var/log`. The environment wins.
+
+So every graphics value that disagrees is won by `start.sh`:
+
+| Key | config.ini | start.sh | effective |
+|---|---|---|---|
+| `width` | 800 | `KCFG_GRAPHICS_WIDTH=1024` | 1024 |
+| `height` | 600 | `KCFG_GRAPHICS_HEIGHT=600` | 600 |
+| `fullscreen` | 0 | `KCFG_GRAPHICS_FULLSCREEN=auto` | auto |
+
+**Consequence for the image: nothing here to reproduce.** Kivy writes this file
+with defaults on first run when it is absent, so a fresh image regenerates an
+equivalent one — provided the Kivy version matches, since defaults and
+`config_version` can move between releases. We pin 2.3.1.
+
+Do not "tidy" the `[input]` section, though: `mouse = mouse` and
+`%(name)s = probesysfs` are what put the touchscreen on Kivy's MTD/ProbeSysfs
+path. Stock, but load-bearing.
+
+### Two things noticed while reading it
+
+Neither is a provisioning issue; both are about the running machine.
+
+- `show_cursor = 1` — a mouse cursor on a touchscreen kiosk.
+- `exit_on_escape = 1` against the unit's `Restart=on-failure`. A Kivy
+  escape-exit is a **clean** exit, so systemd would not restart it and the lathe
+  UI would stay down until someone intervened. Whether it is reachable depends on
+  a keyboard being attached — the docked virtual keyboard may not expose Escape at
+  all — but it is cheap to close from either end (`exit_on_escape = 0`, or
+  `Restart=always`).
