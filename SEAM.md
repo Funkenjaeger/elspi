@@ -1,8 +1,14 @@
 # Where the image ends and provisioning begins
 
-**Status: PROPOSED, not decided.** This is a recommendation for Evan, with the
-reasoning exposed so the parts he disagrees with can be moved without unpicking
-the rest.
+**Status: DECIDED 2026-08-22.** Ratified by Evan in full — the criterion, the
+proposed line, and all three contested calls — with one amendment to call 3,
+recorded there. Superseded reasoning is left in place rather than deleted: the
+value of this document is that the parts he *could* have disagreed with are
+still visible.
+
+Originally written as a recommendation, with the reasoning exposed so the parts
+he disagreed with could be moved without unpicking the rest. Nothing needed
+moving.
 
 ## The criterion
 
@@ -38,7 +44,7 @@ genuinely non-obvious call here.
 | Plymouth theme and splash | boot-path, invisible to deltas |
 | Every Debian package: SDL2 + Mesa DRI + libmtdev, `network-manager`, the build toolchain, `gcc-arm-none-eabi`, `cmake`, `openocd` | apt at provision time is a network dependency on the recovery path |
 | `openocd` udev rules | static, not secret, never changes |
-| Fixed `asound.conf` (ospi's shape, **not** elspi's current broken one) | static |
+| `asound.conf` pinned to **card 0** (`defaults.pcm.card 0 defaults.ctl.card 0`) | static. **CORRECTED 2026-08-22** — this row used to read "ospi's shape, not elspi's current broken one", which was wrong twice over: elspi's file is BYTE-IDENTICAL to ospi's reference, and the shape was never the bug. The bug is the card index. `aplay -l` shows two HDMI outputs (`vc4hdmi0`/`vc4hdmi1`); the kernel reports `card1-HDMI-A-1 connected` and `card1-HDMI-A-2 disconnected`; `hw:1,0` returns exactly reflex-ui's `Unknown error 524` while `plughw:0,0` plays. The live file selected card **1**, the empty port. Bake card 0 |
 | Locale and **timezone** | fixes the standing `-0500` bug at the source |
 | `default` user and its full group list (`dialout plugdev gpio i2c spi render input video netdev sudo`) — **no password** | group membership gates device access; the password is a secret, see below |
 | **The Python venv with every third-party dependency, Kivy already compiled — but not `reflex-ui` itself** | the non-obvious call; see below |
@@ -59,6 +65,10 @@ contract is the one that must not be softened.
 ## The three calls worth arguing about
 
 ### 1. The venv goes in the image, the app does not
+
+**RATIFIED 2026-08-22**, both consequences accepted: the venv moves to a fixed
+app-independent path (`/opt/reflex-venv`) out of the application checkout, and
+image+app become a version pair that wants tagging together rather than floating.
 
 This is the load-bearing recommendation. **No `cp313`/`armv7l` Kivy wheel exists**
 (`RUNTIME-INVENTORY.md`), so somebody compiles Kivy from sdist. The only question
@@ -87,6 +97,8 @@ Two consequences to accept honestly:
 
 ### 2. No password anywhere in this repo — it is going public
 
+**RATIFIED 2026-08-22.** Build the user locked; no credential enters this repo.
+
 pi-gen takes `FIRST_USER_PASS` in its build config. Putting the real one there
 would commit a credential to a repository that is intended to become public. Build
 the user **locked**, and let the interactive phase set the password on first
@@ -95,12 +107,34 @@ flip, because git history keeps what you commit.
 
 ### 3. The firmware toolchain is a real choice, not an oversight
 
+**RATIFIED 2026-08-22 WITH AN AMENDMENT — "optional" means offered at PROVISION
+time, not chosen at image-build time.** Evan's wording: the option is presented
+during the interactive provision phase.
+
+That is a change of *when the human is asked*, and it collides with test 2 if
+taken literally, so the resolution is written out rather than left implicit:
+
+- **The packages stay baked in the image.** Installing `gcc-arm-none-eabi`,
+  `cmake` and `openocd` at provision time would put a package mirror back on the
+  recovery path, which is the single thing test 2 exists to remove. Disk is cheap;
+  a network in a machine shop on the day the SD card died is not.
+- **The interactive phase asks whether to ENABLE the dev role** — the `reflex-fw`
+  checkout, the openocd udev rules being active, PATH exposure — not whether to
+  install it. A "no" gives an appliance that behaves like a lean image; the bytes
+  are simply present and inert.
+- So `STAGE_LIST` is NOT the mechanism. The stage always runs; the interactive
+  phase carries the question, alongside the password and the network credentials.
+
+If the intent was in fact apt-at-provision, this note is where to correct it —
+that trade (a leaner image, a network-dependent recovery) is a real one, just not
+the one ratified here.
+
 `gcc-arm-none-eabi`, `cmake`, `openocd` and the `reflex-fw` checkout are developer
 tooling living on a production lathe controller. They are on elspi because firmware
-is flashed *from* there, so they stay — but consider making them a separate,
-optional pi-gen stage. A lean appliance image plus an opt-in dev stage costs almost
-nothing to arrange with `STAGE_LIST` and keeps the honest answer to "what does the
-appliance actually need" available later.
+is flashed *from* there, so they stay. The original proposal was a separate,
+optional pi-gen stage arranged with `STAGE_LIST`; the amendment above moves the
+choice to provision instead, keeping the honest answer to "what does the appliance
+actually need" available later.
 
 ## What this settles of the open sub-decisions
 
