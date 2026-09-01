@@ -161,6 +161,94 @@ rather than copying elspi's current state, which would faithfully reproduce a bu
 4. **Pin `SDL_VIDEODRIVER=kmsdrm`?** Today the requirement is enforced by absence.
    Pinning makes it a stated contract; not pinning keeps upstream's flexibility.
 
+## Decided 2026-09-01: the image runs `reflex-ui` as a NON-ROOT service user
+
+Evan's call, on a closeloops card: *"is there any reason we need to / should
+persist the OSPI decision to run the UI as root? that feels like it's been a pain
+in the ass on a regular basis because agents don't have access to read configs and
+junk, and even I have to do sudo shenanigans when I'm ssh'ed in."* He chose to
+relieve the live pain now **and** bake the real fix into the image.
+
+Root was inherited from ospi. It was never justified against this machine, and
+when it finally was — measured on the live elspi 2026-09-01, not reasoned — four
+of the five reasons turned out to be self-inflicted:
+
+| what | live state 2026-09-01 | needs root? |
+|---|---|---|
+| `/dev/ttyAMA0` (Modbus to the STM32) | `crw-rw---- root dialout`; `default` **is** in `dialout` | **No** |
+| `/root/.kivy/config.ini` | root-only — see the section below | **No.** It is root-only *because* the service is |
+| `/var/lib/reflex-config` | `drwxr-xr-x root root`, and reflex **writes** there | **No** — one `chown` |
+| `KCFG_KIVY_LOG_DIR=/var/log` | Kivy writes `kivy_*.txt` straight into `/var/log` | **No** — gratuitous |
+| **DRM/KMS master** | `/dev/dri/card0` `crw-rw----+ root video`; `default` **is** in `video` (44) and `render` (992) | **This is the only real one** |
+
+`default`'s full group set, for the record:
+`adm dialout cdrom sudo audio video plugdev games users input render netdev spi i2c gpio`.
+Every device permission the application needs is **already granted to that user**.
+
+### The one real blocker: DRM master, not device permission
+
+Group permission on `/dev/dri/*` is already satisfied. What root actually buys is
+**DRM master arbitration**. `reflex-ui.service` is a plain system unit with
+`User=root`/`Group=root` and no logind session, so it is not attached to a seat —
+`seat0` exists on the machine, but the service never joins it. A non-root process
+becomes DRM master by being the active session on a seat, which means an autologin
+session on tty1 plus a user service, or an explicit grant.
+
+**So the stage must decide HOW, not WHETHER.** Options, none yet tested:
+
+1. autologin on tty1 + a `systemd --user` unit, so logind grants the seat;
+2. a system unit with `TTYPath=/dev/tty1` and the seat plumbing done explicitly;
+3. keep a system unit and grant only the capability needed rather than full root.
+
+### THE HARNESS CANNOT ANSWER THIS — state it out loud
+
+The planned verification harness is `systemd-nspawn --boot` under
+`qemu-user-static`, and this document already records that it has **no GPU**, so
+KMS/DRM and V3D are outside what it can see. **A non-root DRM-master path is
+therefore NOT provable in CI.** The harness can assert the user exists, the groups
+are right, the ownerships are right, the unit's `User=` is what we declared, and
+that the app imports and starts far enough to fail on the display — and no
+further. Whether it actually takes DRM master is a **hardware SD-card test item**,
+which is exactly why that test stays mandatory.
+
+Writing this here rather than discovering it during the build: a green CI run on a
+non-root image means *"the userland is what we declared"*, never *"the appliance
+comes up"*.
+
+### What the stage must produce
+
+- a service user (`default` is the obvious candidate — it already holds every
+  needed group) and `User=`/`Group=` set explicitly in `reflex-ui.service`,
+  never left to default to root;
+- `/var/lib/reflex-config` owned by that user — it is **written** at runtime, so
+  read permission is not enough;
+- a log directory owned by that user, with `KCFG_KIVY_LOG_DIR` pointing at it
+  instead of `/var/log`. Do **not** reproduce the current state, which scatters
+  root-owned `kivy_*.txt` files across `/var/log`;
+- Kivy's `config.ini` lands in that user's `~/.kivy`, not `/root/.kivy`.
+
+### Interim, on the live machine (2026-09-01)
+
+The live half was applied ahead of the image work, and deliberately **without**
+changing `User=root` — so it cannot stop the lathe UI from starting: the config
+directory and a new `/var/log/reflex` were chowned to `default`, the stray Kivy
+logs moved out of `/var/log`, and `KCFG_KIVY_LOG_DIR` repointed. Root still runs
+the service and can still write into a `default`-owned tree, so the change is
+inert to the running application and purely removes the `sudo` friction.
+
+**Sequencing note, and it is not optional:** the log directory must exist and be
+writable *before* `KCFG_KIVY_LOG_DIR` moves. Evan has no terminal on elspi — the
+machine is a touchscreen — so a UI that fails to start is recovered by physically
+power-cycling a lathe. Nothing here is worth that.
+
+### This also dissolves an existing blind spot
+
+`/root/.kivy/config.ini` was carried in this document for weeks as an UNKNOWN
+needing Evan's hands, precisely because the SSH user could not read it. It is
+root-only **because the service is root**. Under a non-root service user the file
+lives in that user's home, readable by Evan and by any rebuild. The fix removes
+the blind spot rather than documenting around it.
+
 ## Resolved: `/root/.kivy/config.ini` exists, and is stock
 
 Checked 2026-08-18 (needed root). The file is present, dated 22 March — written
