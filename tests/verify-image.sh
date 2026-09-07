@@ -65,6 +65,26 @@ check() { # check <description> <command...>
 
 MANIFEST="${ROOTFS}/etc/elspi-image.json"
 
+# --- find WITHOUT a pipe ----------------------------------------------------
+# `find ... | grep -q .` is wrong in this file, and wrong in a way that looks
+# like a real defect. This script runs under `set -o pipefail`; grep -q exits
+# at the FIRST match, find is still walking, find takes SIGPIPE, and the
+# pipeline's status is failure. The check then reports ABSENT for something
+# there are 38 copies of.
+#
+# It is a race, so it does not fail every time -- which is worse. Measured
+# 2026-09-07: the Kivy .so check failed this way against an image that was
+# entirely correct, while the dist-info check beside it passed.
+#
+# -print -quit makes find stop on its own. No pipe, no signal, no race.
+found_any() { # <dir> <find predicates...>
+	local dir="$1"; shift
+	local hit
+	hit="$(find "${dir}" "$@" -print -quit 2>/dev/null)"
+	[ -n "${hit}" ]
+}
+
+
 # --- resolving paths INSIDE the rootfs --------------------------------------
 # A symlink in a rootfs whose target starts with "/" means "/" OF THAT ROOTFS.
 # The shell, running outside, resolves it against the real root instead. Every
@@ -230,7 +250,7 @@ section "The venv (Kivy compiled, reflex absent)"
 check "${VENV}/bin/python exists (resolved within the rootfs)" \
 	rootfs_exists "${VENV}/bin/python"
 
-if find "${ROOTFS}${VENV}" -maxdepth 5 -iname 'kivy-*.dist-info' 2>/dev/null | grep -q .; then
+if found_any "${ROOTFS}${VENV}" -maxdepth 5 -iname 'kivy-*.dist-info'; then
 	ok "Kivy is installed in the venv"
 else
 	bad "Kivy is installed in the venv"
@@ -238,14 +258,14 @@ fi
 
 # The expensive part of the build. A Kivy without compiled extensions is not
 # the Kivy this image needs.
-if find "${ROOTFS}${VENV}" -name '*.so' -path '*kivy*' 2>/dev/null | grep -q .; then
+if found_any "${ROOTFS}${VENV}" -name '*.so' -path '*kivy*'; then
 	ok "Kivy carries compiled extensions (.so)"
 else
 	bad "Kivy carries compiled extensions (.so)"
 fi
 
 # SEAM.md call 1: the image ships the DEPENDENCIES, the delta ships the APP.
-if find "${ROOTFS}${VENV}" -maxdepth 5 -iname 'reflex-*.dist-info' 2>/dev/null | grep -q .; then
+if found_any "${ROOTFS}${VENV}" -maxdepth 5 -iname 'reflex-*.dist-info'; then
 	bad "the reflex package is NOT in the image venv (it is a delta)"
 else
 	ok "the reflex package is not in the image venv (it is a delta)"
@@ -262,7 +282,7 @@ fi
 # dependency, and that fix belongs in the reflex repo. Until it lands, --no-dev
 # drops pillow and Kivy loses img_pil. Reported as UNKNOWN rather than PASS so
 # it cannot quietly become "fine".
-if find "${ROOTFS}${VENV}" -maxdepth 5 -iname 'pillow-*.dist-info' 2>/dev/null | grep -q .; then
+if found_any "${ROOTFS}${VENV}" -maxdepth 5 -iname 'pillow-*.dist-info'; then
 	ok "pillow present (img_pil provider available)"
 else
 	unknown "pillow ABSENT -- img_pil unavailable. SEAM.md ratified promoting it to a runtime dep in the reflex repo; that has not landed."

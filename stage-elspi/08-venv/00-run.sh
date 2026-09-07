@@ -90,7 +90,7 @@ test -x ${VENV}/bin/python
 ${VENV}/bin/python -c "import sys; print('venv python', sys.version.split()[0])"
 EOF
 
-KIVY_DIST=$(find "${ROOTFS_DIR}${VENV}" -maxdepth 5 -iname "kivy-*.dist-info" | head -n1)
+KIVY_DIST="$(find "${ROOTFS_DIR}${VENV}" -maxdepth 5 -iname "kivy-*.dist-info" -print -quit)"
 if [ -z "${KIVY_DIST}" ]; then
 	echo "FATAL: no Kivy dist-info in ${VENV} -- Kivy is not installed"
 	exit 1
@@ -99,7 +99,8 @@ fi
 # The whole reason this stage is expensive: a COMPILED Kivy. If this ever comes
 # back as a pure-python or generic wheel tag, something resolved differently
 # and the appliance will not render.
-if ! find "${ROOTFS_DIR}${VENV}" -name "*.so" -path "*kivy*" | head -n1 | grep -q .; then
+KIVY_SO="$(find "${ROOTFS_DIR}${VENV}" -name "*.so" -path "*kivy*" -print -quit)"
+if [ -z "${KIVY_SO}" ]; then
 	echo "FATAL: Kivy is installed but carries no compiled extensions (.so)."
 	echo "       That is not the Kivy this image needs."
 	exit 1
