@@ -75,9 +75,26 @@ chk "serial-getty@ttyAMA0.service is masked" \
 	bash -c '[ "$(systemctl is-enabled serial-getty@ttyAMA0.service 2>/dev/null)" = masked ]'
 
 # --- no display server got pulled in ---------------------------------------
-for u in display-manager.service gdm.service lightdm.service; do
-	if systemctl cat "${u}" >/dev/null 2>&1; then
-		bad "${u} is not present (a display server changes SDL's backend)"
+# Test for the UNIT FILE, not `systemctl cat`.
+#
+# In a chroot, `systemctl cat` prints "Running in chroot, ignoring command
+# 'cat'" and EXITS 0 -- for every unit, present or not. Built on that, this
+# check reported all three display managers as installed on an image that has
+# no display-manager unit at all. A check that cannot pass is the mirror image
+# of one that cannot fail, and it is just as much a lie.
+#
+# Reading the unit paths works identically booted or chrooted.
+unit_file_present() { # <unit name>
+	local u="$1" d
+	for d in /lib/systemd/system /usr/lib/systemd/system /etc/systemd/system; do
+		[ -e "${d}/${u}" ] && return 0
+	done
+	return 1
+}
+
+for u in display-manager.service gdm.service gdm3.service lightdm.service sddm.service; do
+	if unit_file_present "${u}"; then
+		bad "${u} is absent (a display server changes SDL's backend)"
 	else
 		ok "${u} absent"
 	fi
@@ -111,10 +128,31 @@ fi
 # produced. It is NOT evidence that the display works -- see the blind spots.
 VENV_PY=$(sed -n 's/.*"venv": "\([^"]*\)".*/\1/p' /etc/elspi-image.json)/bin/python
 if [ -x "${VENV_PY}" ]; then
-	if OUT="$("${VENV_PY}" -c 'import kivy; print(kivy.__version__)' 2>&1)"; then
+	# DO NOT LET KIVY WRITE INTO THE IMAGE.
+	#
+	# Importing kivy creates ~/.kivy and a log file. Run as root in a chroot
+	# that is /root/.kivy -- INSIDE THE ARTIFACT, and precisely the path the
+	# 2026-09-01 non-root decision exists to eliminate. The first run of this
+	# check created it. A harness that leaves droppings in the thing it is
+	# certifying has damaged the evidence.
+	#
+	# Point Kivy's home and log dir at /tmp, and keep the version out of the
+	# banner noise by asking for it on its own line.
+	OUT="$(KIVY_HOME=/tmp/.kivy-probe KCFG_KIVY_LOG_DIR=/tmp KIVY_NO_ARGS=1 \
+		"${VENV_PY}" -c 'import kivy, sys; sys.stderr.close(); print(kivy.__version__)' 2>/dev/null)"
+	if [ -n "${OUT}" ]; then
 		ok "venv imports kivy (version ${OUT})"
 	else
-		bad "venv imports kivy -- got: ${OUT}"
+		bad "venv failed to import kivy"
+	fi
+	rm -rf /tmp/.kivy-probe
+	# Belt and braces: remove anything Kivy still managed to leave in root's
+	# home, and assert it is gone.
+	rm -rf /root/.kivy
+	if [ -e /root/.kivy ]; then
+		bad "harness left /root/.kivy inside the image"
+	else
+		ok "no /root/.kivy left in the image by this probe"
 	fi
 else
 	bad "venv python not executable at ${VENV_PY}"
