@@ -72,9 +72,46 @@ Every file we *add* is free. So:
   express our configuration. Stage selection belongs in our build config's
   `STAGE_LIST`.
 
-Upstream files edited so far: **none.** Still true as of 2026-09-07, with the
-stage written — everything we add lives in `stage-elspi/`, `elspi.conf`,
-`ci.conf` and `tests/`.
+Upstream files edited so far: **one — `Dockerfile`, one word.**
+
+Everything else we add lives in new files: `stage-elspi/`, `elspi.conf`,
+`ci.conf`, `build-elspi.sh`, `tests/`.
+
+#### `Dockerfile` — added `gpgv` to the apt line (2026-09-07)
+
+The first real build died in `stage0` debootstrap:
+
+```
+E: Invalid Release signature
+Signing key on A0DA38D0D76E8B5D638872819165938D90FDDD2E is not bound:
+  because: Policy rejected non-revocation signature (PositiveCertification)
+  because: SHA1 is not considered secure since 2023-02-01
+```
+
+This is ospi's "gpgv in the Dockerfile" cherry-pick, which this document had
+been carrying as *unconfirmed*. It is confirmed — and **the reason is not the
+one the name suggests.**
+
+Measured inside the container rather than inferred: `command -v gpgv sqv gpg`
+returns only `/usr/bin/sqv` and `/usr/bin/gpg`. `gpgv` is absent, because the
+Dockerfile installs `gpg` with `--no-install-recommends` and the `gpg` package
+does not depend on `gpgv`. With no `gpgv` present, debootstrap falls back to
+Sequoia's `sqv`, whose crypto policy rejects the Raspbian archive key because
+that key's self-signature is SHA1.
+
+So the fault is not "gpgv is missing" in the abstract. It is **"the wrong
+verifier gets used, and its policy is stricter than the Raspbian archive key
+can satisfy."** Upstream most likely never sees this because its own CI runs
+`build.sh` on a runner that already has GnuPG; the *Docker* path is the broken
+one, which is precisely why ospi — who builds through `build-docker.sh` — hit
+it and patched it.
+
+**Why the edit rather than a workaround.** `build-docker.sh` offers no
+Dockerfile override hook, and the only edit-free alternative was to run an
+`apt-get install gpgv` from inside `elspi.conf`, which hides a package
+transaction in a configuration file. One added word in a package list is about
+the mildest merge conflict available, and it is a real upstream deficiency
+rather than our configuration. Verified fixed: debootstrap now completes.
 
 One case came close and was resolved without an edit, recorded so nobody
 re-litigates it. Exporting only *our* image means stage2 must not also export a
