@@ -71,10 +71,24 @@ EOF
 # These gate on signals that could have come out differently. A venv directory
 # existing proves nothing; the point of this stage is that KIVY IS COMPILED.
 
-[ -x "${ROOTFS_DIR}${VENV}/bin/python" ] || {
-	echo "FATAL: ${VENV}/bin/python missing -- uv sync did not produce a venv"
-	exit 1
-}
+# ASSERT INSIDE THE CHROOT, not from the host.
+#
+# This check used to be `[ -x "${ROOTFS_DIR}${VENV}/bin/python" ]` and it
+# FAILED A BUILD IN WHICH EVERYTHING HAD WORKED. uv writes
+# ${VENV}/bin/python as an ABSOLUTE symlink to /usr/bin/python3. Inside the
+# chroot that is correct. Evaluated from the build container, the absolute
+# target resolves against the BUILD CONTAINER's root -- which has no python3
+# at all, since the pi-gen Dockerfile never installs one -- so `-x` said no
+# about a venv that was perfectly good.
+#
+# The rule this is an instance of: a path test on a rootfs is meaningless
+# unless you say WHICH ROOT it is relative to. Anything following a symlink
+# belongs on the inside.
+on_chroot << EOF
+set -e
+test -x ${VENV}/bin/python
+${VENV}/bin/python -c "import sys; print('venv python', sys.version.split()[0])"
+EOF
 
 KIVY_DIST=$(find "${ROOTFS_DIR}${VENV}" -maxdepth 5 -iname "kivy-*.dist-info" | head -n1)
 if [ -z "${KIVY_DIST}" ]; then

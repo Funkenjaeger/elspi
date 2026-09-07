@@ -109,6 +109,20 @@ mutate "Kivy absent entirely" \
 	"rm -rf opt/reflex-venv/lib/python3.13/site-packages/kivy-2.3.1.dist-info"
 mutate "the reflex app leaked into the image venv" \
 	"mkdir -p opt/reflex-venv/lib/python3.13/site-packages/reflex-1.1.0.dist-info"
+# THE NAMESPACE MUTATION. This is the one that cost a build on 2026-09-07.
+#
+# The venv's bin/python is an absolute symlink to /usr/bin/python3. Delete the
+# rootfs's python and the IMAGE is broken -- but a naive `test -x` from outside
+# follows that absolute path to the BUILD HOST's /usr/bin/python3, which very
+# much exists, and reports PASS. The check then measures the host it runs on
+# rather than the image it was handed, and it is green either way for reasons
+# unrelated to the truth.
+#
+# Verified 2026-09-07: the pre-fix harness stays GREEN on this mutation. That
+# is what makes it worth a permanent test rather than a comment.
+mutate "the venv python dangles INSIDE the rootfs (host python masks it)" \
+	"rm -f usr/bin/python3 usr/bin/python3.13"
+
 mutate "uv is a host x86 binary, not ARM" \
 	"printf '\\x7fELF\\x02\\x01\\x01\\x00' > usr/local/bin/uv; head -c 64 /dev/zero >> usr/local/bin/uv"
 mutate "uv missing" \

@@ -65,6 +65,30 @@ check() { # check <description> <command...>
 
 MANIFEST="${ROOTFS}/etc/elspi-image.json"
 
+# --- resolving paths INSIDE the rootfs --------------------------------------
+# A symlink in a rootfs whose target starts with "/" means "/" OF THAT ROOTFS.
+# The shell, running outside, resolves it against the real root instead. Every
+# such test is then answering a question about the wrong filesystem -- and it
+# fails in the direction that looks like a defect, so it costs a build.
+rootfs_exists() { # <absolute path as seen from inside the rootfs>
+	local p="$1" target hops=0
+	while [ "${hops}" -lt 10 ]; do
+		if [ -e "${ROOTFS}${p}" ] && [ ! -L "${ROOTFS}${p}" ]; then
+			return 0
+		fi
+		if [ ! -L "${ROOTFS}${p}" ]; then
+			return 1
+		fi
+		target="$(readlink "${ROOTFS}${p}")"
+		case "${target}" in
+			/*) p="${target}" ;;                      # absolute: rootfs-relative
+			*)  p="$(dirname "${p}")/${target}" ;;    # relative: alongside
+		esac
+		hops=$((hops + 1))
+	done
+	return 1
+}
+
 # ---------------------------------------------------------------------------
 section() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 # ---------------------------------------------------------------------------
@@ -196,7 +220,15 @@ check "libx11-6 present (SDL2 links it; absence breaks SDL, not X)" \
 # ---------------------------------------------------------------------------
 section "The venv (Kivy compiled, reflex absent)"
 
-check "${VENV}/bin/python exists" test -x "${ROOTFS}${VENV}/bin/python"
+# NOTE: rootfs_exists, not `test -x`.
+#
+# uv writes ${VENV}/bin/python as an ABSOLUTE symlink to /usr/bin/python3.
+# Following that from outside resolves it against the HOST root, not the
+# rootfs, so `test -x` reports missing for a venv that is entirely correct.
+# That exact mistake failed a real build on 2026-09-07 after everything in it
+# had succeeded. A path test on a rootfs has to say which root it means.
+check "${VENV}/bin/python exists (resolved within the rootfs)" \
+	rootfs_exists "${VENV}/bin/python"
 
 if find "${ROOTFS}${VENV}" -maxdepth 5 -iname 'kivy-*.dist-info' 2>/dev/null | grep -q .; then
 	ok "Kivy is installed in the venv"

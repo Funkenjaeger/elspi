@@ -88,8 +88,18 @@ for p in libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-ttf-2.0-0 libmtdev1t64 \
 done
 
 # --- venv -------------------------------------------------------------------
-printf '#!/bin/sh\necho fixture\n' > "${DEST}/opt/reflex-venv/bin/python"
-chmod 0755 "${DEST}/opt/reflex-venv/bin/python"
+# The venv python is an ABSOLUTE SYMLINK, exactly as uv writes it.
+#
+# This used to be a plain executable file, which was convenient and WRONG, and
+# the convenience cost a build: verify-image.sh tested it with `test -x`, that
+# passed against the fixture, and then failed against a real image where the
+# absolute target resolves against the host root instead of the rootfs. A
+# fixture that is easier than reality launders the bug it should have caught.
+mkdir -p "${DEST}/usr/bin"
+printf '#!/bin/sh\necho fixture-python\n' > "${DEST}/usr/bin/python3.13"
+chmod 0755 "${DEST}/usr/bin/python3.13"
+ln -sf python3.13 "${DEST}/usr/bin/python3"
+ln -sf /usr/bin/python3 "${DEST}/opt/reflex-venv/bin/python"
 printf 'Name: kivy\nVersion: 2.3.1\n' \
 	> "${DEST}/opt/reflex-venv/lib/python3.13/site-packages/kivy-2.3.1.dist-info/METADATA"
 printf 'Tag: cp313-cp313-linux_armv7l\n' \
