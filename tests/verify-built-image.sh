@@ -70,7 +70,23 @@ echo "== running Tier 2 ${BOOT_ARG:+(with --boot)} =="
 # ("Attempted to remove disk file system under /run/systemd/nspawn/propagate,
 # and we can't allow that"). In a container /run is ordinary overlay, so this
 # is required rather than an optimization.
-exec docker run --rm --privileged \
+#
+# NAMED, AND CLEANED UP ON THE WAY OUT.
+#
+# `timeout ... docker run` kills the docker CLIENT, not the container. On
+# 2026-09-07 an nspawn attempt was abandoned that way and the container ran on
+# for two hours -- holding --volumes-from against a volume that had since been
+# "deleted", so the space was never reclaimed. dserver's Docker filesystem hit
+# 100% and the next build died on "No space left on device" while df showed
+# 69G free on / (Docker lives on a separate /disk0).
+#
+# Reaping it recovered 16GB. A named container plus a trap means the next
+# interrupted run cannot do that again.
+RUN_NAME="elspi-verify-$$"
+cleanup_run() { docker rm -f "${RUN_NAME}" >/dev/null 2>&1 || true; }
+trap cleanup_run EXIT INT TERM
+
+docker run --rm --name "${RUN_NAME}" --privileged \
 	--tmpfs /run:exec,mode=755 \
 	--volumes-from "${CONTAINER}" \
 	-v "${HERE}":/tests:ro \
