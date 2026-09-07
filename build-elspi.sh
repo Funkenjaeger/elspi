@@ -88,5 +88,20 @@ echo "baking:   $(ssh-keygen -lf "${PUBKEY_FILE}" | awk '{print $1, $2, $4}')"
 # --- trap 2: forward it by NAME ---------------------------------------------
 export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS:-} -e ELSPI_PUBKEY"
 
+# --- trap 4: THE BUILD DESTROYS WHAT THE HARNESS NEEDS ----------------------
+# On success build-docker.sh runs `docker rm -v pigen_work`, and the -v takes
+# the anonymous volume holding work/ with it. The built ROOTFS lives in that
+# volume -- so a successful build deletes the only thing tests/verify-image.sh
+# can be pointed at, and leaves you holding a compressed .img that cannot be
+# opened without root.
+#
+# Learned by losing one on 2026-09-07: the image built, the container was
+# reaped, and Tier 2 verification then needed a whole second build.
+#
+# Default to keeping it. Export PRESERVE_CONTAINER=0 explicitly to reclaim the
+# space once verification has run.
+export PRESERVE_CONTAINER="${PRESERVE_CONTAINER:-1}"
+echo "preserve: container kept (PRESERVE_CONTAINER=${PRESERVE_CONTAINER}) so the rootfs survives for verification"
+
 echo "starting build at $(date -Is)"
 exec ./build-docker.sh -c elspi.conf
