@@ -1,0 +1,345 @@
+#!/bin/bash
+# ot-state -- the ONLY thing dserver's ot_elspi key can run.
+#
+# Emits a read-only snapshot of what this machine is actually RUNNING, for
+# ~/ol-mirrors/state/ot-elspi.txt on dserver. Task 6a845933.
+#
+# SECURITY MODEL, and why the check below is not redundant with the forced
+# command: this script is also directly callable by anything already running as
+# `default`. The dserver->webedge defect (narrowed 2026-08-14, journal
+# 2026-08-14) was exactly a forced command wrapped around something that could
+# be reached another way. So the verb is validated HERE, independently, and
+# matched as a WHOLE STRING -- a prefix match would accept `ot-state-v1; id`.
+#
+# READ-ONLY BY CONSTRUCTION: no redirection to any path, no mkdir, no git
+# fetch/checkout, no systemctl start/stop, no device access. If you add a
+# section, keep it that way.
+#
+# Installed 2026-08-27. Verify with: ot-state-probe.sh
+# Flight-recorder section added 2026-09-04.
+
+set -u
+umask 077
+
+VERB="ot-state-v1"
+
+# TEST SEAMS, and nothing else. Both are INERT over the confined key: elspi's
+# sshd_config sets `AcceptEnv LANG LC_* COLORTERM NO_COLOR` and leaves
+# PermitUserEnvironment at its `no` default, so a client cannot set either of
+# these across the ot_elspi path -- verified 2026-09-04 by pulling with
+# `ssh -o SetEnv=OT_FLIGHT_STATUS=...` and watching the payload keep reading
+# the real path. They exist so the ABSENT branch below can be exercised at the
+# machine WITHOUT moving the live status file, which is the only way to prove
+# that branch emits rows rather than silence. Same reasoning as ONLY_HOST in
+# check-ot.sh: a seam that production never sets.
+FLIGHT_STATUS="${OT_FLIGHT_STATUS:-/var/lib/reflex-config/flight/flight_status.json}"
+FLIGHT_FRESH_S="${OT_FLIGHT_FRESH_S:-60}"
+
+cmd="${SSH_ORIGINAL_COMMAND-}"
+if [ -z "$cmd" ]; then
+    cmd="${1-}"
+fi
+
+# WHOLE-string compare. Rejects: empty, prefix attacks (`ot-state-v1; id`),
+# extra arguments, trailing whitespace, any other verb.
+if [ "$cmd" != "$VERB" ]; then
+    echo "ot-state: refused -- expected the single verb $VERB" >&2
+    exit 2
+fi
+
+say() { printf '%s\n' "$*"; }
+hash_of() {
+    if [ -r "$1" ]; then
+        sha256sum "$1" 2>/dev/null | cut -c1-16
+    else
+        echo "UNREADABLE"
+    fi
+}
+
+say "# ot-state v1  host=$(hostname)"
+say "collected: $(date '+%Y-%m-%dT%H:%M:%S%z')  tz=$(date '+%Z')"
+say "kernel: $(uname -r)  arch=$(uname -m)/$(dpkg --print-architecture 2>/dev/null)"
+say "uptime: $(uptime -p 2>/dev/null)"
+say ""
+
+say "## repos"
+for r in /home/default/projects/reflex /rotary-controller-python; do
+    if [ -d "$r/.git" ]; then
+        br=$(timeout 10 git -C "$r" rev-parse --abbrev-ref HEAD 2>/dev/null || echo UNKNOWN)
+        sha=$(timeout 10 git -C "$r" rev-parse --short=12 HEAD 2>/dev/null || echo UNKNOWN)
+        if timeout 20 git -C "$r" diff --quiet HEAD 2>/dev/null; then
+            dirty="clean"
+        else
+            dirty="DIRTY"
+        fi
+        say "$r  branch=$br  head=$sha  tree=$dirty"
+    else
+        say "$r  ABSENT"
+    fi
+done
+say ""
+
+say "## commissioned config  (/var/lib/reflex-config)"
+# These are the numbers every firmware claim is quoted against. Hash only --
+# never emit values; this payload crosses a network and lands in a mirror.
+n=0
+for f in /var/lib/reflex-config/*.yaml; do
+    [ -e "$f" ] || continue
+    n=$((n + 1))
+    say "$(basename "$f")  sha=$(hash_of "$f")  mtime=$(date -r "$f" '+%Y-%m-%dT%H:%M' 2>/dev/null || echo UNKNOWN)"
+done
+say "files: $n"
+say ""
+
+say "## flashed firmware  (~/firmware/flashed.json -- JSONL, not one document)"
+FJ=/home/default/firmware/flashed.json
+if [ -r "$FJ" ]; then
+    say "manifest sha=$(hash_of "$FJ")  records=$(wc -l < "$FJ" | tr -d ' ')"
+    say "last record:"
+    tail -n 1 "$FJ" | cut -c1-400
+else
+    say "manifest UNREADABLE at $FJ"
+fi
+say ""
+
+say "## installed unit  (what systemd actually runs, not what the repo says)"
+U=/etc/systemd/system/reflex-ui.service
+if [ -r "$U" ]; then
+    say "reflex-ui.service  sha=$(hash_of "$U")"
+    grep -E '^(ExecStart|WorkingDirectory|Restart|User)=' "$U" 2>/dev/null | sed 's/^/  /'
+    say "  active=$(systemctl is-active reflex-ui.service 2>/dev/null)  enabled=$(systemctl is-enabled reflex-ui.service 2>/dev/null)"
+    say "  NRestarts=$(systemctl show -p NRestarts --value reflex-ui.service 2>/dev/null)"
+else
+    say "reflex-ui.service UNREADABLE at $U"
+fi
+say ""
+
+say "## ELS flight recorder  (flight_status.json -- the recorder's own heartbeat)"
+# WHY THIS SECTION EXISTS. ui/deploy/DEPLOYMENT.md: "flight_status.json is how
+# you tell 'nothing happened' from 'not recording'. It is rewritten every few
+# seconds whether or not anything is being recorded... This is the file for a
+# collector to scrape." Without it, an empty flight log has five causes -- idle
+# machine, dead UI, unwritable directory, full card, dead link -- and they are
+# indistinguishable from here.
+#
+# EVERY KEY IS EMITTED ON EVERY PATH. When the file is absent, unreadable or
+# unparseable the values become FILE_ABSENT / FILE_UNREADABLE / FILE_UNPARSEABLE
+# rather than the rows vanishing. A missing row reads as a pass in any grep-shaped
+# consumer, and "the recorder is gone" is the single most important thing this
+# section has to be able to say. Structurally guaranteed below: the emitter fills
+# a fixed key list with the status word first and only then overwrites from JSON.
+#
+# VALUE VOCABULARY IS DELIBERATELY DISTINCTIVE (FRESH/STALE, LINK_UP/LINK_DOWN,
+# SPACE_OK/SPACE_LOW, schema=v1) rather than yes/no/up/down/1. ot-baseline.py
+# reconciles a drifting row by replacing the LIVE token with the DECLARED one
+# everywhere in the payload, bounded only by word edges -- so a value of `up`
+# would also rewrite the bare `up` in `uptime: up 3 days`, and `1` would rewrite
+# any other lone 1. Short generic tokens are a live hazard to that tool, not a
+# style question.
+#
+# STILL READ-ONLY: one file is read, nothing is written, no service is touched.
+FLIGHT_PY=$(cat <<'OT_FLIGHT_PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+path = sys.argv[1]
+fresh_s = float(sys.argv[2])
+
+# FIXED ORDER, FIXED MEMBERSHIP. The dict is seeded with the status word for
+# every key, so no code path can drop a row.
+ORDER = [
+    "status", "health", "state", "fresh", "age_s", "updated_utc", "schema",
+    "pid", "dir", "recording", "link", "reason", "ticks_seen",
+    "samples_written", "sessions", "blind_ticks_total", "write_failures",
+    "last_sample_utc", "last_armed_utc", "segments", "bytes_on_disk",
+    "max_total_bytes", "free_bytes", "min_free_bytes", "budget_pct",
+    "free_ok", "detail",
+]
+
+
+def clean(v):
+    """One line, bounded length, never empty -- the payload is line-oriented."""
+    if v is None:
+        return "-"
+    s = " ".join(str(v).split())
+    if not s:
+        return "-"
+    return s[:160]
+
+
+def emit(vals):
+    for k in ORDER:
+        print("  flight_%s=%s" % (k, vals[k]))
+
+
+def bail(word, detail):
+    vals = dict((k, word) for k in ORDER)
+    vals["status"] = word
+    vals["health"] = word
+    vals["age_s"] = "-1"
+    vals["detail"] = clean(detail)
+    emit(vals)
+    sys.exit(0)
+
+
+if not os.path.exists(path):
+    bail("FILE_ABSENT",
+         "no status file at %s -- the recorder is not running, or never "
+         "reached its constructor" % path)
+
+try:
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        raw = fh.read(262144)
+except OSError as e:
+    bail("FILE_UNREADABLE", "%s: %s" % (path, e))
+
+try:
+    doc = json.loads(raw)
+    if not isinstance(doc, dict):
+        raise ValueError("top level is %s, not an object" % type(doc).__name__)
+except Exception as e:
+    bail("FILE_UNPARSEABLE", "%s: %s" % (path, e))
+
+vals = dict((k, "FIELD_MISSING") for k in ORDER)
+vals["status"] = "FILE_PRESENT"
+
+for key in ("state", "pid", "dir", "ticks_seen", "samples_written", "sessions",
+            "blind_ticks_total", "write_failures", "last_sample_utc",
+            "last_armed_utc", "segments", "bytes_on_disk", "max_total_bytes",
+            "free_bytes", "min_free_bytes"):
+    if key in doc:
+        vals[key] = clean(doc[key])
+
+if "schema" in doc:
+    vals["schema"] = "v%s" % clean(doc["schema"])
+if "reason" in doc:
+    vals["reason"] = clean(doc["reason"])
+if "recording" in doc:
+    vals["recording"] = "RECORDING" if doc["recording"] else "NOT_RECORDING"
+if "link_up" in doc:
+    vals["link"] = "LINK_UP" if doc["link_up"] else "LINK_DOWN"
+
+# FRESHNESS. DEPLOYMENT.md: updated_utc more than a minute old means the
+# recorder is not running at all. The file is rewritten every 5 s from the board
+# tick (STATUS_INTERVAL_SECONDS), and the tick keeps running at 2 Hz even while
+# the board is disconnected -- which is exactly how "the controller is
+# unplugged" (fresh file, LINK_DOWN) is told apart from "the UI is dead"
+# (STALE). A negative age larger than the window means the clocks disagree and
+# is reported as its own word, not quietly rounded to fresh.
+age = None
+raw_updated = doc.get("updated_utc")
+if raw_updated:
+    vals["updated_utc"] = clean(raw_updated)
+    try:
+        stamp = datetime.fromisoformat(str(raw_updated))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - stamp).total_seconds()
+    except Exception as e:
+        vals["fresh"] = "STAMP_UNPARSEABLE"
+        vals["detail"] = clean("updated_utc %r: %s" % (raw_updated, e))
+else:
+    vals["fresh"] = "STAMP_MISSING"
+
+if age is not None:
+    vals["age_s"] = "%d" % int(age)
+    if age > fresh_s:
+        vals["fresh"] = "STALE"
+    elif age < -fresh_s:
+        vals["fresh"] = "CLOCK_SKEW"
+    else:
+        vals["fresh"] = "FRESH"
+
+# RETENTION. bytes_on_disk against the cap, free_bytes against the floor. The
+# raw numbers are volatile and are emitted for legibility; free_ok is the part
+# worth declaring.
+
+
+def as_int(key):
+    try:
+        return int(doc[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+on_disk = as_int("bytes_on_disk")
+cap = as_int("max_total_bytes")
+free = as_int("free_bytes")
+floor_ = as_int("min_free_bytes")
+
+if on_disk is not None and cap:
+    vals["budget_pct"] = "%d" % int(on_disk * 100 / cap)
+else:
+    vals["budget_pct"] = "-1"
+
+if free is None or floor_ is None or free < 0:
+    vals["free_ok"] = "SPACE_UNMEASURED"
+elif free > floor_:
+    vals["free_ok"] = "SPACE_OK"
+else:
+    vals["free_ok"] = "SPACE_LOW"
+
+# HEALTH -- the one row worth declaring in ot-expect.tsv. It collapses the two
+# healthy states (idle_disarmed and recording) so a pass that happens to be
+# running at 01:07 does not read as drift, and it refuses to say HEALTHY while
+# the recorder is blocked, stale, out of space or failing writes.
+state = vals["state"]
+failures = as_int("write_failures")
+if vals["fresh"] != "FRESH":
+    vals["health"] = "STALE"
+    vals["detail"] = clean(
+        "status file is %s (age %s s) -- the UI process is not writing it"
+        % (vals["fresh"], vals["age_s"]))
+elif state in ("blocked_no_disk", "blocked_write_error", "disabled"):
+    vals["health"] = "BLOCKED"
+    vals["detail"] = clean("recorder is %s: %s" % (state, vals["reason"]))
+elif vals["free_ok"] == "SPACE_LOW":
+    vals["health"] = "SPACE_LOW"
+    vals["detail"] = clean("free %s <= min_free %s" % (free, floor_))
+elif failures:
+    vals["health"] = "WRITE_FAILURES"
+    vals["detail"] = clean("%s write failure(s) recorded" % failures)
+elif state in ("idle_disarmed", "recording"):
+    vals["health"] = "HEALTHY"
+    vals["detail"] = clean("alive, %s, %s" % (state, vals["link"]))
+else:
+    vals["health"] = "STATE_UNRECOGNISED"
+    vals["detail"] = clean(
+        "state %r is not in this emitter's vocabulary -- the recorder was "
+        "changed and this section was not" % state)
+
+emit(vals)
+OT_FLIGHT_PY
+)
+say "status file: $FLIGHT_STATUS  fresh_window_s=$FLIGHT_FRESH_S"
+flight_giveup() {  # word -- both load-bearing rows, never one of them
+    say "  flight_status=$1"
+    say "  flight_health=$1"
+    say "  flight_detail=$2"
+}
+if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$FLIGHT_PY" | python3 - "$FLIGHT_STATUS" "$FLIGHT_FRESH_S" \
+        || flight_giveup EMITTER_FAILED "the flight section's own reader exited nonzero"
+else
+    # No interpreter is itself a finding, and it must not be a silent one.
+    flight_giveup NO_PYTHON3 "python3 is not on PATH for this login"
+fi
+say ""
+
+say "## NOT COLLECTED -- state the blind spots, do not let silence read as coverage"
+say "- The STM32 board is NOT read. protocolVersion/schema would need /dev/ttyAMA0,"
+say "  which reflex-ui holds while it runs; contending for it could disturb a live"
+say "  machine. 'What is flashed' is answered above from the manifest instead, which"
+say "  is a RECORD of the last flash, not an observation of the board."
+say "- Nothing here proves the running process matches the repo HEAD above; the UI"
+say "  could have been started before the current checkout."
+say "- Config VALUES are hashed, never emitted. A changed hash says 'it moved', not"
+say "  'to what'."
+say "- The flight LOG is not read -- not one segment, not one sample. Everything in"
+say "  the flight section is the recorder's own SELF-REPORT, so it says the recorder"
+say "  believes it is alive and writing; it does not say the samples are correct, or"
+say "  that any pass was captured. Whether recorded passes answer real questions is"
+say "  the two-week falsifier's job, not this payload's."
+say "# end ot-state v1"
