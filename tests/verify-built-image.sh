@@ -22,7 +22,8 @@ BOOT_ARG=""
 
 for a in "$@"; do
 	case "$a" in
-		--boot) BOOT_ARG="--boot" ;;
+		--boot)   BOOT_ARG="${BOOT_ARG} --boot" ;;
+		--chroot) BOOT_ARG="${BOOT_ARG} --chroot" ;;
 		*) echo "unknown argument: $a" >&2; exit 2 ;;
 	esac
 done

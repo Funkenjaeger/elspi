@@ -32,11 +32,13 @@ set -uo pipefail
 
 ROOTFS="${1:-}"
 DO_BOOT=0
+DO_CHROOT=0
 DO_SELFTEST=0
 shift || true
 for arg in "$@"; do
 	case "${arg}" in
 		--boot)      DO_BOOT=1 ;;
+		--chroot)    DO_CHROOT=1 ;;
 		--self-test) DO_SELFTEST=1 ;;
 		*) echo "unknown argument: ${arg}" >&2; exit 2 ;;
 	esac
@@ -368,6 +370,49 @@ check "first-opener orders After=plymouth-quit-wait.service" \
 
 # THE THING THIS HARNESS STRUCTURALLY CANNOT ANSWER.
 unknown "DRM master acquisition under mode '${DRM_DEFAULT}' is UNTESTED. There is no GPU here and there never will be. This is a Tier 3 hardware item."
+
+# ---------------------------------------------------------------------------
+section "In-image assertions (chroot)"
+
+# WHY THIS EXISTS ALONGSIDE --boot, rather than instead of it.
+#
+# VERIFICATION.md planned `systemd-nspawn --boot` because it "really starts
+# systemd". That plan DID NOT SURVIVE CONTACT for an armhf rootfs under
+# qemu-user inside Docker: measured 2026-09-07, nspawn produces no console
+# output and never reaches the assertion unit, with /run on tmpfs, with
+# --keep-unit and --register=no for the missing bus, with cgroup delegation,
+# and with systemd.journald.forward_to_console=1. The armhf systemd binary
+# itself runs fine under qemu-user (`systemd --version` reports 257), so the
+# blocker is booting it as PID 1 in that nesting, not the emulation.
+#
+# A chroot answers most of the same questions and actually works: systemctl
+# reads unit files, symlinks and masks straight off the disk, so is-enabled,
+# `cat`, and the presence or absence of a display manager are all real answers.
+# `import kivy` and `uv --version` genuinely execute the armhf binaries.
+#
+# What it CANNOT answer is anything requiring a running manager -- unit
+# ordering as actually resolved, is-system-running, the failed-unit list.
+# assert-inside.sh detects which mode it is in and marks those UNKNOWN rather
+# than letting them vanish.
+if [ "${DO_CHROOT}" = "1" ]; then
+	if [ "$(id -u)" -ne 0 ]; then
+		unknown "--chroot requires root. NOT RUN."
+	else
+		CHROOT_BIN="${ROOTFS}/usr/local/bin/elspi-assert-inside"
+		install -m 0755 "$(dirname "$0")/assert-inside.sh" "${CHROOT_BIN}"
+		mount -t proc proc "${ROOTFS}/proc" 2>/dev/null || true
+		chroot "${ROOTFS}" /usr/local/bin/elspi-assert-inside 2>&1 | sed 's/^/  /' || true
+		umount "${ROOTFS}/proc" 2>/dev/null || true
+		rm -f "${CHROOT_BIN}" "${ROOTFS}/var/log/elspi-assert.out"
+
+		# GATE: the injected script must not survive into the image.
+		if [ -e "${CHROOT_BIN}" ]; then
+			bad "harness artifact removed from rootfs: /usr/local/bin/elspi-assert-inside"
+		fi
+	fi
+else
+	unknown "--chroot not given: systemd's own view of unit files, masks, and 'import kivy' were NOT exercised."
+fi
 
 # ---------------------------------------------------------------------------
 section "Booted assertions"

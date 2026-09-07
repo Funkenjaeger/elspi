@@ -32,18 +32,43 @@ chk() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then ok "${d}"; else bad "
 
 echo "ELSPI-ASSERT-BEGIN"
 
-# --- systemd actually came up ----------------------------------------------
-STATE="$(systemctl is-system-running 2>/dev/null || true)"
-case "${STATE}" in
-	running|degraded) ok "systemd reached '${STATE}'" ;;
-	*)                bad "systemd reached '${STATE}' (expected running/degraded)" ;;
-esac
+# --- am I actually booted, or in a chroot? ----------------------------------
+# These run in two modes and MUST NOT pretend to be the same one.
+#
+#   booted  -- systemd-nspawn --boot, systemd is PID 1
+#   chroot  -- no init; systemctl still answers from unit files on disk
+#
+# Most of what is worth asserting here -- is-enabled, masks, unit contents,
+# `import kivy` -- is answerable in BOTH. What genuinely needs a running
+# manager is is-system-running and the failed-unit list. Those are reported
+# UNKNOWN rather than skipped silently when there is no init: a check that
+# quietly evaporates in one mode is how a harness ends up claiming more than it
+# measured.
+U=0
+unk() { U=$((U+1)); echo "  UNKN  $1"; }
 
-# 'degraded' is normal in a container -- hardware units fail with no hardware.
-# Print what failed so a REAL regression is not hidden behind that expectation.
-echo "  --- failed units (expected: hardware-dependent only) ---"
-systemctl --failed --no-legend --no-pager 2>/dev/null | sed 's/^/      /' || true
-echo "  --------------------------------------------------------"
+BOOTED=0
+if [ -d /proc/1 ] && grep -qa 'systemd' /proc/1/comm 2>/dev/null; then
+	BOOTED=1
+fi
+echo "  MODE  $([ "${BOOTED}" = 1 ] && echo 'booted (systemd is PID 1)' || echo 'chroot (no init running)')"
+
+if [ "${BOOTED}" = 1 ]; then
+	STATE="$(systemctl is-system-running 2>/dev/null || true)"
+	case "${STATE}" in
+		running|degraded) ok "systemd reached '${STATE}'" ;;
+		*)                bad "systemd reached '${STATE}' (expected running/degraded)" ;;
+	esac
+
+	# 'degraded' is normal in a container -- hardware units fail with no
+	# hardware. Print what failed so a REAL regression is not hidden behind
+	# that expectation.
+	echo "  --- failed units (expected: hardware-dependent only) ---"
+	systemctl --failed --no-legend --no-pager 2>/dev/null | sed 's/^/      /' || true
+	echo "  --------------------------------------------------------"
+else
+	unk "systemd was not started, so 'is-system-running' and the failed-unit list are NOT covered. Everything below is read from unit files on disk."
+fi
 
 # --- the mask, as systemd resolves it, not as a symlink on disk ------------
 chk "serial-getty@ttyAMA0.service is masked" \
@@ -108,7 +133,7 @@ fi
 echo "  NOTE  reflex-ui.service is a DELTA artifact and is absent by design."
 
 echo "  ---"
-echo "  ${P} passed, ${F} failed"
+echo "  ${P} passed, ${F} failed, ${U} unknown"
 if [ "${F}" -eq 0 ]; then
 	echo "ELSPI-ASSERT-RESULT: PASS"
 else
