@@ -200,6 +200,55 @@ session on tty1 plus a user service, or an explicit grant.
 2. a system unit with `TTYPath=/dev/tty1` and the seat plumbing done explicitly;
 3. keep a system unit and grant only the capability needed rather than full root.
 
+### RESOLVED 2026-09-07: the stage ships ALL THREE, selectable at runtime
+
+Not by picking one. The stage installs each option as a systemd drop-in under
+`/usr/share/elspi/drm-modes/` plus a switcher, `/usr/local/sbin/elspi-drm-mode`.
+
+The reason is the constraint that dominates this machine: **Evan has no
+terminal on elspi.** Choosing one option and baking it in makes every wrong
+guess cost a reflash and a lathe power cycle. With the switcher, an attempt
+costs one SSH command:
+
+```sh
+elspi-drm-mode cap-sys-admin && systemctl restart reflex-ui
+```
+
+`first-opener` is the image default, and the reasoning behind it corrects the
+model above. **"A non-root process becomes DRM master only as a seat's active
+session" is not the whole picture.** The DRM core also grants master to the
+*first opener* of a device that has no master -- `drm_master_open()` on the
+`open()` path, which carries no `CAP_SYS_ADMIN` check; the capability test in
+`drm_master_check_perm()` guards the `SET_MASTER` ioctl for a process that is
+*not already* master. On a console-only machine with no compositor there is no
+competing master, so the seat machinery may simply not be needed.
+
+**This is reasoning from kernel source, not a measurement**, and it is recorded
+as a hypothesis rather than a finding. What it does buy is a cheap first thing
+to try and a clear prediction: if `first-opener` fails, the most likely cause
+is **Plymouth**, whose DRM renderer *is* a master. Hence
+`After=plymouth-quit-wait.service` in the fragment -- load-bearing, not
+cosmetic.
+
+`logind-seat` is option 1 verbatim, kept as the first fallback. Note it
+deliberately does **not** enable lingering: a lingering user manager starts at
+boot with no session and therefore no seat, which is the opposite of the point.
+
+`cap-sys-admin` is the floor, so the flash session always has a way to leave
+the lathe working. If the machine ends up resting there, that is a finding to
+write up, not a resting place.
+
+### The other half of not being able to test this: SSH must survive a UI failure
+
+`elspi.conf` sets `ENABLE_SSH=1` with `PUBKEY_ONLY_SSH=1`, and the build
+**refuses to produce an image without `ELSPI_PUBKEY`**. That is deliberate and
+it follows directly from the above. The service account's password is locked by
+design, so password SSH cannot work; without a baked key, a first boot where
+the UI does not come up is reachable only from the touchscreen -- which is
+exactly the thing in question. An image with no way in turns every DRM
+experiment back into a power cycle, which is what the switcher exists to avoid.
+
+
 ### THE HARNESS CANNOT ANSWER THIS — state it out loud
 
 The planned verification harness is `systemd-nspawn --boot` under

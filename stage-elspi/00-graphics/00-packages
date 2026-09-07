@@ -1,0 +1,42 @@
+# Runtime graphics, input and network stack for a Kivy/SDL2 app on KMS/DRM.
+#
+# Source: RUNTIME-INVENTORY.md, measured on the live elspi 2026-08-17.
+# ospi's stage-base/40-rotary-controller/00-packages is the starting point; the
+# additions below are the ones it omits and we need.
+
+# --- SDL2 runtime, as ospi has it ---
+libsdl2-2.0-0
+libsdl2-gfx-1.0-0
+libsdl2-image-2.0-0
+libsdl2-mixer-2.0-0
+libsdl2-net-2.0-0
+libsdl2-ttf-2.0-0
+
+# --- GL/GLES/EGL runtime, as ospi has it ---
+libgl1
+libgles2
+libegl1
+
+# --- Touch input. Kivy reaches the Cadwell panel through MTD/ProbeSysfs on
+#     libmtdev, NOT libinput. Do not add libinput: it is absent on the working
+#     machine and adding it changes Kivy's provider probe order.
+libmtdev1t64
+
+# --- Named deliberately rather than inherited by accident ---
+# SDL2's kmsdrm video driver dlopens both of these. They arrive today as
+# Mesa/SDL2 dependencies, i.e. by resolution accident. KMS/DRM is a hard
+# requirement for this appliance, so the requirement is stated.
+libgbm1
+libdrm2
+
+# The actual V3D DRI driver behind "OpenGL renderer V3D 7.1.7.0". Without these
+# you get llvmpipe (slow, and a different renderer string) or a hard EGL
+# failure. A lean pi-gen base does not necessarily seed them.
+libgl1-mesa-dri
+mesa-libgallium
+
+# The nmcli PyPI package shells out to the nmcli BINARY. No Python manifest can
+# express that. Upstream stage2/02-net-tweaks already installs this; it is
+# repeated here so the dependency is declared where it is depended upon rather
+# than inherited silently the way ospi inherits it from the RPi OS base.
+network-manager

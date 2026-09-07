@@ -72,7 +72,38 @@ Every file we *add* is free. So:
   express our configuration. Stage selection belongs in our build config's
   `STAGE_LIST`.
 
-Upstream files edited so far: **none.**
+Upstream files edited so far: **none.** Still true as of 2026-09-07, with the
+stage written — everything we add lives in `stage-elspi/`, `elspi.conf`,
+`ci.conf` and `tests/`.
+
+One case came close and was resolved without an edit, recorded so nobody
+re-litigates it. Exporting only *our* image means stage2 must not also export a
+Lite one, and the mechanism for that is a `SKIP_IMAGES` marker in `stage2/`
+(`build.sh:96`). Committing that file would have put a tracked file inside an
+upstream stage directory. It turns out **upstream's own `.gitignore` already
+lists `SKIP_IMAGES`**, i.e. upstream intends it as a local build-time marker,
+so `elspi.conf` creates it at build time instead. Merge surface stays zero and
+we are using the mechanism the way it was designed.
+
+### Cherry-picks from ospi: one item is already obsolete
+
+The cherry-pick list carries "build-docker.sh skipping manual binfmt
+registration when `docker/setup-qemu-action` already did it". **Checked at our
+pin 314262c on 2026-09-07: upstream already does this.** `build-docker.sh`
+guards the registration with
+
+```sh
+if ! grep -q "^interpreter ${qemu_arm}" /proc/sys/fs/binfmt_misc/qemu-arm* ; then
+```
+
+so there is nothing to port. Drop it from the list rather than carrying a patch
+that would re-apply an existing fix — that is how a soft fork starts diverging.
+
+The other build-system item, `gpgv` in the `Dockerfile`, is **not yet
+confirmed** either way: the Dockerfile installs `gpg` with
+`--no-install-recommends`, and whether `debootstrap` then wants `gpgv`
+separately is a question the first real build answers. Left open on purpose
+rather than pre-emptively editing an upstream file on a guess.
 
 ## This is a copy, not a GitHub fork
 
