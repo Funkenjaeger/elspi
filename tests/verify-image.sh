@@ -379,8 +379,14 @@ else
 		unknown "--boot requires root (systemd-nspawn). NOT RUN."
 	elif ! command -v systemd-nspawn >/dev/null 2>&1; then
 		unknown "systemd-nspawn not installed. NOT RUN."
-	elif ! grep -qs "interpreter /usr/bin/qemu-arm" /proc/sys/fs/binfmt_misc/qemu-arm* 2>/dev/null; then
-		unknown "qemu-arm binfmt is not registered, so an armhf rootfs cannot execute here. NOT RUN. Install qemu-user-static and re-run."
+	# Ask whether an armhf handler is REGISTERED AND ENABLED -- not where its
+	# interpreter happens to live. This check first hardcoded
+	# "interpreter /usr/bin/qemu-arm" and skipped the booted assertions on a
+	# host that was correctly set up: Debian's qemu-user-static registers
+	# /usr/libexec/qemu-binfmt/arm-binfmt-P instead. The path is a packaging
+	# detail; the capability is the question.
+	elif ! grep -qs '^enabled' /proc/sys/fs/binfmt_misc/qemu-arm 2>/dev/null; then
+		unknown "no enabled qemu-arm binfmt handler is visible here, so an armhf rootfs cannot execute. NOT RUN. (Inside a container, binfmt_misc must also be mounted -- see tests/verify-built-image.sh.)"
 	else
 		# The assertion unit is injected, run, and REMOVED. It must never
 		# survive into a shipped image, so removal is trapped and then gated

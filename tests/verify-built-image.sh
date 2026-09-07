@@ -54,8 +54,18 @@ if [ -n "${BOOT_ARG}" ]; then
 fi
 
 echo "== running Tier 2 ${BOOT_ARG:+(with --boot)} =="
+
+# binfmt_misc is NOT mounted inside a container by default -- the directory is
+# there and empty, so an armhf binary is simply "cannot execute" with no
+# explanation. Mounting it in the privileged container exposes the HOST's
+# registrations (verified: qemu-arm, enabled, flags POF), because Docker shares
+# the host user namespace here. The F flag matters: it pins the interpreter's
+# fd at registration time, so the rootfs does not need a copy of qemu inside it.
+#
+# Done as part of the command rather than in the Dockerfile because a mount
+# cannot be baked into an image.
 exec docker run --rm --privileged \
 	--volumes-from "${CONTAINER}" \
 	-v "${HERE}":/tests:ro \
 	elspi-verify \
-	/tests/verify-image.sh "${ROOTFS_IN_VOL}" ${BOOT_ARG}
+	bash -c "mount binfmt_misc -t binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true; exec /tests/verify-image.sh '${ROOTFS_IN_VOL}' ${BOOT_ARG}"
