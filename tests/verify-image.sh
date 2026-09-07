@@ -372,6 +372,49 @@ check "first-opener orders After=plymouth-quit-wait.service" \
 unknown "DRM master acquisition under mode '${DRM_DEFAULT}' is UNTESTED. There is no GPU here and there never will be. This is a Tier 3 hardware item."
 
 # ---------------------------------------------------------------------------
+section "Artifact integrity"
+
+# THE HARNESS MUST NOT CHANGE THE ARTIFACT IT CERTIFIES.
+#
+# It did. Twice on 2026-09-07: systemd-nspawn's --timezone/--resolv-conf
+# defaults rewrote /etc/localtime and /etc/resolv.conf with the build host's
+# values, and a kivy probe created /root/.kivy. The first of those then
+# surfaced as a phantom image defect on the NEXT run.
+#
+# Both causes are fixed. This exists because the next one will be different:
+# anything that executes inside a rootfs can write to it, and a mutation that
+# lands in a field nobody re-checks is invisible. Snapshot the fields the image
+# deliberately controls, and re-assert them after the executing tiers run.
+snapshot_integrity() {
+	INTEG_TZ="$(readlink "${ROOTFS}/etc/localtime" 2>/dev/null || echo MISSING)"
+	INTEG_RESOLV="$(md5sum "${ROOTFS}/etc/resolv.conf" 2>/dev/null | cut -d' ' -f1 || echo MISSING)"
+	INTEG_KIVYROOT="$([ -e "${ROOTFS}/root/.kivy" ] && echo PRESENT || echo ABSENT)"
+}
+check_integrity() {
+	local now
+	now="$(readlink "${ROOTFS}/etc/localtime" 2>/dev/null || echo MISSING)"
+	if [ "${now}" = "${INTEG_TZ}" ]; then
+		ok "/etc/localtime unchanged by the harness"
+	else
+		bad "THE HARNESS CHANGED /etc/localtime: '${INTEG_TZ}' -> '${now}'"
+	fi
+	now="$(md5sum "${ROOTFS}/etc/resolv.conf" 2>/dev/null | cut -d' ' -f1 || echo MISSING)"
+	if [ "${now}" = "${INTEG_RESOLV}" ]; then
+		ok "/etc/resolv.conf unchanged by the harness"
+	else
+		bad "THE HARNESS CHANGED /etc/resolv.conf"
+	fi
+	now="$([ -e "${ROOTFS}/root/.kivy" ] && echo PRESENT || echo ABSENT)"
+	if [ "${now}" = "${INTEG_KIVYROOT}" ]; then
+		ok "/root/.kivy unchanged by the harness"
+	else
+		bad "THE HARNESS CREATED /root/.kivy (${INTEG_KIVYROOT} -> ${now})"
+	fi
+}
+snapshot_integrity
+echo "  snapshot taken: localtime=${INTEG_TZ}, /root/.kivy=${INTEG_KIVYROOT}"
+
+# ---------------------------------------------------------------------------
 section "In-image assertions (chroot)"
 
 # WHY THIS EXISTS ALONGSIDE --boot, rather than instead of it.
@@ -470,8 +513,20 @@ else
 		rm -f "${RESULT_IN_ROOTFS}"
 
 		BOOTLOG="$(mktemp)"
+		# --timezone=off --resolv-conf=off ARE NOT OPTIONAL.
+		#
+		# nspawn defaults both to "auto", which writes the HOST's timezone and
+		# resolv.conf INTO the container rootfs. Measured 2026-09-07: a boot
+		# attempt repointed the image's /etc/localtime from America/New_York to
+		# Etc/UTC, and replaced /etc/resolv.conf with Docker's.
+		#
+		# Both are fields this image deliberately controls -- the timezone is
+		# the -0500 bug fixed at source -- so the harness was silently undoing
+		# the thing it then went on to check. A later run duly reported
+		# "timezone is America/New_York (found: Etc/UTC)" as an image defect.
 		timeout 300 systemd-nspawn -D "${ROOTFS}" \
 			--boot --register=no --keep-unit --quiet \
+			--timezone=off --resolv-conf=off \
 			--console=pipe >"${BOOTLOG}" 2>&1 </dev/null || true
 
 		# The RESULT FILE is the source of truth, not the console. systemd
@@ -504,6 +559,15 @@ else
 			unknown "the container did not reach the assertion unit. Boot log kept at: ${BOOTLOG}"
 		fi
 	fi
+fi
+
+# ---------------------------------------------------------------------------
+section "Artifact integrity, re-checked"
+
+if [ "${DO_CHROOT}" = "1" ] || [ "${DO_BOOT}" = "1" ]; then
+	check_integrity
+else
+	echo "  no executing tier ran; nothing could have mutated the rootfs"
 fi
 
 # ---------------------------------------------------------------------------
