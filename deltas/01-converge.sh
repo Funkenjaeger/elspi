@@ -174,43 +174,83 @@ run systemctl enable reflex-ui.service
 # terminal that is unrecoverable without pulling the SD card. Written to a temp
 # file, checked with `visudo -cf`, and only then moved in.
 #
-# NOT VERIFIED AGAINST THE LIVE MACHINE. elspi carries TWO files --
-# /etc/sudoers.d/reflex-restart and /etc/sudoers.d/reflex-stopstart -- and both
-# are mode 0440 root, so they could not be read without a password this session.
-# The task body claims "NOPASSWD /usr/bin/systemctl restart reflex-ui.service
-# (only rule)", which the filenames already contradict. What is installed here
-# is DECLARED, not copied: restart, plus stop and start, which is what those two
-# names describe. Diff it against the live files before the flash session.
-SUDOERS_DST=/etc/sudoers.d/reflex-restart
-SUDOERS_TMP="$(mktemp)"
-{
-	echo "# Installed by elspi deltas/01-converge.sh -- the UI restarts itself."
-	echo "# Scoped to reflex-ui.service only; no general systemctl access."
-	echo "${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl restart reflex-ui.service"
-	echo "${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl stop reflex-ui.service"
-	echo "${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start reflex-ui.service"
-} > "${SUDOERS_TMP}"
+# READ OFF THE LIVE MACHINE 2026-09-07, and it corrected this in the direction
+# that matters. Two files, reproduced with their live names and contents:
+#
+#   /etc/sudoers.d/reflex-restart    NOPASSWD: systemctl restart reflex-ui.service
+#   /etc/sudoers.d/reflex-stopstart  NOPASSWD: systemctl stop    reflex-ui.service
+#
+# An earlier draft here also granted `start`, reasoning from the second file's
+# NAME. The live file called "stopstart" contains only STOP. Granting start
+# would have handed a rebuilt machine a privilege the real one does not have --
+# and quietly, since nothing would ever fail to reveal it. `start` is not needed
+# anyway: the unit is enabled, so systemd starts it at boot, and the UI's own
+# restart path uses `restart`.
+#
+# The task body's claim of "the only rule" was wrong in the other direction.
+# Both halves came from reading the machine rather than the record.
+#
+# Two files rather than one merged file, deliberately: item 12 verifies a
+# freshly-provisioned Pi by DIFFING it against the live elspi, and a
+# reorganisation that is merely cosmetic would show up there as a difference to
+# investigate.
+sudoers_install() { # sudoers_install <basename> <rule line>
+	local name="$1" rule="$2"
+	local dst="/etc/sudoers.d/${name}" tmp
+	tmp="$(mktemp)"
+	{
+		echo "# Installed by elspi deltas/01-converge.sh, matching the live machine."
+		echo "# Scoped to reflex-ui.service only; no general systemctl access."
+		echo "${rule}"
+	} > "${tmp}"
+	if visudo -cf "${tmp}" >/dev/null 2>&1; then
+		run install -m 0440 -o root -g root "${tmp}" "${dst}"
+		assert "${name} installed and still valid in place" visudo -cf "${dst}"
+	else
+		rm -f "${tmp}"
+		die "the generated ${name} rule does NOT pass visudo -- refusing to install.
+  A malformed file in /etc/sudoers.d breaks sudo for EVERY user, and on a
+  machine with no terminal that is unrecoverable without pulling the SD card."
+	fi
+	rm -f "${tmp}"
+}
 
-if visudo -cf "${SUDOERS_TMP}" >/dev/null 2>&1; then
-	run install -m 0440 -o root -g root "${SUDOERS_TMP}" "${SUDOERS_DST}"
-	assert "sudoers rule installed and still valid in place" visudo -cf "${SUDOERS_DST}"
-else
-	rm -f "${SUDOERS_TMP}"
-	die "the generated sudoers rule does NOT pass visudo -- refusing to install it.
-  A malformed file in /etc/sudoers.d breaks sudo for every user on a machine
-  with no terminal."
-fi
-rm -f "${SUDOERS_TMP}"
+sudoers_install reflex-restart \
+	"${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl restart reflex-ui.service"
+sudoers_install reflex-stopstart \
+	"${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl stop reflex-ui.service"
 
 # GATE: prove the rule actually grants what it claims. `sudo -l` resolves the
 # whole policy, so this catches a rule that parses but is shadowed or scoped
 # wrong -- which a syntax check cannot see.
 if [ "${DRY_RUN}" != "1" ]; then
+	# POSITIVE: the thing the UI actually needs.
 	if sudo -u "${SERVICE_USER}" sudo -n -l /usr/bin/systemctl restart reflex-ui.service >/dev/null 2>&1; then
 		ok "${SERVICE_USER} can restart reflex-ui without a password"
 	else
 		die "the sudoers rule parsed but ${SERVICE_USER} still cannot restart
   reflex-ui without a password. The UI's own restart button would fail."
+	fi
+
+	# NEGATIVE: the grant must be NARROW. Checking only that it works cannot
+	# distinguish a scoped rule from a blanket one, and a blanket NOPASSWD
+	# systemctl is a root shell in three moves. These are the assertions that
+	# would notice a rule quietly widening.
+	if sudo -u "${SERVICE_USER}" sudo -n -l /usr/bin/systemctl restart ssh.service >/dev/null 2>&1; then
+		die "${SERVICE_USER} can restart ARBITRARY units without a password.
+  The rule is not scoped to reflex-ui.service, which makes it a general
+  privilege escalation rather than a restart button."
+	fi
+	ok "the grant does NOT extend to other units"
+
+	# `start` is deliberately absent (see above). If it ever appears, something
+	# widened the rule beyond the live machine and this should say so.
+	if sudo -u "${SERVICE_USER}" sudo -n -l /usr/bin/systemctl start reflex-ui.service >/dev/null 2>&1; then
+		warn "${SERVICE_USER} can also START reflex-ui without a password."
+		warn "  The live machine grants only restart and stop. Not fatal, but this"
+		warn "  is wider than elspi and item 12's diff will show it."
+	else
+		ok "start is not granted, matching the live machine"
 	fi
 fi
 
