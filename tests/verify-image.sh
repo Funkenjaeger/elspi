@@ -406,9 +406,15 @@ check_integrity() {
 	fi
 	now="$([ -e "${ROOTFS}/root/.kivy" ] && echo PRESENT || echo ABSENT)"
 	if [ "${now}" = "${INTEG_KIVYROOT}" ]; then
-		ok "/root/.kivy unchanged by the harness"
+		ok "/root/.kivy unchanged by the harness (${now})"
+	elif [ "${INTEG_KIVYROOT}" = "ABSENT" ]; then
+		bad "THE HARNESS CREATED /root/.kivy"
 	else
-		bad "THE HARNESS CREATED /root/.kivy (${INTEG_KIVYROOT} -> ${now})"
+		# Report the direction. The first version of this message said
+		# "CREATED" for both directions and printed "THE HARNESS CREATED
+		# /root/.kivy (PRESENT -> ABSENT)" -- a removal described as a
+		# creation, which sent the investigation the wrong way for a while.
+		bad "THE HARNESS DELETED /root/.kivy, which the image already had -- a harness must not erase what it is inspecting"
 	fi
 }
 snapshot_integrity

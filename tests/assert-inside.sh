@@ -126,6 +126,12 @@ fi
 # `import kivy` does NOT create a window, so it is safe without a GPU. It does
 # exercise the compiled extensions, which is the expensive thing the build
 # produced. It is NOT evidence that the display works -- see the blind spots.
+# Record this BEFORE the probe runs, so "the probe created it" and "the image
+# shipped it" stay distinguishable. They are different findings with different
+# owners, and collapsing them is how the harness ended up deleting an image
+# artifact and calling it cleanup.
+KIVYROOT_BEFORE="$([ -e /root/.kivy ] && echo PRESENT || echo ABSENT)"
+
 VENV_PY=$(sed -n 's/.*"venv": "\([^"]*\)".*/\1/p' /etc/elspi-image.json)/bin/python
 if [ -x "${VENV_PY}" ]; then
 	# DO NOT LET KIVY WRITE INTO THE IMAGE.
@@ -151,13 +157,24 @@ if [ -x "${VENV_PY}" ]; then
 		bad "venv failed to import kivy"
 	fi
 	rm -rf /tmp/.kivy-probe
-	# Belt and braces: remove anything Kivy still managed to leave in root's
-	# home, and assert it is gone.
-	rm -rf /root/.kivy
-	if [ -e /root/.kivy ]; then
-		bad "harness left /root/.kivy inside the image"
+	# DO NOT DELETE /root/.kivy HERE.
+	#
+	# This used to `rm -rf /root/.kivy` unconditionally, "to clean up". That
+	# was wrong twice over. A verification harness must not modify the
+	# artifact it certifies -- and worse, it deleted something it had NOT
+	# created: a pristine 2026-09-07 build shipped /root/.kivy already, and
+	# this line quietly erased the evidence while reporting success.
+	#
+	# So: compare, never touch. If the probe created it, that is the probe's
+	# bug and it fails here. If it was already there, that is an IMAGE
+	# finding, reported as such and left in place for the integrity check
+	# outside to corroborate.
+	if [ "${KIVYROOT_BEFORE}" = "ABSENT" ] && [ -e /root/.kivy ]; then
+		bad "this probe CREATED /root/.kivy inside the image"
+	elif [ "${KIVYROOT_BEFORE}" = "PRESENT" ]; then
+		unk "/root/.kivy was ALREADY in the image before this probe ran -- an image finding, not a harness one. Left in place deliberately."
 	else
-		ok "no /root/.kivy left in the image by this probe"
+		ok "this probe did not create /root/.kivy"
 	fi
 else
 	bad "venv python not executable at ${VENV_PY}"
