@@ -123,18 +123,39 @@ is a power cycle each.
 
 ## Building
 
-Needs `qemu-user-static` on the build host, which needs root. **On dserver, in
-bash:**
+**On dserver, in bash — one time, needs root:**
 
 ```bash
-sudo apt-get update && sudo apt-get install -y qemu-user-static qemu-user-binfmt binfmt-support
+sudo apt-get install -y qemu-user-static binfmt-support
 ```
+
+**CORRECTED 2026-09-07.** This line first read
+`qemu-user-static qemu-user-binfmt binfmt-support`, which cannot be satisfied:
+those two packages declare a mutual `Conflicts`, and `qemu-user-static`
+*Provides* `qemu-user-binfmt` anyway. Install the static one — the nspawn
+harness needs a static interpreter to work inside a chroot, so it is the right
+one on both counts.
+
+Root is genuinely required here and there is no way around it. Measured rather
+than assumed: `dpkg-reconfigure qemu-user-binfmt` inside the privileged pi-gen
+container exits 0 and `arch-test armhf` still reports *"not supported on this
+machine/kernel"*, so the container cannot register the handler for itself. The
+host-side registration attempt in `build-docker.sh` runs under `sudo ...
+2>/dev/null || true`, so in a non-interactive session it fails **silently** and
+the build then dies at `stage0` with a message about binfmt rather than about
+privilege.
 
 Then, still on dserver, in the repo:
 
 ```bash
-ELSPI_PUBKEY="$(cat ~/.ssh/id_ed25519.pub)" ./build-docker.sh -c elspi.conf
+./build-elspi.sh
 ```
+
+Use the wrapper, not `build-docker.sh` directly. It stages a static `qemu-arm`
+under the name the host precheck insists on (`build-docker.sh:119`) without
+needing root, and it forwards `ELSPI_PUBKEY` into the container by name — only
+`GIT_HASH` is forwarded otherwise, so an `ELSPI_PUBKEY` exported in your own
+shell never reaches the build. Pass a different key as the first argument.
 
 Expect it to be slow, and expect it to fail in `08-venv` if it fails at all:
 compiling Kivy from sdist inside an emulated armhf chroot is the riskiest step
