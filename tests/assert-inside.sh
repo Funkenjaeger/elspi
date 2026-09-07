@@ -138,8 +138,13 @@ if [ -x "${VENV_PY}" ]; then
 	#
 	# Point Kivy's home and log dir at /tmp, and keep the version out of the
 	# banner noise by asking for it on its own line.
+	# Kivy's banner goes to stderr, which the redirect below already discards.
+	# An earlier version tried sys.stderr.close() to silence it and broke the
+	# probe outright: Kivy REPLACES sys.stderr with its own ProcessingStream,
+	# which has no close(), so the import raised AttributeError and a working
+	# venv reported as "failed to import kivy".
 	OUT="$(KIVY_HOME=/tmp/.kivy-probe KCFG_KIVY_LOG_DIR=/tmp KIVY_NO_ARGS=1 \
-		"${VENV_PY}" -c 'import kivy, sys; sys.stderr.close(); print(kivy.__version__)' 2>/dev/null)"
+		"${VENV_PY}" -c 'import kivy; print(kivy.__version__)' 2>/dev/null)"
 	if [ -n "${OUT}" ]; then
 		ok "venv imports kivy (version ${OUT})"
 	else
