@@ -24,6 +24,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get -y update && \
     apt-get -y install --no-install-recommends \
         systemd-container systemd python3 file coreutils findutils grep sed gawk \
+        ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 # The harness is bind-mounted at run time rather than copied, so editing a test
