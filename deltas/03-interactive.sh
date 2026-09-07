@@ -1,0 +1,222 @@
+#!/bin/bash
+# PHASE 3 -- INTERACTIVE. Blocks on a human; asks, never assumes.
+#
+#   03-interactive.sh [--dry-run]
+#
+# Checklist item 13, Evan's hard requirement: an interactive portion for
+# anything that must not be hard-coded -- credentials, and any config depending
+# on machines or infrastructure OUTSIDE this Pi. Nothing machine-specific in
+# the repo.
+#
+# So this file contains no IP addresses, no hostnames, no SSIDs, no keys. It
+# asks. Everything it writes came from the person running it, this run.
+#
+# It is RE-RUNNABLE: each step detects what is already set and offers to skip.
+# A provisioning step that must be done exactly once, in order, is a step that
+# gets half-done at 11pm.
+#
+# WHAT IT WILL NOT DO: it never prints a secret, never writes one to a log, and
+# never stores a password anywhere but the shadow file via passwd(1). If you
+# find yourself wanting to pass a credential as an argument, that is the signal
+# that it belongs in a human's hands rather than in a script.
+
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib.sh
+. "${HERE}/lib.sh"
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--dry-run) DRY_RUN=1; shift ;;
+		*) die "unknown argument: $1" ;;
+	esac
+done
+
+phase "Phase 3: INTERACTIVE -- things that must not live in the repo"
+
+need_root
+resolve_service_user
+
+if [ ! -t 0 ]; then
+	die "stdin is not a terminal. This phase asks questions and must not be
+  automated -- that is the whole point of it being a separate phase."
+fi
+
+ask_yn() { # ask_yn <prompt> ; returns 0 for yes
+	local reply
+	printf '\n  %s [y/N] ' "$1"
+	read -r reply
+	case "${reply}" in [yY]|[yY][eE][sS]) return 0 ;; *) return 1 ;; esac
+}
+
+# --- 1. the service account's password --------------------------------------
+# The image ships this account LOCKED (SEAM.md call 2: no credential enters the
+# repo, and the build's throwaway is revoked by passwd -l). Locked means sudo
+# and password-SSH do not work, so this is usually the first thing needed.
+phase "1/5  password for ${SERVICE_USER}"
+if passwd -S "${SERVICE_USER}" 2>/dev/null | awk '{print $2}' | grep -q '^P$'; then
+	ok "${SERVICE_USER} already has a usable password -- leaving it alone"
+else
+	say "${SERVICE_USER} has NO usable password (the image locks it deliberately)."
+	say "Until it is set: no sudo, no password SSH. Key-based SSH still works."
+	if ask_yn "Set it now?"; then
+		if [ "${DRY_RUN}" = "1" ]; then
+			say "  would: passwd ${SERVICE_USER}"
+		else
+			passwd "${SERVICE_USER}" || warn "passwd did not complete; account stays locked"
+		fi
+	else
+		warn "skipped -- the account stays locked."
+	fi
+fi
+
+# --- 2. authorized_keys -----------------------------------------------------
+# Names another machine by definition, so it cannot be in the repo.
+phase "2/5  SSH access for your workstation"
+HOME_DIR="$(getent passwd "${SERVICE_USER}" | cut -d: -f6)"
+AK="${HOME_DIR}/.ssh/authorized_keys"
+if [ -s "${AK}" ]; then
+	ok "authorized_keys already has $(grep -cvE '^\s*(#|$)' "${AK}") key(s)"
+	say "fingerprints:"
+	ssh-keygen -lf "${AK}" 2>/dev/null | sed 's/^/      /' || true
+	ask_yn "Add another?" || SKIP_AK=1
+fi
+if [ -z "${SKIP_AK:-}" ]; then
+	say "Paste ONE public key line (ssh-ed25519 ... / ssh-rsa ...), or empty to skip:"
+	printf '  > '
+	read -r PUBKEY
+	if [ -n "${PUBKEY}" ]; then
+		case "${PUBKEY}" in
+			ssh-*|ecdsa-*|sk-*) ;;
+			*) die "that does not look like a public key line. Refusing to write it." ;;
+		esac
+		# A PRIVATE key pasted here would be a disaster; catch the obvious shape.
+		case "${PUBKEY}" in
+			*PRIVATE*) die "that looks like a PRIVATE key. Never paste one here." ;;
+		esac
+		run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0700 "${HOME_DIR}/.ssh"
+		run bash -c "printf '%s\n' \"\${PUBKEY}\" >> '${AK}'"
+		run chown "${SERVICE_USER}:${SERVICE_USER}" "${AK}"
+		run chmod 0600 "${AK}"
+		assert "key appended to authorized_keys" test -s "${AK}"
+	else
+		warn "skipped."
+	fi
+fi
+
+# --- 3. network -------------------------------------------------------------
+# nmcli, because RUNTIME-INVENTORY.md records that the nmcli PYTHON package
+# shells out to the nmcli BINARY -- the app needs NetworkManager present, and
+# the image installs it for that reason.
+phase "3/5  network"
+if command -v nmcli >/dev/null 2>&1; then
+	say "current connections:"
+	nmcli -t -f NAME,TYPE,DEVICE connection show --active 2>/dev/null | sed 's/^/      /' \
+		|| say "      (none active)"
+	if ask_yn "Add a WiFi connection?"; then
+		printf '  SSID: '; read -r SSID
+		if [ -n "${SSID}" ]; then
+			say "Passphrase (not echoed):"
+			printf '  > '; read -rs WIFIPSK; printf '\n'
+			if [ "${DRY_RUN}" = "1" ]; then
+				say "  would: nmcli device wifi connect <SSID> (passphrase withheld)"
+			else
+				# The passphrase never reaches a log, an argument list this script
+				# prints, or this repo. nmcli stores it in its own keyfile.
+				if nmcli device wifi connect "${SSID}" password "${WIFIPSK}" >/dev/null 2>&1; then
+					ok "connected to ${SSID}"
+				else
+					warn "could not connect to ${SSID} -- check the passphrase or signal"
+				fi
+			fi
+			unset WIFIPSK
+		fi
+	fi
+else
+	warn "nmcli not found. The image is supposed to install network-manager;"
+	warn "  the nmcli PYTHON package shells out to this binary, so the app needs it."
+fi
+
+# --- 4. the dev role --------------------------------------------------------
+# SEAM.md call 3, RATIFIED WITH AN AMENDMENT: the firmware toolchain BYTES are
+# baked into the image unconditionally (installing them at provision time would
+# put a package mirror back on the recovery path). What is asked HERE is
+# whether to ENABLE the role -- the reflex-fw checkout and PATH exposure -- not
+# whether to install it. A "no" gives an appliance; the bytes sit inert.
+phase "4/5  developer role (firmware toolchain)"
+if command -v openocd >/dev/null 2>&1 && command -v arm-none-eabi-gcc >/dev/null 2>&1; then
+	ok "toolchain present in the image (openocd, arm-none-eabi-gcc) -- as designed"
+	say "Enabling the role means cloning reflex-fw here so firmware can be built"
+	say "and flashed from this machine. Declining leaves the bytes inert."
+	if ask_yn "Enable the dev role on this machine?"; then
+		say "Clone URL for reflex-fw (names another machine, so it is not in the repo):"
+		printf '  > '; read -r FWURL
+		if [ -n "${FWURL}" ]; then
+			DEST="${HOME_DIR}/projects/reflex-fw"
+			if [ -d "${DEST}/.git" ]; then
+				ok "${DEST} already a checkout -- leaving it"
+			else
+				run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0755 "${HOME_DIR}/projects"
+				run sudo -u "${SERVICE_USER}" git clone "${FWURL}" "${DEST}"
+				assert "reflex-fw cloned" test -d "${DEST}/.git"
+			fi
+		fi
+	else
+		ok "appliance mode -- toolchain stays inert"
+	fi
+else
+	warn "toolchain NOT found. The image is supposed to bake gcc-arm-none-eabi,"
+	warn "  cmake and openocd in unconditionally (SEAM.md call 3)."
+fi
+
+# --- 5. the OT state-pull key (item 19) -------------------------------------
+# WITHOUT THIS, A REBUILT elspi FALLS OUT OF THE EVIDENCE PERIMETER and every
+# claim about it reverts to "per source, unverified live".
+#
+# It is a FORCED-COMMAND key and must never be written as a bare key line --
+# item 19 says so explicitly, against the dserver->webedge login-key defect
+# narrowed 2026-08-14. The restrictions are the security boundary; the key
+# alone is a shell.
+phase "5/5  OT state-pull key (item 19)"
+OT_CMD="${HOME_DIR}/bin/ot-state"
+if grep -q 'ot-state' "${AK}" 2>/dev/null; then
+	ok "authorized_keys already carries an ot-state entry"
+else
+	say "This is a SECOND key, distinct from your workstation's: purpose-scoped,"
+	say "no-shell, read-only, and it runs exactly one verb (ot-state-v1)."
+	say "Without it the nightly cannot see this machine at all."
+	if [ ! -x "${OT_CMD}" ]; then
+		warn "${OT_CMD} is not present/executable -- the forced command has nothing"
+		warn "  to run. Install the payload script first, or the key is inert."
+	fi
+	if ask_yn "Install the OT state-pull key now?"; then
+		say "Paste the PUBLIC key line for the collector:"
+		printf '  > '; read -r OTKEY
+		if [ -n "${OTKEY}" ]; then
+			case "${OTKEY}" in
+				ssh-*|ecdsa-*|sk-*) ;;
+				*) die "that does not look like a public key line." ;;
+			esac
+			# Restrictions FIRST, key last. A bare key line here would be a
+			# general-purpose login.
+			OTLINE="command=\"${OT_CMD}\",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding ${OTKEY}"
+			run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0700 "${HOME_DIR}/.ssh"
+			run bash -c "printf '%s\n' \"\${OTLINE}\" >> '${AK}'"
+			run chown "${SERVICE_USER}:${SERVICE_USER}" "${AK}"
+			run chmod 0600 "${AK}"
+			# GATE: the line must carry the forced command. A key that landed
+			# without it is a shell, and looks identical in a directory listing.
+			assert "the OT entry carries command= and no-pty" \
+				bash -c "grep -F 'command=\"${OT_CMD}\"' '${AK}' | grep -q 'no-pty'"
+			say "VERIFY FROM THE COLLECTOR before trusting it -- a forced command that"
+			say "does not confine is the defect this was written against:"
+			say "    ssh -i <key> -o IdentitiesOnly=yes ${SERVICE_USER}@<this-pi> id"
+			say "  must NOT return a uid. It must run ot-state or fail."
+		fi
+	else
+		warn "skipped -- this machine will be outside the evidence perimeter."
+	fi
+fi
+
+phase "Phase 3 complete"
+say "Nothing here was recorded in the repo, which is the point."

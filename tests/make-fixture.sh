@@ -34,7 +34,7 @@ mkdir -p "${DEST}"/var/log
 mkdir -p "${DEST}"/opt/reflex-venv/bin
 mkdir -p "${DEST}"/opt/reflex-venv/lib/python3.13/site-packages/kivy-2.3.1.dist-info
 mkdir -p "${DEST}"/opt/reflex-venv/lib/python3.13/site-packages/kivy/graphics
-mkdir -p "${DEST}"/var/lib/reflex-config "${DEST}"/var/log/reflex "${DEST}"/opt/reflex
+mkdir -p "${DEST}"/var/lib/reflex-config "${DEST}"/var/log/reflex "${DEST}"/home/default/projects
 
 # --- identity ---------------------------------------------------------------
 printf 'root:x:0:0:root:/root:/bin/bash\n%s:x:%s:%s::/home/%s:/bin/bash\n' \
@@ -58,7 +58,8 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
   "runs_as_root": false,
   "paths": {
     "venv": "/opt/reflex-venv",
-    "app_root": "/opt/reflex",
+    "app_parent": "/home/default/projects",
+    "app_root": "/home/default/projects/reflex",
     "config_dir": "/var/lib/reflex-config",
     "log_dir": "/var/log/reflex"
   },

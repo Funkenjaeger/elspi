@@ -136,13 +136,17 @@ ok "manifest is valid JSON"
 
 SERVICE_USER="$(jget "['service_user']")"
 VENV="$(jget "['paths']['venv']")"
+# app_parent is what the IMAGE creates; app_root is where the DELTA puts the
+# checkout and does NOT exist in a freshly built image. Checking app_root here
+# would fail on every correct image -- the distinction is the seam.
+APP_PARENT="$(jget "['paths']['app_parent']")"
 APP_ROOT="$(jget "['paths']['app_root']")"
 CONFIG_DIR="$(jget "['paths']['config_dir']")"
 LOG_DIR="$(jget "['paths']['log_dir']")"
 DRM_DEFAULT="$(jget "['drm']['default_mode']")"
 DRM_SWITCHER="$(jget "['drm']['switcher']")"
 
-for v in SERVICE_USER VENV APP_ROOT CONFIG_DIR LOG_DIR DRM_DEFAULT DRM_SWITCHER; do
+for v in SERVICE_USER VENV APP_PARENT APP_ROOT CONFIG_DIR LOG_DIR DRM_DEFAULT DRM_SWITCHER; do
 	if [ -z "${!v}" ]; then bad "manifest declares ${v}"; else ok "manifest declares ${v}=${!v}"; fi
 done
 
@@ -185,7 +189,7 @@ owned_by_service_user() { # <abs path inside rootfs>
 	[ "$(stat -c %u "${p}")" = "${SU_UID}" ]
 }
 
-for d in "${CONFIG_DIR}" "${LOG_DIR}" "${APP_ROOT}"; do
+for d in "${CONFIG_DIR}" "${LOG_DIR}" "${APP_PARENT}"; do
 	check "${d} exists and is owned by ${SERVICE_USER}" owned_by_service_user "${d}"
 done
 

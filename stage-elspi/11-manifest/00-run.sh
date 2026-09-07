@@ -36,7 +36,8 @@ cat > "${MANIFEST}" <<- JSON
 
 	  "paths": {
 	    "venv": "/opt/reflex-venv",
-	    "app_root": "/opt/reflex",
+	    "app_parent": "/home/${FIRST_USER_NAME}/projects",
+	    "app_root": "/home/${FIRST_USER_NAME}/projects/reflex",
 	    "config_dir": "/var/lib/reflex-config",
 	    "log_dir": "/var/log/reflex"
 	  },
@@ -49,7 +50,7 @@ cat > "${MANIFEST}" <<- JSON
 	  },
 
 	  "delta_layer_owns": [
-	    "reflex-ui app code at /opt/reflex",
+	    "reflex monorepo checkout at /home/default/projects/reflex",
 	    "reflex-ui.service",
 	    "start.sh and its KCFG_* environment",
 	    "the single sudoers NOPASSWD rule",
@@ -78,7 +79,7 @@ if command -v python3 >/dev/null 2>&1; then
 	}
 fi
 
-for key in log_dir config_dir venv default_mode reflex_lock_commit; do
+for key in log_dir config_dir venv app_parent default_mode reflex_lock_commit; do
 	grep -q "\"${key}\"" "${MANIFEST}" || {
 		echo "FATAL: manifest is missing required key '${key}'"
 		exit 1

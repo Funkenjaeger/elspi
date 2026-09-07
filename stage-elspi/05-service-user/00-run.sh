@@ -75,8 +75,17 @@ install -d -o ${SERVICE_USER} -g ${SERVICE_USER} -m 0755 /var/lib/reflex-config
 # instead of assuming it.
 install -d -o ${SERVICE_USER} -g ${SERVICE_USER} -m 0755 /var/log/reflex
 
-# The application root. The delta layer drops the reflex-ui checkout here.
-install -d -o ${SERVICE_USER} -g ${SERVICE_USER} -m 0755 /opt/reflex
+# The application root. The delta layer drops the reflex MONOREPO checkout
+# here.
+#
+# CORRECTED 2026-09-07: this was /opt/reflex, which was invented rather than
+# measured. The live machine runs the app from
+# /home/default/projects/reflex/ui/deploy/start.sh -- the monorepo layout since
+# the 2026-08-17 weld, with the old /reflex-ui standalone checkout deleted on
+# 2026-08-25. The app's own unit hardcodes that path, so an image offering
+# /opt/reflex would have had the delta fighting the unit for no reason. This
+# task's job is the LIKE-FOR-LIKE rebuild.
+install -d -o ${SERVICE_USER} -g ${SERVICE_USER} -m 0755 /home/${SERVICE_USER}/projects
 
 # Kivy's config.ini lands in the service user's ~/.kivy by construction now,
 # not /root/.kivy. Pre-creating it keeps ownership right on first run.
@@ -84,13 +93,13 @@ install -d -o ${SERVICE_USER} -g ${SERVICE_USER} -m 0755 /home/${SERVICE_USER}/.
 EOF
 
 # --- Post-write checks ------------------------------------------------------
-for d in var/lib/reflex-config var/log/reflex opt/reflex "home/${SERVICE_USER}/.kivy"; do
+for d in var/lib/reflex-config var/log/reflex "home/${SERVICE_USER}/projects" "home/${SERVICE_USER}/.kivy"; do
 	if [ ! -d "${ROOTFS_DIR}/${d}" ]; then
 		echo "FATAL: post-write check failed -- /${d} was not created"
 		exit 1
 	fi
 done
-echo "  created: /var/lib/reflex-config /var/log/reflex /opt/reflex ~/.kivy"
+echo "  created: /var/lib/reflex-config /var/log/reflex ~/projects ~/.kivy"
 
 if ! grep -qE "^${SERVICE_USER}:!" "${ROOTFS_DIR}/etc/shadow"; then
 	echo "FATAL: post-write check failed -- ${SERVICE_USER} password is not locked."
