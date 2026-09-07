@@ -1,0 +1,31 @@
+# A harness runner: everything tests/verify-image.sh needs, and nothing else.
+#
+# WHY THIS IMAGE EXISTS
+#
+# Tier 2's booted half needs systemd-nspawn, which needs root. On dserver sudo
+# is interactive-only, so every --boot run would otherwise be a hand-off to
+# Evan -- and a verification you have to ask permission for is a verification
+# that stops being run.
+#
+# Docker group membership already grants the equivalent capability, so a
+# privileged container reaches the same place without a password prompt and
+# without a new standing grant. The armhf binfmt handler is registered in the
+# HOST kernel (flags POF -- the F pins the interpreter fd), and binfmt_misc is
+# kernel-wide, so it is visible in here too.
+#
+# It also supplies what the pi-gen build image lacks: python3, which the
+# harness uses to parse the image manifest. Note that absence is exactly what
+# made a `test -x` on the venv symlink fail -- see rootfs_exists().
+
+FROM debian:trixie
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get -y update && \
+    apt-get -y install --no-install-recommends \
+        systemd-container systemd python3 file coreutils findutils grep sed gawk \
+    && rm -rf /var/lib/apt/lists/*
+
+# The harness is bind-mounted at run time rather than copied, so editing a test
+# does not mean rebuilding this image.
+WORKDIR /work
