@@ -195,6 +195,16 @@ done
 check "${LOG_DIR} is writable by its owner" \
 	test -w "${ROOTFS}${LOG_DIR}"
 
+# /root/.kivy must not ship. Kivy's setup.py imports kivy at BUILD time, which
+# creates $HOME/.kivy -- /root in the chroot -- so a pristine image carried it
+# until 08-venv started setting KIVY_HOME. Asserted here as well as in the
+# stage, because the stage gate only fires on the machine that builds.
+if [ -e "${ROOTFS}/root/.kivy" ]; then
+	bad "/root/.kivy absent (Kivy's build-time import must not land in root's home)"
+else
+	ok "/root/.kivy absent"
+fi
+
 # Do NOT reproduce the live machine's scattered root-owned kivy logs.
 if compgen -G "${ROOTFS}/var/log/kivy_*.txt" >/dev/null; then
 	bad "/var/log carries no stray kivy_*.txt"

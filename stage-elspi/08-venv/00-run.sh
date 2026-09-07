@@ -55,6 +55,29 @@ export UV_LINK_MODE=copy
 # build must target.
 export UV_PYTHON_DOWNLOADS=never
 
+# KEEP KIVY'S BUILD OUT OF /root.
+#
+# Kivy's own setup.py does `import kivy` (2.3.1 setup.py:397, plus
+# kivy.tools.packaging imports at 401 and 427). kivy/__init__.py then runs, at
+# lines 351-369:
+#
+#     if 'KIVY_HOME' in environ: kivy_home_dir = expanduser(environ['KIVY_HOME'])
+#     else:                      kivy_home_dir = join(expanduser('~'), '.kivy')
+#     if not exists(kivy_home_dir): mkdir(kivy_home_dir)
+#
+# So BUILDING Kivy from sdist creates $HOME/.kivy, and in this chroot HOME is
+# /root. A pristine image therefore shipped /root/.kivy -- silently, with no
+# Kivy banner in the build log, because this happens during the build rather
+# than at runtime.
+#
+# It is only an empty directory, but it is the exact artifact the 2026-09-01
+# non-root decision exists to remove, and an image that carries it invites
+# the next person to conclude the app still runs as root.
+#
+# Prevented rather than cleaned up: pointed at a scratch path that is deleted
+# below, and gated on afterwards.
+export KIVY_HOME=/tmp/kivy-build-home
+
 uv --version
 
 # --frozen            : use uv.lock exactly, never re-resolve
@@ -64,8 +87,21 @@ uv --version
 # --no-install-project: everything EXCEPT the reflex package itself
 uv sync --frozen --no-dev --no-install-project --python /usr/bin/python3
 
-rm -rf /tmp/uv-cache
+rm -rf /tmp/uv-cache /tmp/kivy-build-home
 EOF
+
+# GATE: /root/.kivy must NOT exist. This is the check that was missing -- the
+# defect shipped in a pristine image and was only found because a separate
+# integrity guard noticed the harness deleting it afterwards.
+if [ -e "${ROOTFS_DIR}/root/.kivy" ]; then
+	echo "FATAL: /root/.kivy exists after the venv build."
+	echo "       Kivy's setup.py imports kivy, which creates \$HOME/.kivy"
+	echo "       unless KIVY_HOME is set. It is set above, so if this fires"
+	echo "       something else is importing kivy as root -- find it rather"
+	echo "       than deleting the directory here."
+	exit 1
+fi
+echo "  no /root/.kivy (KIVY_HOME kept Kivy's build out of root's home)"
 
 # --- POST-WRITE CHECKS ------------------------------------------------------
 # These gate on signals that could have come out differently. A venv directory
