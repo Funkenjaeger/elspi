@@ -64,7 +64,13 @@ echo "== running Tier 2 ${BOOT_ARG:+(with --boot)} =="
 #
 # Done as part of the command rather than in the Dockerfile because a mount
 # cannot be baked into an image.
+#
+# --tmpfs /run: systemd-nspawn REFUSES to boot when /run is a disk filesystem
+# ("Attempted to remove disk file system under /run/systemd/nspawn/propagate,
+# and we can't allow that"). In a container /run is ordinary overlay, so this
+# is required rather than an optimization.
 exec docker run --rm --privileged \
+	--tmpfs /run:exec,mode=755 \
 	--volumes-from "${CONTAINER}" \
 	-v "${HERE}":/tests:ro \
 	elspi-verify \

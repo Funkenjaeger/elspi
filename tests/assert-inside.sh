@@ -11,6 +11,20 @@
 
 set -uo pipefail
 
+# WRITE TO A FILE, not just the console.
+#
+# The first attempt scraped systemd-nspawn's --console=pipe. Inside a container
+# that produced NOTHING -- systemd's output goes to its journal, not to the
+# console nspawn hands you, so the harness reported "did not reach the
+# assertion unit" about a unit that may well have run. Console capture is the
+# fragile part of this design, so the result goes somewhere that survives the
+# boot and can be read from outside afterwards.
+#
+# /var/log is inside the rootfs, which lives in the build volume, so it is
+# still there when nspawn exits. /run would not be: it is tmpfs.
+OUT=/var/log/elspi-assert.out
+exec > >(tee "${OUT}") 2>&1
+
 P=0; F=0
 ok()  { P=$((P+1)); echo "  PASS  $1"; }
 bad() { F=$((F+1)); echo "  FAIL  $1"; }

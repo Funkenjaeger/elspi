@@ -415,10 +415,28 @@ else
 		install -d "${ROOTFS}/etc/systemd/system/multi-user.target.wants"
 		ln -sf ../elspi-assert.service "${ASSERT_WANT}"
 
+		# --keep-unit: nspawn otherwise tries to allocate a scope unit on the
+		# system bus, and there is no bus here ("Failed to open bus").
+		# --register=no: no machined either.
+		# /run must be tmpfs or nspawn refuses ("Attempted to remove disk file
+		# system under /run/systemd/nspawn/propagate") -- the caller arranges
+		# that; see tests/verify-built-image.sh.
+		RESULT_IN_ROOTFS="${ROOTFS}/var/log/elspi-assert.out"
+		rm -f "${RESULT_IN_ROOTFS}"
+
 		BOOTLOG="$(mktemp)"
 		timeout 300 systemd-nspawn -D "${ROOTFS}" \
-			--boot --register=no --quiet \
+			--boot --register=no --keep-unit --quiet \
 			--console=pipe >"${BOOTLOG}" 2>&1 </dev/null || true
+
+		# The RESULT FILE is the source of truth, not the console. systemd
+		# sends its output to the journal, so --console=pipe can come back
+		# empty from a boot that ran the unit perfectly well.
+		if [ -f "${RESULT_IN_ROOTFS}" ]; then
+			cat "${RESULT_IN_ROOTFS}"
+			cp "${RESULT_IN_ROOTFS}" "${BOOTLOG}"
+		fi
+		rm -f "${RESULT_IN_ROOTFS}"
 
 		cleanup_assert
 		trap - EXIT INT TERM
