@@ -3,175 +3,159 @@
 Checklist item 17: *"PROVE IT ON HARDWARE: build a second SD card from scratch
 and boot it on the real Pi."*
 
-Written 2026-09-07 from the desk, with the stage built and the image not yet
-built. It exists so the session is spent on the machine rather than on
-decisions that could have been made at a desk.
+Rewritten 2026-09-07 (evening), after the image was built and the delta layer
+written. The earlier version of this file said the delta layer did not exist —
+it does now, so the session can attempt a working lathe rather than only a
+boot.
 
 ---
 
-## READ THIS FIRST — the session cannot fully succeed yet
+## What is ready
 
-**The delta layer does not exist.** `SEAM.md` splits the work in two: the
-IMAGE (built, this repo) and the DELTAS (app deploy, `reflex-ui.service`,
-`start.sh`, the sudoers rule, the restore of `/var/lib/reflex-config`, the
-interactive phase). Checklist items 13 and 14 cover the deltas and **neither is
-started**.
-
-A perfect image on its own boots to a console with a venv and no application.
-That is still a worthwhile hardware test — see *What this session CAN prove* —
-but do not go in expecting a working lathe on the new card.
-
-**And the prerequisite that predates everything: `/var/lib/reflex-config` is
-still not backed up.** Checklist item 0, verified 2026-08-16: elspi is in no
-backup job anywhere. That directory is commissioned machine data measured off
-the physical lathe — `els_backlash_steps 435`,
-`els_cal_last_measured_steps 363`, `els_cal_motion_thresh_counts 2`, ceiling
-1008 — and **no provisioning system can regenerate it.** The new image ships
-that directory *empty and owned*, deliberately, because item 14 requires
-provisioning to restore it and to fail loudly rather than invent defaults.
-
-So: get that data off the machine before the session, not during it.
-
----
-
-## Before the session (desk work, no lathe)
-
-1. **Back up `/var/lib/reflex-config`** off the live elspi. Item 0. Do this
-   even if nothing else on this list happens.
-2. **Build the image.** Needs one `sudo` on dserver first — see *Building* below.
-3. **Run the harness** against the built rootfs:
-   ```sh
-   tests/verify-image.sh work/elspi/stage-elspi/rootfs
-   sudo tests/verify-image.sh work/elspi/stage-elspi/rootfs --boot
-   ```
-   Both must be green before an SD card is written. A red harness on the desk
-   is free; the same fault found at the lathe costs a power cycle.
-4. **Keep the original SD card.** It is the rollback, and until item 0 is done
-   it is also the only copy of the commissioned data. Flash a *second* card.
-
----
-
-## What this session CAN prove
-
-Everything on the Tier 3 list that the harness structurally cannot see:
-
-| Question | Why only hardware answers it |
+| | state |
 |---|---|
-| **Does a non-root process take DRM master?** | no GPU in the harness. This is the headline item |
-| Does the display come up at all (KMS/DRM, V3D) | no GPU |
-| Does the touchscreen enumerate on the MTD path | no touchscreen |
-| Is `/dev/ttyAMA0` free of a getty, and does SPI/I²C exist | firmware-level; `config.txt` is only asserted *textually* |
-| Does `usb_max_current_enable=1` stop the brownouts | needs the real panel |
-| Does audio play on card 0 | needs the real HDMI sink |
+| Image | `deploy/image_2026-09-08-elspi.img.xz`, 1.3 GB, built 46m26s |
+| Baked SSH key | Evan's desktop `id_ed25519` — verified byte-identical, `PasswordAuthentication no` |
+| Tier 2 | **90 passed, 0 failed, 3 unknown** against that exact rootfs |
+| Delta layer | `deltas/` — converge, restore, interactive |
+| Commissioned config | captured 2026-09-07, verified 19/19 against a live hash pull |
 
-## What it cannot prove yet
+The three UNKNOWNs are honest and permanent-ish: DRM master (no GPU in any
+harness), the booted tier (`nspawn --boot` does not work in this nesting), and
+Pillow (`SEAM.md` ratified promoting it in the reflex repo; not landed).
 
-The lathe working end to end. That needs the delta layer.
+## What this session can and cannot settle
+
+**CAN:** everything invisible to a VM — whether the display comes up at all
+(KMS/DRM, V3D), the touchscreen, SPI/I²C and the UART link to the STM32,
+whether `usb_max_current_enable=1` stops the brownouts, audio on card 0. And
+the headline: **does a non-root process take DRM master.**
+
+**CANNOT:** prove the image is a complete recovery path. The delta layer has
+never run against real hardware — only its refusal paths, exercised inside the
+built rootfs. Expect to debug it.
 
 ---
 
-## The DRM question, and how to spend attempts cheaply
+## Before you go out there
 
-This is the one genuinely open decision, and the session is where it closes.
+1. **Re-capture the commissioned config if you have used the lathe since
+   2026-09-07.** The current capture is
+   `dserver:~/backups/elspi/elspi-reflex-config-2026-09-07`. It drifted 13 of
+   19 files in the 16 days before it, so a week of bench work is enough to
+   matter. Restoring a stale capture puts old geometry on the machine and
+   nothing downstream notices.
+2. **Bring the capture to the Pi.** `02-restore.sh` cannot fetch it — it would
+   have to know where dserver is, and nothing machine-specific lives in this
+   repo.
+3. **Keep the original SD card.** It is the rollback and it is the running
+   machine. Flash a *second* card.
 
-The image ships **three** mechanisms and a switcher, precisely so that a wrong
-guess costs an SSH command instead of a reflash:
+---
+
+## The DRM question — the actual point of the session
+
+The image ships **three** mechanisms and a switcher, so a wrong guess costs an
+SSH command instead of a reflash:
 
 ```sh
-elspi-drm-mode                     # what is it now?
-elspi-drm-mode first-opener        # image default
-elspi-drm-mode logind-seat         # autologin tty1 + user unit
-elspi-drm-mode cap-sys-admin       # last resort
+elspi-drm-mode                  # what is it now?
+elspi-drm-mode first-opener     # image default
+elspi-drm-mode logind-seat      # autologin tty1 + user unit
+elspi-drm-mode cap-sys-admin    # last resort
 ```
 
-**Ladder, in order. Stop at the first that works.**
+**The ladder. Stop at the first that works.**
 
-1. `first-opener` — already active. If the UI takes the display, done: the
-   appliance runs non-root with no privilege and no seat machinery.
-2. If it fails, **check Plymouth first, before changing mode.** Plymouth's DRM
+1. **`first-opener`** is already active. If the UI takes the display, done —
+   the appliance runs non-root with no privilege and no seat machinery.
+2. **If it fails, check Plymouth BEFORE changing mode.** Plymouth's DRM
    renderer is itself a master, and the likeliest failure is that it has not
-   released the display. `systemctl status plymouth-quit-wait.service`, and
-   try stopping Plymouth by hand and restarting the app. If that fixes it, the
-   fault is ordering, not mechanism — a much better answer than escalating.
-3. `logind-seat` — needs a **reboot**, not a restart, because the seat session
-   is created at login.
-4. `cap-sys-admin` — takes the display regardless of seats. If the machine ends
-   up resting here, write it up; it is a floor, not a destination.
+   released the display. `systemctl status plymouth-quit-wait.service`; try
+   stopping Plymouth by hand and restarting the app. **If that fixes it the
+   fault is ordering, not mechanism** — a much better answer than escalating
+   privilege, and one that changes what we ship.
+3. **`logind-seat`** — needs a **reboot**, not a restart: the seat session is
+   created at login.
+4. **`cap-sys-admin`** — takes the display regardless of seats. If the machine
+   ends up resting here, write it up. It is a floor, not a destination.
 
-**Record which rung worked and why.** The image manifest carries
+Record which rung worked. `/etc/elspi-image.json` carries
 `"verified_on_hardware": false` and that flips only on evidence.
 
 ---
 
-## The recovery path — read before flashing
+## Recovery — read before flashing
 
-`elspi.conf` sets `ENABLE_SSH=1` with `PUBKEY_ONLY_SSH=1`, and **the build
-refuses to produce an image without `ELSPI_PUBKEY`**. This is the difference
-between an experiment and a power cycle: the service account's password is
-locked by design, so if no key is baked in, a card whose UI does not start is
-reachable only from the touchscreen.
+The account ships **locked**, so the baked key is the only way in. Confirm SSH
+works *before* touching anything else:
 
-So, before writing the card, confirm:
+```sh
+ssh default@<the pi>
+```
 
-- the image was built with `ELSPI_PUBKEY` set to a key you hold;
-- you can reach the new card over SSH *before* touching anything else.
-
-If SSH is up, a failed UI is a five-second fix. If it is not, everything below
-is a power cycle each.
+With SSH up, a failed UI is a five-second fix. Without it, every experiment
+above is a power cycle.
 
 ---
 
-## Building
+## Running it
 
-**On dserver, in bash — one time, needs root:**
-
-```bash
-sudo apt-get install -y qemu-user-static binfmt-support
-```
-
-**CORRECTED 2026-09-07.** This line first read
-`qemu-user-static qemu-user-binfmt binfmt-support`, which cannot be satisfied:
-those two packages declare a mutual `Conflicts`, and `qemu-user-static`
-*Provides* `qemu-user-binfmt` anyway. Install the static one — the nspawn
-harness needs a static interpreter to work inside a chroot, so it is the right
-one on both counts.
-
-Root is genuinely required here and there is no way around it. Measured rather
-than assumed: `dpkg-reconfigure qemu-user-binfmt` inside the privileged pi-gen
-container exits 0 and `arch-test armhf` still reports *"not supported on this
-machine/kernel"*, so the container cannot register the handler for itself. The
-host-side registration attempt in `build-docker.sh` runs under `sudo ...
-2>/dev/null || true`, so in a non-interactive session it fails **silently** and
-the build then dies at `stage0` with a message about binfmt rather than about
-privilege.
-
-Then, still on dserver, in the repo:
+**On dserver (bash)** — only if you need to rebuild:
 
 ```bash
-./build-elspi.sh
+cd ~/projects/elspi && ./build-elspi.sh ~/elspi-flash-key.pub
 ```
 
-Use the wrapper, not `build-docker.sh` directly. It stages a static `qemu-arm`
-under the name the host precheck insists on (`build-docker.sh:119`) without
-needing root, and it forwards `ELSPI_PUBKEY` into the container by name — only
-`GIT_HASH` is forwarded otherwise, so an `ELSPI_PUBKEY` exported in your own
-shell never reaches the build. Pass a different key as the first argument.
+**On the Pi (bash)**, after flashing and confirming SSH:
 
-Expect it to be slow, and expect it to fail in `08-venv` if it fails at all:
-compiling Kivy from sdist inside an emulated armhf chroot is the riskiest step
-in the build, and `SEAM.md` says to prove that one step before trusting the
-rest. Nobody has a duration for it yet — ospi never pays this cost, because on
-its Python version its app pulls a prebuilt wheel. **Measure the first build**;
-`VERIFICATION.md`'s runner choice depends on that number and on nothing else.
+```bash
+sudo ./provision.sh --app /home/default/projects/reflex \
+                    --config-backup /path/to/elspi-reflex-config-YYYY-MM-DD
+```
 
-Output lands in `deploy/`.
+The app checkout has to get onto the Pi somehow — clone it, or copy it from the
+old card. `provision.sh` will not invent it.
+
+Phases run in order and stop on failure. Each is also runnable alone, and all
+three take `--dry-run`.
+
+**Nothing starts the application.** That is deliberate: phase 2 prints the
+commissioned values it restored, and starting before a human has looked at them
+means coming up on whatever happened to be in the file. When you are satisfied:
+
+```bash
+systemctl start reflex-ui
+journalctl -u reflex-ui -f
+```
+
+---
+
+## Things that will probably bite
+
+- **The app's stock unit says `User=root`.** The image runs non-root, and the
+  `elspi-drm-mode` drop-in overrides `User=`/`Group=`. Converge gates on
+  systemd's *resolved* `User=` and refuses to continue if it still says root.
+  If that gate fires, the drop-in did not take.
+- **Sudoers.** The image reproduces the live pair exactly: `reflex-restart`
+  (restart) and `reflex-stopstart` (**stop only** — the name lies, verified on
+  the live machine 2026-09-07). Converge asserts the grant does *not* extend to
+  other units.
+- **The venv is at `/opt/reflex-venv`**, not in the checkout. Converge symlinks
+  the checkout's `.venv` at it so stock `start.sh` works unmodified, and hard
+  fails if the image venv is missing — on a non-image machine `uv` would
+  silently start compiling Kivy from source.
+- **`/dev/ttyAMA0` carries Modbus.** The image takes the serial console off the
+  kernel cmdline *and* masks `serial-getty@ttyAMA0`. If Modbus frames are
+  garbled, check both.
 
 ---
 
 ## After the session
 
-- Flip `verified_on_hardware` only if DRM was actually verified.
-- Record the working DRM rung in `RUNTIME-INVENTORY.md`, replacing the
-  hypothesis with a measurement.
-- If `first-opener` worked, say so plainly — it means the seat machinery in
-  `logind-seat` can eventually be deleted rather than maintained.
+- Flip `verified_on_hardware` only if DRM was actually verified, and record
+  which rung.
+- If `first-opener` worked, say so plainly — the `logind-seat` machinery can
+  then be deleted rather than maintained.
+- Item 12: diff the provisioned Pi against the live elspi. That is the check
+  that says whether the delta layer is complete, and it can only be done here.
