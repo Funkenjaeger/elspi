@@ -103,5 +103,34 @@ export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS:-} -e ELSPI_PUBKEY"
 export PRESERVE_CONTAINER="${PRESERVE_CONTAINER:-1}"
 echo "preserve: container kept (PRESERVE_CONTAINER=${PRESERVE_CONTAINER}) so the rootfs survives for verification"
 
+# --- clear the PREVIOUS build's preserved container --------------------------
+# Keeping the container is what makes verification possible, but it also means
+# build-docker.sh aborts on the NEXT run: "Container pigen_work already exists
+# and you did not specify CONTINUE=1." Preserving is for inspecting a build
+# AFTER it finishes, not for squatting on the name forever -- so a leftover
+# from a FINISHED build is cleared here rather than handed to the operator as
+# a docker command to paste.
+#
+# A RUNNING container is a different thing entirely and is never touched: that
+# is either a build in progress or the orphan that filled /disk0 on 2026-09-07.
+# Removing one out from under itself is how that mess started.
+CONTAINER_NAME="${CONTAINER_NAME:-pigen_work}"
+if docker ps --format '{{.Names}}' | grep -qx "${CONTAINER_NAME}"; then
+	echo "FATAL: ${CONTAINER_NAME} is RUNNING."
+	echo "  Either a build is in progress, or a previous one was interrupted and"
+	echo "  left it behind. Check before killing it:"
+	echo "      docker ps --filter name=${CONTAINER_NAME}"
+	exit 1
+fi
+if docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER_NAME}"; then
+	if [ "${CONTINUE:-0}" = "1" ]; then
+		echo "resume:   keeping ${CONTAINER_NAME} (CONTINUE=1)"
+	else
+		echo "cleanup:  removing the previous build's preserved ${CONTAINER_NAME}"
+		docker rm -v "${CONTAINER_NAME}" >/dev/null \
+			|| { echo "FATAL: could not remove ${CONTAINER_NAME}"; exit 1; }
+	fi
+fi
+
 echo "starting build at $(date -Is)"
 exec ./build-docker.sh -c elspi.conf
