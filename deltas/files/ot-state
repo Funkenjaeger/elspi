@@ -23,17 +23,19 @@ umask 077
 
 VERB="ot-state-v1"
 
-# TEST SEAMS, and nothing else. Both are INERT over the confined key: elspi's
-# sshd_config sets `AcceptEnv LANG LC_* COLORTERM NO_COLOR` and leaves
-# PermitUserEnvironment at its `no` default, so a client cannot set either of
+# TEST SEAMS, and nothing else. All three are INERT over the confined key:
+# elspi's sshd_config sets `AcceptEnv LANG LC_* COLORTERM NO_COLOR` and leaves
+# PermitUserEnvironment at its `no` default, so a client cannot set any of
 # these across the ot_elspi path -- verified 2026-09-04 by pulling with
 # `ssh -o SetEnv=OT_FLIGHT_STATUS=...` and watching the payload keep reading
-# the real path. They exist so the ABSENT branch below can be exercised at the
-# machine WITHOUT moving the live status file, which is the only way to prove
-# that branch emits rows rather than silence. Same reasoning as ONLY_HOST in
-# check-ot.sh: a seam that production never sets.
+# the real path. They exist so the ABSENT branch below (and, for CONFIG_DIR,
+# the whole commissioned-config section) can be exercised at the machine
+# WITHOUT moving live files, which is the only way to prove those branches
+# emit rows rather than silence. Same reasoning as ONLY_HOST in check-ot.sh: a
+# seam that production never sets.
 FLIGHT_STATUS="${OT_FLIGHT_STATUS:-/var/lib/reflex-config/flight/flight_status.json}"
 FLIGHT_FRESH_S="${OT_FLIGHT_FRESH_S:-60}"
+CONFIG_DIR="${OT_CONFIG_DIR:-/var/lib/reflex-config}"
 
 cmd="${SSH_ORIGINAL_COMMAND-}"
 if [ -z "$cmd" ]; then
@@ -54,6 +56,130 @@ hash_of() {
     else
         echo "UNREADABLE"
     fi
+}
+
+# FIELD-SCOPED config hash. Task build/2026-09-10#3: whole-file hash_of() on
+# /var/lib/reflex-config/*.yaml made an operator's in-job action (a feed
+# selection, a tool-offset touch) read as machine DRIFT, because it changed
+# bytes in the same file as the commissioned geometry. This hashes only the
+# COMMISSIONED fields, over the SAME file, so the line below still says one
+# thing about one file -- it just stops listening to two fields that are not
+# the machine's business:
+#   (1) offsets: -- tool offsets, every file. An operator property, not the
+#       machine's.
+#   (2) syncRatioNum / syncRatioDen -- but ONLY in the file that is itself the
+#       SPINDLE axis. elsbar.py writes these straight from the operator's feed
+#       selection (proven 2026-09-10), so on the spindle axis a sync ratio is a
+#       property of the JOB. The other axes carry the same two keys (as inert
+#       defaults) and DO NOT get the exclusion -- if a non-spindle axis's
+#       syncRatio ever changes, that is not an operator feed action and MUST
+#       still read as drift.
+#   Spindle-ness is read from INSIDE the file (`spindleMode: true`), never
+#   from the filename -- "Axis-2.yaml" does not mean spindle by name, and the
+#   mirrored fixtures confirm all three Axis-*.yaml files carry syncRatioNum/
+#   Den; only the one with spindleMode: true is exempted.
+# Everything else -- backlash, cal geometry, servo polarity, Z scale, axis
+# names/indices, transform config -- still changes the hash and still goes
+# DRIFT. That is the property this function exists to preserve, not weaken.
+#
+# STILL HASH ONLY: this prints a 16-hex digest or a loud, unmistakably-not-a-
+# hash sentinel (UNREADABLE / NO_PYTHON3 / MALFORMED) -- exactly the same
+# vocabulary hash_of() above already uses for UNREADABLE, so a consumer
+# already has to tolerate a non-hex token in this column. Never a value.
+#
+# NORMALIZATION: field selection is by top-level YAML key (a line matching
+# ^key:, column 0) plus, for `offsets`, the indented `- <item>` list that
+# follows it until the next top-level key. This is whitespace- and
+# comment-blind (the emitted files have neither) but NOT key-order-blind by
+# construction -- the remaining lines are hashed in the FILE'S OWN order, so
+# reordering top-level keys (with content otherwise identical) changes the
+# hash. That is treated as a feature here: this payload is emitted by one
+# generator, never hand-edited, so key reordering with no value change is not
+# an expected event, and a hash that is blind to it would also be blind to a
+# reorder used to hide a value swap between two keys of the same width. A
+# genuinely blind spot: a value moved onto a NEW key sharing the excluded
+# key's name inside a differently-structured file would still be excluded --
+# this trusts key names, not schema position.
+CFG_HASH_PY=$(cat <<'OT_CFG_HASH_PY'
+import re
+import sys
+import hashlib
+
+TOP_KEY_RE = re.compile(r'^(\S[^:]*):')
+EXCLUDE_ALWAYS = ('offsets',)
+EXCLUDE_ON_SPINDLE = ('syncRatioNum', 'syncRatioDen')
+
+
+def scoped_bytes(path):
+    with open(path, 'r', encoding='utf-8') as fh:
+        raw_lines = fh.readlines()
+
+    if not any(TOP_KEY_RE.match(l.strip()) for l in raw_lines if l.strip()):
+        raise ValueError('no top-level "key:" line found -- not a config yaml')
+
+    # Spindle-ness is a property of THIS file's own content, never the
+    # filename -- see the caller-side comment for why.
+    is_spindle = any(line.strip() == 'spindleMode: true' for line in raw_lines)
+
+    out = []
+    skipping = False
+    for raw in raw_lines:
+        line = raw.rstrip('\n')
+        m = TOP_KEY_RE.match(line)
+        if m:
+            key = m.group(1)
+            if key in EXCLUDE_ALWAYS:
+                skipping = True
+                continue
+            if is_spindle and key in EXCLUDE_ON_SPINDLE:
+                skipping = False
+                continue
+            skipping = False
+            out.append(line)
+            continue
+        if skipping:
+            # Still inside an excluded top-level key's block (a list item, or
+            # any other indented continuation of it) -- drop until the next
+            # top-level key line ends it.
+            continue
+        out.append(line)
+
+    return ('\n'.join(out) + '\n').encode('utf-8')
+
+
+path = sys.argv[1]
+try:
+    data = scoped_bytes(path)
+except Exception:
+    print('MALFORMED', file=sys.stderr)
+    sys.exit(1)
+
+print(hashlib.sha256(data).hexdigest()[:16])
+OT_CFG_HASH_PY
+)
+config_hash_of() {
+    if [ ! -r "$1" ]; then
+        echo "UNREADABLE"
+        return
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        # No interpreter is itself a finding -- see the flight section below
+        # for the same principle. Never fall back to a whole-file hash here:
+        # that would silently re-widen the field scope this function exists
+        # to narrow.
+        echo "NO_PYTHON3"
+        return
+    fi
+    out=$(printf '%s' "$CFG_HASH_PY" | python3 - "$1" 2>/dev/null)
+    if [ -z "$out" ]; then
+        # scoped_bytes() raised -- malformed/unreadable-as-utf8/not-yaml-
+        # shaped. Loud, not silent: a fixed sentinel that can never collide
+        # with a real digest, rather than hashing partial or garbage bytes
+        # into something that merely LOOKS like a stable hash.
+        echo "MALFORMED"
+        return
+    fi
+    printf '%s' "$out"
 }
 
 say "# ot-state v1  host=$(hostname)"
@@ -79,14 +205,19 @@ for r in /home/default/projects/reflex /rotary-controller-python; do
 done
 say ""
 
-say "## commissioned config  (/var/lib/reflex-config)"
+say "## commissioned config  ($CONFIG_DIR)"
 # These are the numbers every firmware claim is quoted against. Hash only --
 # never emit values; this payload crosses a network and lands in a mirror.
+# The hash is FIELD-SCOPED (config_hash_of, defined above) to commissioned
+# fields only -- tool offsets and the spindle axis's operator-set sync ratio
+# are excluded so a job action does not read as machine drift. Everything
+# else in the file -- backlash, cal geometry, servo polarity, axis scale --
+# still moves this hash.
 n=0
-for f in /var/lib/reflex-config/*.yaml; do
+for f in "$CONFIG_DIR"/*.yaml; do
     [ -e "$f" ] || continue
     n=$((n + 1))
-    say "$(basename "$f")  sha=$(hash_of "$f")  mtime=$(date -r "$f" '+%Y-%m-%dT%H:%M' 2>/dev/null || echo UNKNOWN)"
+    say "$(basename "$f")  sha=$(config_hash_of "$f")  mtime=$(date -r "$f" '+%Y-%m-%dT%H:%M' 2>/dev/null || echo UNKNOWN)"
 done
 say "files: $n"
 say ""
