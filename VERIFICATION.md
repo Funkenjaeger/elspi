@@ -109,7 +109,7 @@ of what has been *run* versus what is still only designed.
 |---|---|---|
 | `tests/self-test.sh` | mutates a synthetic rootfs 31 ways and asserts the harness goes red for each | **yes — baseline green, 31/31 red** |
 | `tests/dry-run-stages.sh` | runs the chroot-free substages against the REAL upstream stage1 templates, twice (idempotence), plus two negative controls | **yes — 9/9** |
-| `tests/test-lockfile-drift.sh` | vendored `pyproject.toml`/`uv.lock` vs the reflex repo | **yes — in sync at reflex `0d8d459`** |
+| `tests/test-lockfile-drift.sh` | vendored `pyproject.toml`/`uv.lock` vs the reflex repo | **yes — in sync at reflex `dc5da79`** |
 | `tests/test-run-scripts-executable.sh` | every `*-run.sh`/`prerun.sh` is mode 100755 **in the git index** | **yes — 43/43** |
 | `tests/verify-image.sh` | Tier 2 offline assertions against a built rootfs | not yet — no image exists |
 | `tests/verify-image.sh --boot` | Tier 2 booted assertions under `systemd-nspawn` | not yet — needs the image and `qemu-user-static` |
