@@ -49,13 +49,25 @@ cat > "${MANIFEST}" <<- JSON
 	    "verified_on_hardware": false
 	  },
 
+	  "first_boot_seed": {
+	    "source": "raspberry-pi-imager-2.x-os-customisation",
+	    "unit": "/etc/systemd/system/elspi-first-boot-seed.service",
+	    "script": "/usr/local/sbin/elspi-first-boot-seed",
+	    "neutralises_after_use": [
+	      "/boot/firmware/user-data",
+	      "/boot/firmware/network-config"
+	    ],
+	    "leaves_intact": ["/boot/firmware/meta-data"],
+	    "verified_on_hardware": false
+	  },
+
 	  "delta_layer_owns": [
 	    "reflex monorepo checkout at /home/default/projects/reflex",
 	    "reflex-ui.service",
 	    "start.sh and its KCFG_* environment",
 	    "the single sudoers NOPASSWD rule",
 	    "restore of /var/lib/reflex-config from backup (HARD FAIL if absent)",
-	    "the interactive phase: password, authorized_keys, network credentials",
+	    "the interactive phase: the dev-role question, and any credential the Imager seed did not carry",
 	    "reinstall of the OT state-pull forced-command key"
 	  ],
 
@@ -79,7 +91,8 @@ if command -v python3 >/dev/null 2>&1; then
 	}
 fi
 
-for key in log_dir config_dir venv app_parent default_mode reflex_lock_commit; do
+for key in log_dir config_dir venv app_parent default_mode reflex_lock_commit \
+           first_boot_seed unit script; do
 	grep -q "\"${key}\"" "${MANIFEST}" || {
 		echo "FATAL: manifest is missing required key '${key}'"
 		exit 1

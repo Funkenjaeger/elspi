@@ -55,7 +55,9 @@ genuinely non-obvious call here.
 |---|---|
 | **Converge** | `reflex-ui` app code · `uv sync --no-dev` (near-instant, deps already present) · `reflex-ui.service` + enable · the single sudoers `NOPASSWD` rule · `/reflex-ui/config.ini` (`use_case = lathe`) |
 | **Restore** | `/var/lib/reflex-config` from backup — **hard fail if absent, never generate** · `~/firmware/flashed.json` if available (soft — its loss costs knowledge, not function) |
-| **Interactive** | the `default` user's password · `authorized_keys` for the desktop · WiFi/network credentials · anything naming another machine |
+| **Interactive** | the dev-role question (call 3) · anything naming another machine · any credential the Imager seed did not carry — **see the 2026-09-12 amendment below** |
+
+*2026-09-13: "the Imager seed" means the customisation page Imager shows for an OS-list entry declaring `init_format: cloudinit-rpi`, reached by `tools/flash-elspi.ps1` / `.sh` (which run `rpi-imager --repo deploy/os_list.json`). It does **not** mean Imager's "Use custom" option: 2.x skips every customisation page for a local file, so that route carries no seed at all and moves every row in this table back to Interactive. `FLASH-SESSION.md` has the call chain.*
 
 The three delta phases have deliberately different failure contracts: converge is
 idempotent and retryable, restore refuses to invent data, and interactive blocks
@@ -104,6 +106,58 @@ would commit a credential to a repository that is intended to become public. Bui
 the user **locked**, and let the interactive phase set the password on first
 provision. This is worth deciding now rather than discovering after the visibility
 flip, because git history keeps what you commit.
+
+#### AMENDMENT 2026-09-12 — credentials arrive in the Imager seed, not the interactive phase
+
+**Ratified by Evan (design (a)).** The *criterion* of call 2 is unchanged and is
+exactly what this amendment protects: **no credential enters this repo, and the
+image ships none.** What changes is *where the credential comes from at flash
+time.*
+
+**Raspberry Pi Imager 2.x's OS-customisation page is now the supported
+first-boot seed.** The operator types the hostname, the `default` account's
+password, the desktop public key and the Wi-Fi SSID/PSK into Imager; Imager
+writes them to the FAT partition as cloud-init NoCloud files; cloud-init
+consumes them on first boot; and `stage-elspi/12-first-boot-seed`'s oneshot unit
+then **overwrites them on the card**, so they do not persist in cleartext on an
+unencrypted partition that any machine with a card slot can read. Nothing is
+committed and nothing is baked.
+
+This moves three rows out of the **Interactive** phase — the password,
+`authorized_keys`, and the Wi-Fi credentials — and the Interactive row in the
+table above has been rewritten accordingly. What **stays** interactive:
+
+- **The dev-role question** (call 3): whether to enable the `reflex-fw`
+  checkout, the openocd udev rules and the PATH exposure. That is a human
+  decision rather than a credential, and Imager has nowhere to put it.
+- **Anything naming another machine.** The commissioned-config backup still has
+  to be carried to the Pi by hand (`FLASH-SESSION.md`), because `02-restore.sh`
+  would otherwise have to know where the backup host lives.
+- **The OT state-pull forced-command key**, for the same reason.
+- **Any credential the operator did not type into Imager**, and re-setting the
+  password later. The seed is a convenience, not the only path — and Imager
+  1.9.x cannot write one at all.
+
+Two things worth recording, because they were *not* obvious and because they are
+why this needed shipped code rather than only a documentation change:
+
+1. **The `default` account still ships locked, and it must.** `05-service-user`
+   still runs `passwd -l`, and its post-write gate still FATALs if the account
+   is unlocked at build time. The account is unlocked *on the machine*, from the
+   operator's own input, or not at all.
+
+2. **cloud-init would not have done what the customisation page implies.** For
+   an account that **already exists**, cloud-init 25.2 ignores Imager's `passwd`
+   key entirely (`distros/__init__.py:894-907`) — and then unlocks the account
+   anyway, exposing the random `FIRST_USER_PASS` throwaway that `elspi.conf`
+   generates purely to satisfy `build.sh:292`. Left alone, design (a) would have
+   shipped a lathe whose `default` account had a **live password nobody knows**
+   and whose typed password did nothing at all. The seed unit closes both
+   halves. `stage-elspi/12-first-boot-seed/README.md` carries the line-by-line
+   derivation.
+
+So call 2's answer is now: *the repo carries no credential, the image carries no
+credential, and the card carries one only for the length of the first boot.*
 
 ### 3. The firmware toolchain is a real choice, not an oversight
 

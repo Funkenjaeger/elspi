@@ -1,0 +1,86 @@
+[Unit]
+Description=elspi first-boot seed (radio, regulatory domain, seed neutralisation)
+Documentation=file:///usr/local/sbin/elspi-first-boot-seed
+
+# ORDERING IS THE WHOLE DESIGN HERE.
+#
+# cloud-final.service is the LAST cloud-init stage. Ordering after it means
+# every module that consumes the Imager seed has already run: the network
+# config is rendered, cc_users_groups has created or updated the account, and
+# cc_set_passwords has had its say about sshd. Anything earlier and this unit
+# would be neutralising a seed that had not been read yet -- which on a card
+# flashed for a machine shop means no Wi-Fi and no password, with no terminal
+# to find out why.
+#
+# NetworkManager.service is the thing whose radio state we change. `nmcli`
+# against a dead daemon fails, and the failure would be silent because this
+# unit is not allowed to fail the boot.
+#
+# cloud-init.service and cloud-config.service WERE named here too and have been
+# DROPPED (2026-09-13). They were redundant -- cloud-final.service is already
+# ordered after both -- and redundant ordering edges are not free on this
+# image: every extra cloud-init unit named here is another edge systemd has to
+# satisfy against a target we are now pulled in from, which is the exact class
+# of thing that produced the ordering cycle described under [Install]. One
+# edge, to the last stage, says all of it.
+After=cloud-final.service
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# THE LEADING '-' IS LOAD-BEARING, not defensive clutter.
+#
+# elspi has no terminal and no serial console (03-boot-config takes it off the
+# Modbus UART). A unit that can fail the boot is a unit that can cost a lathe
+# power cycle and an SD-card swap. The script reports its own verdict to the
+# journal and exits 0 by construction; this prefix is the second guard, for the
+# failure modes the script's author did not think of.
+#
+# stage-elspi/12-first-boot-seed/00-run.sh GATES on this prefix being present.
+ExecStart=-/usr/local/sbin/elspi-first-boot-seed
+
+StandardOutput=journal
+StandardError=journal
+
+# The script writes to the FAT boot partition and calls rfkill/nmcli/chpasswd,
+# so it needs root and a writable /boot/firmware. It is deliberately NOT
+# sandboxed beyond this: ProtectSystem would hide the very files it exists to
+# overwrite.
+ProtectHome=yes
+NoNewPrivileges=no
+
+[Install]
+# cloud-init.target, AND NOT multi-user.target. MEASURED, 2026-09-13, first
+# boot of image_2026-09-13-elspi on the real Pi.
+#
+# This unit shipped WantedBy=multi-user.target and never ran. On this image:
+#
+#   cloud-final.service   After=multi-user.target, WantedBy=cloud-init.target
+#   cloud-init.target     After=cloud-config.service multi-user.target
+#                               cloud-final.service
+#
+# So multi-user.target wanted us, we waited for cloud-final.service, and
+# cloud-final.service waited for multi-user.target. systemd resolved the cycle
+# the only way it can -- by deleting a job, and the job it deleted was ours:
+#
+#   cloud-final.service: Found ordering cycle on multi-user.target/start
+#   Job elspi-first-boot-seed.service/start deleted to break ordering cycle
+#   starting with cloud-final.service/start
+#
+# ExecMainStartTimestamp was empty. The radio came up only because cloud-init's
+# runcmd from Imager happened to do it, the regulatory domain came from the
+# cmdline, the password step never ran, and the seed was STILL ON THE CARD --
+# user-data with `passwd:` and network-config with `password:`, readable by any
+# machine with a card reader. Nothing failed; the unit simply was not there.
+#
+# cloud-init.target is the right anchor because it is the target that MEANS
+# "cloud-init is done": cloud-final.service is WantedBy it, and the target is
+# ordered after cloud-final.service. Being wanted by it is a pull with no
+# ordering edge of its own, so our After=cloud-final.service is the only
+# constraint we add -- and it points the same direction the target already
+# does. A unit that must run after cloud-init has finished belongs in
+# cloud-init.target, not in the target cloud-init itself waits for.
+WantedBy=cloud-init.target

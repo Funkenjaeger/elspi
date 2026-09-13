@@ -35,6 +35,12 @@ mkdir -p "${ROOTFS_DIR}"/boot/firmware "${ROOTFS_DIR}"/etc "${ROOTFS_DIR}"/usr/l
 install -m 644 "${REPO}/stage1/00-boot-files/files/config.txt"  "${ROOTFS_DIR}/boot/firmware/"
 install -m 644 "${REPO}/stage1/00-boot-files/files/cmdline.txt" "${ROOTFS_DIR}/boot/firmware/"
 
+# The REAL upstream cloud-init meta-data template, for the same reason: if
+# upstream ever fixes (or moves) its misspelled `instance_id` key, the anchor
+# assertion in 12-first-boot-seed starts failing HERE rather than three hours
+# into a build -- or, worse, than not at all.
+install -m 644 "${REPO}/stage2/04-cloud-init/files/meta-data" "${ROOTFS_DIR}/boot/firmware/"
+
 PASS=0; FAIL=0
 run_stage() { # run_stage <substage-dir>
 	local d="$1"
@@ -67,6 +73,40 @@ install -d "${ROOTFS_DIR}/etc/elspi"
 echo "0000000000000000000000000000000000000000" > "${ROOTFS_DIR}/etc/elspi/reflex-lock-commit"
 run_stage 11-manifest
 
+# 12-first-boot-seed is deliberately chroot-free -- it only rewrites
+# /boot/firmware/meta-data and installs a unit under ${ROOTFS_DIR} -- which is
+# exactly why it can be exercised here instead of only inside a build.
+run_stage 12-first-boot-seed
+
+# WHERE THE SUBSTAGE ENABLES THE UNIT, checked here rather than only in
+# verify-image.sh, because this is the one harness that runs the REAL substage
+# against a real tree -- verify-image.sh reads a hand-authored fixture, so the
+# two could agree with each other and both disagree with 00-run.sh.
+#
+# It must be cloud-init.target.wants and NOT multi-user.target.wants. See
+# stage-elspi/12-first-boot-seed/README.md, 2026-09-13: multi-user.target
+# plus After=cloud-final.service is an ordering cycle and systemd deletes our
+# job to break it.
+FBS_SEED_UNIT=elspi-first-boot-seed.service
+FBS_CI_WANTS="${ROOTFS_DIR}/etc/systemd/system/cloud-init.target.wants/${FBS_SEED_UNIT}"
+FBS_MU_WANTS="${ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants/${FBS_SEED_UNIT}"
+if [ -e "${FBS_CI_WANTS}" ]; then
+	echo "  ok: seed unit enabled in cloud-init.target.wants and the symlink resolves"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: seed unit is not enabled in cloud-init.target.wants (or the symlink dangles)"
+	FAIL=$((FAIL+1))
+fi
+if [ -L "${FBS_MU_WANTS}" ] || [ -e "${FBS_MU_WANTS}" ]; then
+	echo "  FAIL: seed unit is enabled in multi-user.target.wants -- that is the"
+	echo "        ordering cycle with cloud-final.service that stopped it running"
+	echo "        on the 2026-09-13 boot"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: seed unit is not enabled in multi-user.target.wants (no ordering cycle)"
+	PASS=$((PASS+1))
+fi
+
 # --- IDEMPOTENCE ------------------------------------------------------------
 # pi-gen re-runs stages on a resumed build. A second pass must not double-append
 # usb_max_current_enable or re-break an already-correct file.
@@ -91,6 +131,24 @@ if ( cd "${REPO}/stage-elspi/03-boot-config" && ./00-run.sh >/dev/null ); then
 	fi
 else
 	echo "  FAIL: 03-boot-config is not re-runnable"
+	FAIL=$((FAIL+1))
+fi
+
+# The seed substage must survive a resumed build too. Its first pass consumed
+# the `instance_id` anchor, so a second pass has to take the already-done path
+# rather than failing for a missing anchor.
+if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ./00-run.sh >/dev/null 2>&1 ); then
+	IDS=$(grep -c "^instance-id:" "${ROOTFS_DIR}/boot/firmware/meta-data")
+	OLD=$(grep -c "^instance_id:" "${ROOTFS_DIR}/boot/firmware/meta-data" || true)
+	if [ "${IDS}" -eq 1 ] && [ "${OLD}" -eq 0 ]; then
+		echo "  ok: meta-data has exactly one instance-id and no instance_id after two passes"
+		PASS=$((PASS+1))
+	else
+		echo "  FAIL: after two passes meta-data has ${IDS} instance-id and ${OLD} instance_id lines"
+		FAIL=$((FAIL+1))
+	fi
+else
+	echo "  FAIL: 12-first-boot-seed is not re-runnable"
 	FAIL=$((FAIL+1))
 fi
 
@@ -121,6 +179,53 @@ if ( cd "${REPO}/stage-elspi/03-boot-config" && ROOTFS_DIR="${NEG2}" ./00-run.sh
 	FAIL=$((FAIL+1))
 else
 	echo "  ok: stage refused a config.txt with no spi anchor (sed would have no-opped)"
+	PASS=$((PASS+1))
+fi
+
+# Same question for the seed substage. A meta-data carrying NEITHER the
+# upstream misspelling nor an already-hyphenated key means upstream moved the
+# template; the stage must REFUSE rather than ship an image whose NoCloud
+# datasource falls back to the literal "nocloud".
+NEG3="${WORK}/neg3"
+mkdir -p "${NEG3}/boot/firmware"
+grep -v "instance_id" "${REPO}/stage2/04-cloud-init/files/meta-data" \
+	> "${NEG3}/boot/firmware/meta-data"
+if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG3}" ./00-run.sh >/dev/null 2>&1 ); then
+	echo "  FAIL: seed stage accepted a meta-data with no instance_id anchor"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: seed stage refused a meta-data with no instance_id anchor"
+	PASS=$((PASS+1))
+fi
+
+# And it must refuse outright if meta-data is absent, rather than creating one
+# -- an invented seed file would mask a mis-set ENABLE_CLOUD_INIT.
+NEG4="${WORK}/neg4"
+mkdir -p "${NEG4}/boot/firmware"
+if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG4}" ./00-run.sh >/dev/null 2>&1 ); then
+	echo "  FAIL: seed stage accepted a boot partition with no meta-data at all"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: seed stage refused a boot partition with no meta-data"
+	PASS=$((PASS+1))
+fi
+
+# THE ORDERING-CYCLE GATE MUST ACTUALLY FIRE. Pre-plant the
+# multi-user.target.wants symlink that image_2026-09-13-elspi shipped -- the
+# one that made systemd delete the seed unit's job -- and the substage must
+# REFUSE. A gate that is never handed the bad state is a gate nobody has seen
+# go red.
+NEG5="${WORK}/neg5"
+mkdir -p "${NEG5}/boot/firmware" "${NEG5}/etc/systemd/system/multi-user.target.wants"
+install -m 644 "${REPO}/stage2/04-cloud-init/files/meta-data" "${NEG5}/boot/firmware/"
+ln -sf ../elspi-first-boot-seed.service \
+	"${NEG5}/etc/systemd/system/multi-user.target.wants/elspi-first-boot-seed.service"
+if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG5}" ./00-run.sh >/dev/null 2>&1 ); then
+	echo "  FAIL: seed stage accepted a rootfs with the unit enabled in"
+	echo "        multi-user.target.wants (the 2026-09-13 ordering cycle)"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: seed stage refused the multi-user.target.wants enablement (ordering cycle)"
 	PASS=$((PASS+1))
 fi
 

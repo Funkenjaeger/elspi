@@ -77,6 +77,25 @@ Upstream files edited so far: **one — `Dockerfile`, one word.**
 Everything else we add lives in new files: `stage-elspi/`, `elspi.conf`,
 `ci.conf`, `build-elspi.sh`, `tests/`.
 
+#### A case that would have made it two, and did not (2026-09-12)
+
+`stage2/04-cloud-init/files/meta-data` carries `instance_id: rpios-image` — with
+an **underscore**. cloud-init 25.2's NoCloud datasource reads `instance-id`,
+with a **hyphen**, and falls back to the literal string `"nocloud"` when it is
+absent. So upstream's seed template names an instance that nothing reads, and
+the obvious fix is a one-character edit to that file.
+
+We did not make it. `stage-elspi/12-first-boot-seed/00-run.sh` rewrites the key
+in `${ROOTFS_DIR}/boot/firmware/meta-data` **at image-build time**, after
+stage2 has installed the template — asserting the upstream text is present
+first and re-grepping after, so the day upstream fixes its own typo the stage
+says so loudly instead of silently no-opping.
+
+Same result, and the merge surface stays at one file. This is the pattern to
+copy for the next one: a stage of ours that edits upstream's *output* costs
+nothing on a merge, while editing upstream's *input* costs a conflict on every
+sync forever.
+
 #### `Dockerfile` — added `gpgv` to the apt line (2026-09-07)
 
 The first real build died in `stage0` debootstrap:
