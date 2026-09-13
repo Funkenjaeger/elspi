@@ -46,7 +46,7 @@ cat > "${MANIFEST}" <<- JSON
 	    "default_mode": "first-opener",
 	    "modes": ["first-opener", "logind-seat", "cap-sys-admin"],
 	    "switcher": "/usr/local/sbin/elspi-drm-mode",
-	    "verified_on_hardware": false
+	    "verified_on_hardware": true
 	  },
 
 	  "first_boot_seed": {
@@ -58,7 +58,7 @@ cat > "${MANIFEST}" <<- JSON
 	      "/boot/firmware/network-config"
 	    ],
 	    "leaves_intact": ["/boot/firmware/meta-data"],
-	    "verified_on_hardware": false
+	    "verified_on_hardware": true
 	  },
 
 	  "delta_layer_owns": [

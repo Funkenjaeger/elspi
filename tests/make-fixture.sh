@@ -67,7 +67,7 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
     "default_mode": "first-opener",
     "modes": ["first-opener", "logind-seat", "cap-sys-admin"],
     "switcher": "/usr/local/sbin/elspi-drm-mode",
-    "verified_on_hardware": false
+    "verified_on_hardware": true
   },
   "first_boot_seed": {
     "source": "raspberry-pi-imager-2.x-os-customisation",
@@ -78,7 +78,7 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
       "/boot/firmware/network-config"
     ],
     "leaves_intact": ["/boot/firmware/meta-data"],
-    "verified_on_hardware": false
+    "verified_on_hardware": true
   },
   "reflex_lock_commit": "0000000000000000000000000000000000000000",
   "cannot_be_verified_without_hardware": [
