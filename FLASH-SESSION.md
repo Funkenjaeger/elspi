@@ -60,11 +60,13 @@ The release carries `os_list.json` beside the image, and Imager fetches the imag
 itself from that URL, verifying it against the published hashes. Nothing is
 downloaded by hand.
 
-- **Windows:** press **Win+R**, paste, Enter (the installer registers
-  `rpi-imager.exe` in App Paths, which the Run dialog resolves; a PowerShell
-  prompt does not, there use `cmd /c start rpi-imager --repo <url>`):
+- **Windows**, from Win+R, cmd or PowerShell alike:
 
-      rpi-imager --repo https://github.com/Funkenjaeger/elspi/releases/download/<tag>/os_list.json
+      cmd /c start rpi-imager --repo https://github.com/Funkenjaeger/elspi/releases/download/<tag>/os_list.json
+
+  (The installer registers `rpi-imager.exe` in App Paths, which `start` and the
+  Run dialog resolve; cmd and PowerShell prompts look up bare commands on PATH
+  only, so the `cmd /c start` prefix is what makes one line work everywhere.)
 
 - **Linux** (packaged `rpi-imager` on PATH, 2.x from raspberrypi.com, not the
   distro's 1.x):
