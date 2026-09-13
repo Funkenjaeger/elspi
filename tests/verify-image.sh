@@ -145,8 +145,15 @@ CONFIG_DIR="$(jget "['paths']['config_dir']")"
 LOG_DIR="$(jget "['paths']['log_dir']")"
 DRM_DEFAULT="$(jget "['drm']['default_mode']")"
 DRM_SWITCHER="$(jget "['drm']['switcher']")"
+# The first-boot seed, read out of the manifest rather than hardcoded here --
+# same arrangement as drm.switcher, which 06-seat creates and 11-manifest
+# merely declares. A harness that keeps its own copy of these paths is checking
+# that its author can copy a path.
+FBS_UNIT="$(jget "['first_boot_seed']['unit']")"
+FBS_SCRIPT="$(jget "['first_boot_seed']['script']")"
 
-for v in SERVICE_USER VENV APP_PARENT APP_ROOT CONFIG_DIR LOG_DIR DRM_DEFAULT DRM_SWITCHER; do
+for v in SERVICE_USER VENV APP_PARENT APP_ROOT CONFIG_DIR LOG_DIR DRM_DEFAULT DRM_SWITCHER \
+         FBS_UNIT FBS_SCRIPT; do
 	if [ -z "${!v}" ]; then bad "manifest declares ${v}"; else ok "manifest declares ${v}=${!v}"; fi
 done
 
@@ -384,6 +391,77 @@ check "first-opener orders After=plymouth-quit-wait.service" \
 
 # THE THING THIS HARNESS STRUCTURALLY CANNOT ANSWER.
 unknown "DRM master acquisition under mode '${DRM_DEFAULT}' is UNTESTED. There is no GPU here and there never will be. This is a Tier 3 hardware item."
+
+# ---------------------------------------------------------------------------
+section "First-boot seed (cloud-init / Raspberry Pi Imager 2.x)"
+
+# Design (a), ratified 2026-09-12: Imager's OS-customisation page is the
+# supported first-boot seed. See stage-elspi/12-first-boot-seed/README.md.
+#
+# ALL OF THIS IS TEXTUAL. It says the seed machinery is INSTALLED and WIRED UP.
+# It says nothing about whether the radio comes on, whether the PSK associates,
+# or whether cloud-init applies the password -- those need a card and a Pi.
+
+META="${ROOTFS}/boot/firmware/meta-data"
+
+check "meta-data present on the boot partition" test -f "${META}"
+
+# THE DEFECT THE SUBSTAGE EXISTS FOR. cloud-init 25.2's NoCloud datasource
+# reads `instance-id`; upstream's stage2/04-cloud-init template ships
+# `instance_id` with an UNDERSCORE, which nothing reads, so the datasource
+# falls back to the literal "nocloud" and cannot tell one instance from
+# another. Nothing about that looks broken from the outside.
+check "meta-data declares a hyphenated 'instance-id:'" \
+	grep -qE '^instance-id: .+' "${META}"
+
+# Both directions. Asserting only the hyphen would pass a file carrying BOTH
+# keys, where cloud-init's behaviour then depends on YAML key order.
+if grep -qE '^instance_id:' "${META}" 2>/dev/null; then
+	bad "meta-data carries NO misspelled 'instance_id:' key (a file with both is ambiguous)"
+else
+	ok "meta-data carries no misspelled 'instance_id:' key"
+fi
+
+# --- the unit and its script ------------------------------------------------
+FBS_UNIT_FILE="${ROOTFS}${FBS_UNIT}"
+FBS_SCRIPT_FILE="${ROOTFS}${FBS_SCRIPT}"
+
+check "seed unit installed: ${FBS_UNIT}"     test -f "${FBS_UNIT_FILE}"
+check "seed script installed: ${FBS_SCRIPT}" test -f "${FBS_SCRIPT_FILE}"
+check "seed script is executable"            test -x "${FBS_SCRIPT_FILE}"
+
+# --- enabled, and enabled in a way systemd will actually honour -------------
+FBS_WANTS="${ROOTFS}/etc/systemd/system/multi-user.target.wants/$(basename "${FBS_UNIT}")"
+
+# TWO tests, not one. `test -L` alone passes a DANGLING symlink, which looks
+# enabled to `ls` and is silently ignored by systemd -- so `-e` (which follows
+# the link) is the one that matters. The unit ships a RELATIVE target, so
+# following it from outside stays inside the rootfs.
+if [ ! -L "${FBS_WANTS}" ]; then
+	bad "seed unit is enabled (no symlink in multi-user.target.wants)"
+elif [ ! -e "${FBS_WANTS}" ]; then
+	bad "seed unit's enablement symlink RESOLVES (it dangles: -> $(readlink "${FBS_WANTS}"))"
+else
+	ok "seed unit is enabled in multi-user.target and the symlink resolves"
+fi
+
+# The symlink above is only the right one if the unit asks to be wanted there.
+check "seed unit declares WantedBy=multi-user.target" \
+	grep -qxF "WantedBy=multi-user.target" "${FBS_UNIT_FILE}"
+
+# THE SEED SCRIPT MUST NOT BE ABLE TO FAIL THE BOOT. elspi has no terminal and
+# no serial console (03-boot-config takes it off the Modbus UART), so a unit
+# that can fail the boot costs a power cycle and an SD-card swap.
+check "seed unit's ExecStart is '-' prefixed (cannot fail the boot)" \
+	grep -qE '^ExecStart=-' "${FBS_UNIT_FILE}"
+
+# Ordering IS the design: run before cloud-init has consumed the seed and the
+# script neutralises credentials nobody has read yet.
+check "seed unit orders After=cloud-final.service" \
+	grep -qE '^After=.*cloud-final\.service' "${FBS_UNIT_FILE}"
+
+# What none of the above can see.
+unknown "The first-boot seed has NEVER RUN. Whether the radio comes on, whether the regulatory domain takes, whether cloud-init applies the Imager password, and whether the seed is actually erased from the FAT partition are all Tier 3 items needing a real card in the real Pi."
 
 # ---------------------------------------------------------------------------
 section "Artifact integrity"

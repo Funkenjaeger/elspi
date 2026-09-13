@@ -152,7 +152,46 @@ mutate "first-opener loses its plymouth ordering (Plymouth keeps DRM master)" \
 mutate "the drm-mode switcher missing" \
 	"rm -f usr/local/sbin/elspi-drm-mode"
 
+# The first-boot seed (stage-elspi/12-first-boot-seed)
+#
+# THE FIRST MUTATION HERE IS THE WHOLE REASON THE SUBSTAGE EXISTS. Upstream's
+# stage2/04-cloud-init template spells the key `instance_id` with an
+# UNDERSCORE; cloud-init 25.2's NoCloud datasource reads `instance-id` and
+# otherwise falls back to the literal "nocloud". An image that ships the
+# underscore has a datasource that cannot tell one instance from another, and
+# nothing about it looks broken.
+mutate "meta-data reverted to upstream's misspelled instance_id" \
+	"printf 'dsmode: local\\ninstance_id: rpios-image\\n' > boot/firmware/meta-data"
+mutate "meta-data carries BOTH the hyphenated and the underscored key" \
+	"printf 'instance_id: rpios-image\\n' >> boot/firmware/meta-data"
+mutate "meta-data has no instance-id at all" \
+	"sed -i '/^instance-id:/d' boot/firmware/meta-data"
+mutate "the first-boot seed script missing" \
+	"rm -f usr/local/sbin/elspi-first-boot-seed"
+mutate "the first-boot seed script is not executable" \
+	"chmod 0644 usr/local/sbin/elspi-first-boot-seed"
+mutate "the first-boot seed unit missing" \
+	"rm -f etc/systemd/system/elspi-first-boot-seed.service"
+mutate "the first-boot seed unit is installed but NOT enabled" \
+	"rm -f etc/systemd/system/multi-user.target.wants/elspi-first-boot-seed.service"
+# A dangling enablement symlink looks enabled to `ls` and is silently ignored
+# by systemd. This is the mutation that a `test -L` check would sail past.
+mutate "the first-boot seed enablement symlink dangles" \
+	"ln -sf ../elspi-first-boot-seed-TYPO.service etc/systemd/system/multi-user.target.wants/elspi-first-boot-seed.service"
+mutate "the seed unit loses its WantedBy, so the wants symlink is invented" \
+	"sed -i '/^WantedBy=multi-user.target\$/d' etc/systemd/system/elspi-first-boot-seed.service"
+# Without the '-' prefix a failing seed script fails the boot of a machine
+# that has no terminal and no serial console.
+mutate "the seed unit's ExecStart loses its '-' prefix (can fail the boot)" \
+	"sed -i 's|^ExecStart=-|ExecStart=|' etc/systemd/system/elspi-first-boot-seed.service"
+# Ordering IS the design. Run before cloud-init has consumed the seed and the
+# script neutralises credentials nobody has read yet.
+mutate "the seed unit loses its After=cloud-final ordering" \
+	"sed -i '/^After=cloud-final.service\$/d' etc/systemd/system/elspi-first-boot-seed.service"
+
 # The manifest itself
+mutate "the manifest does not declare the first-boot seed" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d.pop('first_boot_seed',None);json.dump(d,open(p,'w'))\""
 mutate "the manifest is not valid JSON" \
 	"printf 'not json' > etc/elspi-image.json"
 mutate "the manifest is missing entirely" \
