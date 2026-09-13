@@ -92,7 +92,61 @@ install -d -o ${SERVICE_USER} -g ${SERVICE_USER} -m 0755 /home/${SERVICE_USER}/p
 install -d -o ${SERVICE_USER} -g ${SERVICE_USER} -m 0755 /home/${SERVICE_USER}/.kivy
 EOF
 
+# --- polkit: NetworkManager for the SESSIONLESS service user ----------------
+# FOUND ON THE FIRST REAL CARD 2026-09-13. The UI's Network screen runs
+# `nmcli radio wifi on` at startup and got "Not authorized to perform this
+# operation", which is fatal to that screen.
+#
+# The non-root decision above is what exposes it. reflex-ui runs as the service
+# user under systemd with NO logind session, so polkit classifies the subject
+# as neither "active" nor "inactive": every NetworkManager action falls through
+# to its "any" default, which for enable-disable-wifi is "no". Debian's shipped
+# /usr/share/polkit-1/rules.d/org.freedesktop.NetworkManager.rules covers only
+# settings.modify.system and only for a local ACTIVE session, so the netdev
+# group asserted above does not help. This is not a group problem, and no
+# amount of group membership fixes it.
+#
+# files/50-reflex-service-user.rules is the file PROVEN on that card, kept
+# verbatim. It names the pi-gen default user, and the subject.user line is
+# regenerated here from ${FIRST_USER_NAME} so an image built with a different
+# first user does not ship a rule that grants nothing.
+POLKIT_RULES_DIR="${ROOTFS_DIR}/etc/polkit-1/rules.d"
+POLKIT_RULE="${POLKIT_RULES_DIR}/50-reflex-service-user.rules"
+
+# Assert the substitution anchor BEFORE writing. A template whose subject.user
+# line changed shape would make the sed a silent no-op, and the image would
+# ship a rule scoped to whoever the file happens to name.
+if ! grep -q 'subject\.user === "' files/50-reflex-service-user.rules; then
+	echo "FATAL: files/50-reflex-service-user.rules has no 'subject.user === \"...\"'"
+	echo "       line to substitute. The substitution below would do nothing and"
+	echo "       the image would ship a rule naming the wrong user."
+	exit 1
+fi
+
+install -d -m 0755 "${POLKIT_RULES_DIR}"
+sed -E "s/subject\.user === \"[^\"]*\"/subject.user === \"${SERVICE_USER}\"/" \
+	files/50-reflex-service-user.rules > "${POLKIT_RULE}"
+chmod 0644 "${POLKIT_RULE}"
+
 # --- Post-write checks ------------------------------------------------------
+if [ ! -f "${POLKIT_RULE}" ]; then
+	echo "FATAL: post-write check failed -- the polkit rule was not written"
+	exit 1
+fi
+if ! grep -q "subject.user === \"${SERVICE_USER}\"" "${POLKIT_RULE}"; then
+	echo "FATAL: post-write check failed -- the installed polkit rule does not"
+	echo "       name '${SERVICE_USER}'. A rule naming a user that does not exist"
+	echo "       is inert, and looks installed. Contents:"
+	sed 's/^/         /' "${POLKIT_RULE}"
+	exit 1
+fi
+if [ "$(stat -c %a "${POLKIT_RULE}")" != "644" ]; then
+	echo "FATAL: post-write check failed -- polkit rule mode is"
+	echo "       $(stat -c %a "${POLKIT_RULE}"), expected 644"
+	exit 1
+fi
+echo "  polkit rule installed: /etc/polkit-1/rules.d/50-reflex-service-user.rules (${SERVICE_USER})"
+
 for d in var/lib/reflex-config var/log/reflex "home/${SERVICE_USER}/projects" "home/${SERVICE_USER}/.kivy"; do
 	if [ ! -d "${ROOTFS_DIR}/${d}" ]; then
 		echo "FATAL: post-write check failed -- /${d} was not created"

@@ -281,6 +281,110 @@ ${OTHER}
 	fi
 fi
 
+# --- polkit: NetworkManager for the SESSIONLESS service user ----------------
+# THE DEFECT, found on the first real card 2026-09-13: the UI's Network screen
+# runs `nmcli radio wifi on` at startup and got
+#
+#     Error: Not authorized to perform this operation.
+#
+# WHY, and why group membership is not the answer. reflex-ui runs as the
+# service user under systemd with NO logind session, so polkit classifies the
+# subject as neither "active" nor "inactive" and every NetworkManager action
+# falls through to its "any" default -- "no" for
+# org.freedesktop.NetworkManager.enable-disable-wifi. Debian's shipped
+# /usr/share/polkit-1/rules.d/org.freedesktop.NetworkManager.rules covers only
+# settings.modify.system, and only for a local ACTIVE session. Adding the user
+# to netdev changes nothing: it is not a group problem.
+#
+# THE FILE IS A TEMPLATE. files/50-reflex-service-user.rules is the copy
+# proven on the card, kept verbatim, and it names the pi-gen default user. The
+# subject.user line is regenerated here from the user THIS machine declares
+# (the image manifest, via resolve_service_user), because a rule naming a user
+# that does not exist is inert and looks installed.
+#
+# stage-elspi/05-service-user installs the same template at build time. This
+# is here as well so a card flashed from an OLDER image converges to the fix
+# instead of needing it applied by hand.
+POLKIT_SRC="${HERE}/files/50-reflex-service-user.rules"
+POLKIT_DST=/etc/polkit-1/rules.d/50-reflex-service-user.rules
+
+[ -f "${POLKIT_SRC}" ] || die "${POLKIT_SRC} is missing -- the polkit template ships in this repo"
+
+# ASSERT THE ANCHOR BEFORE SUBSTITUTING. If the template's subject.user line
+# ever changes shape, the sed below matches nothing, exits 0, and installs a
+# rule scoped to whatever user the file happened to name.
+grep -q 'subject\.user === "' "${POLKIT_SRC}" \
+	|| die "${POLKIT_SRC} has no 'subject.user === \"...\"' line to substitute.
+  The template changed shape, so the substitution would be a silent no-op and
+  the installed rule would name the wrong user."
+
+if [ ! -d /usr/share/polkit-1/rules.d ] && ! command -v pkaction >/dev/null 2>&1; then
+	warn "no polkit installation detected here. The rule will be installed but"
+	warn "  INERT until polkitd is present -- and NetworkManager is what pulls it in."
+fi
+
+POLKIT_TMP="$(mktemp)"
+sed -E "s/subject\.user === \"[^\"]*\"/subject.user === \"${SERVICE_USER}\"/" \
+	"${POLKIT_SRC}" > "${POLKIT_TMP}"
+if ! grep -q "subject.user === \"${SERVICE_USER}\"" "${POLKIT_TMP}"; then
+	rm -f "${POLKIT_TMP}"
+	die "the generated polkit rule does not name ${SERVICE_USER}. Refusing to
+  install a rule that grants nothing while looking like it grants something."
+fi
+run install -d -m 0755 -o root -g root /etc/polkit-1/rules.d
+run install -m 0644 -o root -g root "${POLKIT_TMP}" "${POLKIT_DST}"
+rm -f "${POLKIT_TMP}"
+assert "polkit rule installed at ${POLKIT_DST}" test -f "${POLKIT_DST}"
+assert "the installed polkit rule names ${SERVICE_USER}" \
+	grep -q "subject.user === \"${SERVICE_USER}\"" "${POLKIT_DST}"
+
+# GATE, FUNCTIONAL -- and side-effect free, which took some arranging.
+#
+# A READ-ONLY probe will not do. `nmcli radio wifi` with no verb reports the
+# state, needs no authorization at all, and therefore passes identically with
+# and without this rule: the exact "check that cannot fail" shape. The
+# operation the UI performs is `nmcli radio wifi ON`, and that one is what goes
+# through org.freedesktop.NetworkManager.enable-disable-wifi.
+#
+# Turning the radio ON WHEN IT IS ALREADY ON is that same authorized call with
+# no resulting state change, so it is safe to run from a provisioning script.
+# If the radio is off we do NOT run it -- switching a radio on is a decision
+# that belongs to the human in phase 3, not to converge -- and the check says
+# UNPROVEN rather than quietly passing.
+#
+# systemd-run --uid, not `sudo -u`: the defect IS the absence of a logind
+# session, and a transient systemd unit reproduces the service's own context.
+# A sudo invocation can inherit enough of the operator's session to answer a
+# different question than the one that matters.
+if [ "${DRY_RUN}" = "1" ]; then
+	printf '  (skipped check: %s)\n' "nmcli radio wifi on as ${SERVICE_USER}"
+elif ! command -v nmcli >/dev/null 2>&1; then
+	warn "nmcli not found, so the polkit rule could NOT be exercised. UNPROVEN."
+elif ! command -v systemd-run >/dev/null 2>&1; then
+	warn "systemd-run not found, so the rule could NOT be exercised in a"
+	warn "  sessionless unit -- which is the only context that reproduces the"
+	warn "  defect. Installed but UNPROVEN."
+else
+	WIFI_RADIO="$(nmcli radio wifi 2>/dev/null || true)"
+	if [ "${WIFI_RADIO}" = "enabled" ]; then
+		if systemd-run --uid="${SERVICE_USER}" --wait --pipe --quiet \
+			nmcli radio wifi on >/dev/null 2>&1; then
+			ok "${SERVICE_USER} is authorized for 'nmcli radio wifi on' (the op that failed)"
+		else
+			die "'nmcli radio wifi on' as ${SERVICE_USER} in a sessionless unit STILL
+  FAILS. The rule is installed and names the user, so something else is
+  refusing. Two things to check: is polkitd installed and running, and does
+  another file in /etc/polkit-1/rules.d sort before 50- and return NO?"
+		fi
+	else
+		warn "the wifi radio reads '${WIFI_RADIO:-unknown}', not 'enabled', so the"
+		warn "  functional check was NOT run -- the only side-effect-free form of it is"
+		warn "  turning an already-on radio on. The rule is installed but UNPROVEN on"
+		warn "  this machine. Re-run converge with the radio on, or watch the UI's"
+		warn "  Network screen for 'Not authorized to perform this operation'."
+	fi
+fi
+
 phase "Phase 1 complete"
 say "NOT started. Start it deliberately once phase 2 has restored the config:"
 say "    systemctl start reflex-ui"
