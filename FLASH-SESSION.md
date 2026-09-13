@@ -14,9 +14,9 @@ boot.
 
 | | state |
 |---|---|
-| Image | `deploy/image_2026-09-08-elspi.img.xz`, 1.3 GB, built 46m26s |
+| Image | `deploy/image_2026-09-13-elspi.img.xz`, 1.3 GB, built 2026-09-12 22:20-23:04 from `9fd9291` (this branch), sha256 `58f4846b…3bb4a7`; a copy sits on the desktop at `C:\Users\evand\elspi-image\` |
 | Baked SSH key | Evan's desktop `id_ed25519` — verified byte-identical, `PasswordAuthentication no` |
-| Tier 2 | **90 passed, 0 failed, 3 unknown** against that exact rootfs, measured 2026-09-07. Does **not** include the first-boot-seed checks added 2026-09-12 — those have never been run against a built rootfs, only against the synthetic fixture |
+| Tier 2 | **102 passed, 0 failed, 4 unknown** against that exact rootfs, measured 2026-09-13 with `tests/verify-built-image.sh --chroot`. Includes the twelve first-boot-seed checks (meta-data `instance-id`, unit, script, enablement, ordering, manifest). The fourth UNKNOWN is the seed's runtime behaviour, a Tier 3 item |
 | Delta layer | `deltas/` — converge, restore, interactive |
 | Commissioned config | captured 2026-09-07, verified 19/19 against a live hash pull |
 
