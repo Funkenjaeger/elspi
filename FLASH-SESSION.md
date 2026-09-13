@@ -55,16 +55,66 @@ built rootfs. Expect to debug it.
 
 ## Flashing the card
 
-**Use Raspberry Pi Imager 2.x. Not 1.9.x.** Imager 1.9.x **cannot customise a
-`cloudinit-rpi` image at all** — its OS-customisation page is driven by the old
-`firstrun.sh`/`userconf.txt` mechanism, and on an image whose first boot is
-cloud-init the page is either unavailable or silently produces files nothing
-reads. Design (a), ratified 2026-09-12, makes Imager 2.x's page **the supported
-way to seed this image**, and `stage-elspi/12-first-boot-seed` ships what the
-fork needs for it to work. On 1.9.x you get an unseeded card: no password, no
-Wi-Fi, and only the baked `ELSPI_PUBKEY` to get in.
+**Run the launcher. Do not open Imager and pick the image yourself.**
 
-Flash `deploy/image_*-elspi.img.xz`, then fill the customisation page:
+**On Windows (PowerShell):**
+
+```powershell
+cd C:\projects\elspi
+.\tools\flash-elspi.ps1
+```
+
+**On Linux (bash):**
+
+```bash
+cd ~/projects/elspi
+./tools/flash-elspi.sh                       # packaged rpi-imager on PATH
+./tools/flash-elspi.sh ./rpi-imager_*.AppImage   # or an AppImage
+```
+
+Either one finds Imager, refuses anything older than 2.0, and starts it as
+`rpi-imager --repo deploy/os_list.json`. Imager then opens on **one OS entry**
+— this image — followed by the normal Device and Storage steps and then the
+customisation page. Take the OS entry, pick the Pi, pick the card, and fill the
+page as below. Windows shows a UAC prompt: Imager writes raw disks and asks for
+administrator rights itself.
+
+### Why not just "Use custom" and pick the .img.xz
+
+**Because Imager 2.x never offers the customisation page for a local file, and
+does not say so.** `src/wizard/OSSelectionStep.qml` calls `setSrc(fileUrl)`
+with the default `initFormat` of `""` (`src/imagewriter.h`), so
+`imageSupportsCustomization()` is false and `WizardContainer.qml` skips every
+customisation step. You get a flash that succeeds and a card with **no
+password, no key, no Wi-Fi and no country** — and
+`stage-elspi/12-first-boot-seed`, which exists to consume that seed, has
+nothing to consume. The only difference you would notice is a wizard with two
+fewer pages.
+
+The page appears only for an entry in an **OS-list repository** that declares
+`init_format` `"cloudinit-rpi"`, and Imager takes a custom repository on the
+command line (`--repo`, `src/main.cpp`). So `deploy/os_list.json` — written by
+the build, one entry, `file://` URL pointing at the image beside it — is what
+makes the documented seed work at all. `tools/make-os-list.sh` writes it; the
+build fails if it cannot.
+
+**And Imager 1.x is refused, not merely discouraged.** 1.x accepts `--repo`, so
+it looks like it worked — but its customisation page seeds a card through
+`firstrun.sh`/`userconf.txt`, which this image never reads. Both launchers
+check the version and stop, pointing at <https://www.raspberrypi.com/software/>.
+
+If the JSON is missing (you have an image but not the build that made it):
+
+```bash
+tools/make-os-list.sh path/to/image_2026-09-13-elspi.img.xz
+# writes os_list.json beside the image; --out puts it elsewhere,
+# --url https://... is for a published release
+```
+
+It streams the 7.5 GB decompressed image past `sha256sum` and `wc -c` in one
+pass without writing it anywhere, so it takes a couple of minutes and no disk.
+
+Now fill the customisation page:
 
 | Field | Value | Why it matters |
 |---|---|---|
@@ -99,6 +149,22 @@ then reachable by password over SSH.
 only by the *networkd* backend and this image uses NetworkManager, so nothing
 in cloud-init applies it. The first-boot unit reads it back out of
 `/boot/firmware/network-config` and applies it itself — but only if you set it.
+
+### The non-Imager route, if you ever need it
+
+**Not implemented, and not needed while the launcher works — written down so
+nobody has to rediscover it.** The seed is three plain files on the image's FAT
+partition, so it can be injected into the `.img` *before* flashing instead of
+by Imager: decompress the image, find the first partition's byte offset
+(`fdisk -l`, or `partx`/`kpartx`), and copy `user-data`, `network-config` and
+`meta-data` in with mtools, which needs no loop device and no root —
+`mcopy -i image.img@@<offset> user-data ::user-data`, once per file. Then flash
+the `.img` with anything at all: Imager's "Use custom", `dd`, `bmaptool`. The
+first boot is identical, because cloud-init reads the card, not Imager. The
+catch is that you are then authoring a cloud-config and a netplan document by
+hand — with the password hash and the PSK in a file on your disk — which is
+exactly the work the customisation page does for you, and exactly the exposure
+`12-first-boot-seed` cleans up on the card but not on your desktop.
 
 ### What happens on the first boot
 

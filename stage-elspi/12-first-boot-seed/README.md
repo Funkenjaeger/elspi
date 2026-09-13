@@ -10,6 +10,18 @@ them to the FAT partition; cloud-init consumes them on first boot; this
 substage's unit then takes them off the card. See `SEAM.md` and
 `FLASH-SESSION.md`.
 
+**Imager only shows that page for an OS-list entry, never for a local file.**
+2.x calls `setSrc(fileUrl)` with an empty `initFormat` for "Use custom"
+(`src/wizard/OSSelectionStep.qml`, `src/imagewriter.h`), so
+`imageSupportsCustomization()` is false and the wizard skips every
+customisation step — silently. The page appears only for an entry declaring
+`init_format: cloudinit-rpi` in a repository passed as `rpi-imager --repo`,
+which is why `tools/make-os-list.sh` writes `deploy/os_list.json` as part of
+the build and `tools/flash-elspi.ps1` / `tools/flash-elspi.sh` are the
+documented way to start a flash. **Pick the image by hand and this whole
+substage runs against an empty seed**: no password to install, no country to
+apply, nothing to wipe. `FLASH-SESSION.md` has the procedure.
+
 ## Why it is numbered 12
 
 `11-manifest` **does not inventory substages.** It writes a hand-authored

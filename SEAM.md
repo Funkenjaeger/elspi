@@ -57,6 +57,8 @@ genuinely non-obvious call here.
 | **Restore** | `/var/lib/reflex-config` from backup — **hard fail if absent, never generate** · `~/firmware/flashed.json` if available (soft — its loss costs knowledge, not function) |
 | **Interactive** | the dev-role question (call 3) · anything naming another machine · any credential the Imager seed did not carry — **see the 2026-09-12 amendment below** |
 
+*2026-09-13: "the Imager seed" means the customisation page Imager shows for an OS-list entry declaring `init_format: cloudinit-rpi`, reached by `tools/flash-elspi.ps1` / `.sh` (which run `rpi-imager --repo deploy/os_list.json`). It does **not** mean Imager's "Use custom" option: 2.x skips every customisation page for a local file, so that route carries no seed at all and moves every row in this table back to Interactive. `FLASH-SESSION.md` has the call chain.*
+
 The three delta phases have deliberately different failure contracts: converge is
 idempotent and retryable, restore refuses to invent data, and interactive blocks
 on a human. Collapsing them into one "ansible run" loses that, and the restore
