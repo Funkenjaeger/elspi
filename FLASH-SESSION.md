@@ -55,7 +55,29 @@ built rootfs. Expect to debug it.
 
 ## Flashing the card
 
-**Run the launcher. Do not open Imager and pick the image yourself.**
+**From a published release (a user with no checkout): one line, no script.**
+The release carries `os_list.json` beside the image, and Imager fetches the image
+itself from that URL, verifying it against the published hashes. Nothing is
+downloaded by hand.
+
+- **Windows:** press **Win+R**, paste, Enter (the installer registers
+  `rpi-imager.exe` in App Paths, which the Run dialog resolves; a PowerShell
+  prompt does not, there use `cmd /c start rpi-imager --repo <url>`):
+
+      rpi-imager --repo https://github.com/Funkenjaeger/elspi/releases/download/<tag>/os_list.json
+
+- **Linux** (packaged `rpi-imager` on PATH, 2.x from raspberrypi.com, not the
+  distro's 1.x):
+
+      rpi-imager --repo https://github.com/Funkenjaeger/elspi/releases/download/<tag>/os_list.json
+
+Imager opens on **one OS entry**, then Device, Storage, and the customisation
+page described below. The rest of this section is the same flow **from a
+checkout**, where the launchers add the version check and find the JSON the
+build wrote. Measured 2026-09-13 against a LAN host standing in for the release
+URL: the entry, the download and the customisation page all behaved.
+
+**From a checkout: run the launcher. Do not open Imager and pick the image yourself.**
 
 **On Windows (PowerShell):**
 
