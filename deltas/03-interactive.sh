@@ -1,7 +1,12 @@
 #!/bin/bash
 # PHASE 3 -- INTERACTIVE. Blocks on a human; asks, never assumes.
 #
-#   03-interactive.sh [--dry-run]
+#   03-interactive.sh [--app <reflex monorepo checkout>] [--dry-run]
+#
+# --app is OPTIONAL here and is only ever READ: phase 4 reports whether the
+# firmware sources landed in the checkout. provision.sh passes it through the
+# same way it does to phase 1; a standalone run falls back to the path the
+# image manifest declares, and says UNKNOWN if there is neither.
 #
 # Checklist item 13, Evan's hard requirement: an interactive portion for
 # anything that must not be hard-coded -- credentials, and any config depending
@@ -25,8 +30,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 . "${HERE}/lib.sh"
 
+APP_ARG=""
 while [ $# -gt 0 ]; do
 	case "$1" in
+		--app)     APP_ARG="${2:-}"; shift 2 ;;
 		--dry-run) DRY_RUN=1; shift ;;
 		*) die "unknown argument: $1" ;;
 	esac
@@ -36,6 +43,23 @@ phase "Phase 3: INTERACTIVE -- things that must not live in the repo"
 
 need_root
 resolve_service_user
+resolve_paths
+
+# Where the app checkout is, for phase 4's firmware-sources report. NOT
+# hardcoded -- /home/default/projects/reflex is this machine's value, not a
+# fact about the layout -- and not required either, because phase 3 writes
+# nothing there. Three sources, in descending order of authority, and the
+# phase names which one it used.
+if [ -n "${APP_ARG}" ]; then
+	APP_DIR="${APP_ARG}"
+	APP_DIR_SRC="--app"
+elif [ -n "${APP_ROOT:-}" ]; then
+	APP_DIR="${APP_ROOT}"
+	APP_DIR_SRC="${IMAGE_MANIFEST} (paths.app_root)"
+else
+	APP_DIR=""
+	APP_DIR_SRC=""
+fi
 
 if [ ! -t 0 ]; then
 	die "stdin is not a terminal. This phase asks questions and must not be
@@ -137,36 +161,53 @@ else
 	warn "  the nmcli PYTHON package shells out to this binary, so the app needs it."
 fi
 
-# --- 4. the dev role --------------------------------------------------------
-# SEAM.md call 3, RATIFIED WITH AN AMENDMENT: the firmware toolchain BYTES are
-# baked into the image unconditionally (installing them at provision time would
-# put a package mirror back on the recovery path). What is asked HERE is
-# whether to ENABLE the role -- the reflex-fw checkout and PATH exposure -- not
-# whether to install it. A "no" gives an appliance; the bytes sit inert.
-phase "4/5  developer role (firmware toolchain)"
+# --- 4. firmware toolchain: THE ROLE QUESTION IS RETIRED --------------------
+# SEAM.md call 3, RATIFIED WITH AN AMENDMENT, put the firmware toolchain BYTES
+# in the image unconditionally (installing them at provision time would put a
+# package mirror back on the recovery path) and left the ENABLEMENT here as a
+# question -- where "enable the dev role" meant cloning reflex-fw and exposing
+# it, and "no" meant an appliance with the bytes sitting inert.
+#
+# THAT QUESTION IS RETIRED, because the thing it asked about no longer exists.
+# reflex-fw was folded into the reflex monorepo at the 2026-08-17 weld: the
+# firmware sources now live at <app>/fw, INSIDE the same checkout phase 1
+# already requires and converges. There is no second repository to clone, no
+# second URL that "names another machine", and nothing for a "no" to withhold
+# -- the sources arrive with the app either way. Asking would have been a
+# prompt whose answer the script already knows, and on the first real card
+# (2026-09-13) it was exactly that: a request for a clone URL for a repo that
+# had not existed separately for four weeks.
+#
+# SEAM.md is NOT edited to match. It records the call as it was ratified; this
+# is the note that the call's mechanism was overtaken by the monorepo weld.
+# The DECISION it protects -- bytes baked unconditionally, never fetched at
+# provision time -- is untouched, and is what the first check below reports.
+#
+# What is left is a REPORT, not a decision, so it is not a prompt: the bytes
+# SEAM.md promises, and whether the sources actually landed in this checkout.
+phase "4/5  firmware toolchain (report only -- the dev-role question is retired)"
 if command -v openocd >/dev/null 2>&1 && command -v arm-none-eabi-gcc >/dev/null 2>&1; then
 	ok "toolchain present in the image (openocd, arm-none-eabi-gcc) -- as designed"
-	say "Enabling the role means cloning reflex-fw here so firmware can be built"
-	say "and flashed from this machine. Declining leaves the bytes inert."
-	if ask_yn "Enable the dev role on this machine?"; then
-		say "Clone URL for reflex-fw (names another machine, so it is not in the repo):"
-		printf '  > '; read -r FWURL
-		if [ -n "${FWURL}" ]; then
-			DEST="${HOME_DIR}/projects/reflex-fw"
-			if [ -d "${DEST}/.git" ]; then
-				ok "${DEST} already a checkout -- leaving it"
-			else
-				run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0755 "${HOME_DIR}/projects"
-				run sudo -u "${SERVICE_USER}" git clone "${FWURL}" "${DEST}"
-				assert "reflex-fw cloned" test -d "${DEST}/.git"
-			fi
-		fi
-	else
-		ok "appliance mode -- toolchain stays inert"
-	fi
 else
 	warn "toolchain NOT found. The image is supposed to bake gcc-arm-none-eabi,"
 	warn "  cmake and openocd in unconditionally (SEAM.md call 3)."
+fi
+
+if [ -z "${APP_DIR}" ]; then
+	warn "no --app given and ${IMAGE_MANIFEST} declares no paths.app_root, so"
+	warn "  whether the firmware sources are present could NOT be determined."
+	warn "  Re-run as: 03-interactive.sh --app <reflex monorepo checkout>"
+elif [ -d "${APP_DIR}/fw" ]; then
+	ok "firmware sources present at ${APP_DIR}/fw (path per ${APP_DIR_SRC})"
+elif [ -d "${APP_DIR}" ]; then
+	warn "${APP_DIR} exists but has no fw/ (path per ${APP_DIR_SRC})."
+	warn "  Since the 2026-08-17 weld the firmware lives inside the app checkout,"
+	warn "  so this is a pre-weld or partial checkout. Nothing here can fix that:"
+	warn "  firmware cannot be built on this machine until the checkout is whole."
+else
+	warn "${APP_DIR} does not exist (path per ${APP_DIR_SRC}), so the firmware"
+	warn "  sources could not be checked. Phase 1 requires this path and would"
+	warn "  have refused -- has converge actually run on this machine?"
 fi
 
 # --- 5. the OT state-pull key (item 19) -------------------------------------

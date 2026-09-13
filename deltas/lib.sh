@@ -84,6 +84,12 @@ resolve_paths() {
 	[ -n "${CONFIG_DIR}" ] || CONFIG_DIR=/var/lib/reflex-config
 	LOG_DIR="$(manifest_get paths.log_dir 2>/dev/null || true)"
 	[ -n "${LOG_DIR}" ] || LOG_DIR=/var/log/reflex
+	# The app checkout AS THE IMAGE DECLARES IT. Deliberately NOT defaulted:
+	# the image creates paths.app_parent, the delta creates the checkout under
+	# it, and a phase that wants to report on the checkout should say "not
+	# declared" rather than guess a path and report on nothing. Phase 1 takes
+	# it as --app; phase 3 uses this as the fallback when run standalone.
+	APP_ROOT="$(manifest_get paths.app_root 2>/dev/null || true)"
 }
 
 # The app checkout. NOT defaulted to a guess: on the live machine it is

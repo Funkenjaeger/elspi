@@ -69,8 +69,12 @@ if [ "${SKIP_INTERACTIVE}" = "1" ]; then
 	warn "phase 3 skipped by request. The account may still be LOCKED and this"
 	warn "  machine may be outside the evidence perimeter (item 19)."
 else
-	"${HERE}/03-interactive.sh" ${PASS_DRY} \
-		|| warn "phase 3 did not complete. Re-run it alone: ./03-interactive.sh"
+	# --app is passed to phase 3 the same way it is to phase 1. Phase 3 never
+	# writes there -- it reports whether the firmware sources (<app>/fw since
+	# the monorepo weld) landed. Passing it beats phase 3 guessing the path,
+	# and beats hardcoding this machine's.
+	"${HERE}/03-interactive.sh" --app "${APP}" ${PASS_DRY} \
+		|| warn "phase 3 did not complete. Re-run it alone: ./03-interactive.sh --app ${APP}"
 fi
 
 phase "Provisioning finished"

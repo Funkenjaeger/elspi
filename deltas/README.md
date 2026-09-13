@@ -86,6 +86,31 @@ sudo ./provision.sh --app /home/default/projects/reflex \
 Each phase can be run alone. `--dry-run` is available on all three and changes
 nothing.
 
+`--app` goes to phase 1 *and* phase 3, and `provision.sh` passes it to both.
+Phase 1 requires it and writes to it; phase 3 only **reads** it, to report
+whether the firmware sources are there. Run alone, phase 3 falls back to the
+`paths.app_root` the image manifest declares, and says so — it never guesses a
+path:
+
+```sh
+sudo ./03-interactive.sh --app /home/default/projects/reflex
+```
+
+## What phase 3 no longer asks
+
+The **dev-role question is retired.** `SEAM.md` call 3 bakes the firmware
+toolchain bytes into the image unconditionally and left phase 3 asking whether
+to *enable* the role — which meant cloning `reflex-fw` and asking for its URL.
+The firmware moved **into the reflex monorepo** at the 2026-08-17 weld, so it
+now arrives at `<app>/fw` inside the very checkout phase 1 already converges.
+There is no second repository to clone and nothing for a "no" to withhold, so
+phase 3 reports instead of asking: the toolchain bytes are present or not, and
+`<app>/fw` is present or not.
+
+The decision `SEAM.md` call 3 protects — toolchain bytes baked in, never
+fetched at provision time — is unchanged. It was the *mechanism* of enabling
+the role that the weld overtook.
+
 ## What is NOT here yet
 
 - **Item 19**, the OT state-pull key. Phase 3 prompts for it, but the
