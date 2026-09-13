@@ -36,7 +36,13 @@ while read -r mode _ _ path; do
 	case "${path}" in
 		# build.sh:68 gates *-run.sh on [ -x ] and build.sh:107 gates
 		# prerun.sh the same way -- both are silently skipped without it.
-		*-run.sh|*/prerun.sh|*/elspi-drm-mode|tests/*.sh)
+		#
+		# tools/*.sh is here for the same reason, one step out: build-elspi.sh
+		# runs ./tools/make-os-list.sh at the end of every build, and that one
+		# does NOT fail quietly -- a lost bit is "Permission denied" and a
+		# failed build. Loud, but still a bit Git for Windows can eat, so it
+		# is checked in the index alongside the rest.
+		*-run.sh|*/prerun.sh|*/elspi-drm-mode|tests/*.sh|tools/*.sh)
 			FOUND=$((FOUND+1))
 			if [ "${mode}" = "100755" ]; then
 				echo "  ok        ${path}"
