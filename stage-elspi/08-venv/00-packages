@@ -1,0 +1,29 @@
+# git, because THE APP HALF OF THIS MACHINE IS A GIT CHECKOUT.
+#
+# FOUND ON THE FIRST REAL CARD 2026-09-13: no substage in stage-elspi listed
+# git, none of the upstream stages pulls it in, and the card had to have it
+# apt-installed by hand before provisioning could finish. That is a package
+# mirror back on the recovery path, which is the one thing SEAM.md's baked
+# venv exists to remove.
+#
+# Two consumers, both load-bearing:
+#
+#   The DELTA layer. deltas/01-converge.sh drops the reflex monorepo checkout
+#   at <app> and runs `uv sync` against it. It now gates on `command -v git`
+#   and hard-fails without it (84eabfc), which is loud -- but loud at
+#   provisioning time on a machine in a shop is still a trip to a package
+#   mirror.
+#
+#   The IN-APP UPDATER. Setup -> Update runs git fetch/show/checkout against
+#   that same checkout. Without git the button refuses, and that is the one
+#   path that has to work on a machine with no terminal.
+#
+# It lives in THIS substage rather than its own because this is the substage
+# that exists for the app's own half of the image: the venv is built here from
+# the vendored lock, and the checkout git manages is what that venv is
+# eventually synced against.
+#
+# Named as a package rather than assumed: the whole point of 00-graphics'
+# header applies here too -- a dependency that arrives by resolution accident
+# is a dependency nobody will notice losing.
+git
