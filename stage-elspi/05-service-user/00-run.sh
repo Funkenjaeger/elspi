@@ -51,10 +51,11 @@ set -e
 # throwaway purely to satisfy build.sh's DISABLE_FIRST_BOOT_USER_RENAME guard
 # (build.sh:291 exits 1 without it). That throwaway is revoked here.
 #
-# Locking the password does NOT block the tty1 autologin in 06-seat: agetty
-# --autologin uses login -f, which bypasses authentication. It does mean sudo
-# needs a password that does not exist yet -- the interactive provision phase
-# sets the real one.
+# Locking the password means sudo needs a password that does not exist yet --
+# the interactive provision phase sets the real one. (Until 2026-09-13 this
+# comment also noted that the lock did not block 06-seat's tty1 autologin;
+# that logind-seat rung was deleted once first-opener was verified on
+# hardware, and no autologin is staged any more.)
 passwd -l ${SERVICE_USER}
 
 # --- Directories the application WRITES to ----------------------------------
