@@ -192,9 +192,9 @@ exactly the work the customisation page does for you, and exactly the exposure
 
 ### What happens on the first boot
 
-`elspi-first-boot-seed.service` runs once cloud-init has finished
-(`After=cloud-final.service`) and does the four things cloud-init cannot do on
-this image:
+`elspi-first-boot-seed.service` runs once cloud-init has finished — enabled in
+`cloud-init.target` and ordered `After=cloud-final.service` — and does the four
+things cloud-init cannot do on this image:
 
 1. **Turns the radio on.** `stage2/02-net-tweaks` ships
    `NetworkManager.state` with `WirelessEnabled=false` and the wlan rfkill

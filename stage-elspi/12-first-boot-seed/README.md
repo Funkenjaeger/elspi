@@ -58,11 +58,14 @@ of only inside a three-hour emulated build. It:
    underscore must be gone, because a file carrying both keys is ambiguous.
 
 2. **Installs and enables the oneshot unit.** Enablement is a direct
-   `multi-user.target.wants` symlink — exactly what `systemctl enable` produces
-   for a unit declaring `WantedBy=multi-user.target` — which is what keeps the
+   `cloud-init.target.wants` symlink — exactly what `systemctl enable` produces
+   for a unit declaring `WantedBy=cloud-init.target` — which is what keeps the
    substage chroot-free. The symlink is then checked for existence *and for
    resolving*, since a dangling enablement symlink looks enabled to `ls` and is
-   silently ignored by systemd.
+   silently ignored by systemd. Two further gates assert the unit is **not**
+   enabled in `multi-user.target.wants` and does **not** declare
+   `WantedBy=multi-user.target`: that combination is an ordering cycle that
+   stops the unit running at all. See the 2026-09-13 finding below.
 
 ## What the runtime half does
 
@@ -164,7 +167,87 @@ file is broken".
 - It does not set the hostname, create users, install keys, or configure
   Wi-Fi. cloud-init does all of that from the seed. This substage only fixes
   what cloud-init cannot do on this image and then cleans up.
-- It has **never run on real hardware.** Everything above is derived from
-  cloud-init 25.2 source and upstream's stage scripts, and verified only by the
-  offline harness. See `VERIFICATION.md`'s tiers — this is a Tier 3 item until
-  a card boots.
+- It has **never run on real hardware.** A card *has* now booted — 2026-09-13,
+  `image_2026-09-13-elspi` — but the unit's job was deleted by systemd before
+  it started, so not one of the six steps has ever executed. Everything above
+  is still derived from cloud-init 25.2 source and upstream's stage scripts and
+  verified only by the offline harness. See `VERIFICATION.md`'s tiers — this
+  remains a Tier 3 item until a card boots *and the unit runs*.
+
+## 2026-09-13 — first boot on hardware: the unit never started
+
+**The seed did not run.** `image_2026-09-13-elspi`, first boot on the real Pi.
+No failed unit, no error, nothing in the journal from our script, and
+`ExecMainStartTimestamp` empty. systemd had deleted the job before it started:
+
+```
+cloud-final.service: Found ordering cycle on multi-user.target/start
+Job elspi-first-boot-seed.service/start deleted to break ordering cycle
+  starting with cloud-final.service/start
+```
+
+### Why
+
+The unit shipped `[Install] WantedBy=multi-user.target` together with
+`After=cloud-init.service cloud-config.service cloud-final.service`. On this
+image:
+
+| unit | ordering | pulled in by |
+|---|---|---|
+| `elspi-first-boot-seed.service` | `After=cloud-final.service` | `multi-user.target` |
+| `cloud-final.service` | `After=multi-user.target` | `cloud-init.target` |
+| `cloud-init.target` | `After=cloud-config.service multi-user.target cloud-final.service` | — |
+
+So `multi-user.target` wanted us, we waited for `cloud-final.service`, and
+`cloud-final.service` waited for `multi-user.target`. A cycle has no correct
+resolution, and systemd's resolution is to **delete a job** — it deleted ours.
+
+### What that cost, measured on the card afterwards
+
+- The **radio was not turned on by us.** It came up anyway, because
+  cloud-init's `runcmd` from Imager happened to bring it up. That is luck, not
+  design, and it is exactly the kind of coincidence that makes a defect look
+  like a working feature.
+- The **regulatory domain came from the cmdline**, not from the seed.
+- The **password step never ran** — so the `cc_users_groups` unlock described
+  above stands, with the build throwaway live.
+- The **seed was still on the card**: `user-data` still carrying `passwd:` and
+  `network-config` still carrying `password:`, on the unencrypted FAT
+  partition. Step 6 is the whole security argument of design (a) and it did not
+  happen.
+
+Every other offline check was green on this image. The unit was installed,
+executable, `-` prefixed, `After=cloud-final.service`, and enabled by a symlink
+that resolved. The harness was measuring an image that did nothing.
+
+### Why `cloud-init.target` is the right anchor
+
+Because it is the target that **means "cloud-init is done"**, and it is the
+only one of the two that does not also mean "cloud-init has not started yet".
+`cloud-final.service` is `WantedBy=cloud-init.target`, and the target is
+ordered *after* `cloud-final.service`, so:
+
+- being **wanted by** `cloud-init.target` is a pull with no ordering edge of
+  its own, so it adds nothing that can cycle;
+- our one remaining ordering edge, `After=cloud-final.service`, points the same
+  direction the target already points.
+
+A unit that must run after cloud-init has finished belongs in the target
+cloud-init *completes*, not in the target cloud-init *waits for*. The redundant
+`After=cloud-init.service cloud-config.service` was dropped at the same time:
+`cloud-final.service` is already ordered after both, and every extra edge named
+here is another constraint to satisfy against a target we are now pulled in
+from — the same class of thing that caused this.
+
+### The tests that now catch it
+
+`tests/verify-image.sh` asserts `cloud-init.target` in both the symlink and the
+`WantedBy=`, and adds two **negative** assertions: no symlink under
+`multi-user.target.wants` for this unit, and no `WantedBy=multi-user.target` in
+the unit (which a later `systemctl reenable` would act on). The general rule
+they encode: *this unit must not be wanted by any target that
+`cloud-final.service` is ordered `After=`.* `tests/self-test.sh` mutates both
+halves of the shipped cycle back in, one at a time, so each assertion is proven
+able to fail. `tests/dry-run-stages.sh` checks the same two things against the
+tree the **real** substage writes, because the fixture and the harness could
+otherwise agree with each other and both disagree with `00-run.sh`.

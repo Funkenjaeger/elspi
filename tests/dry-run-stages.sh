@@ -78,6 +78,35 @@ run_stage 11-manifest
 # exactly why it can be exercised here instead of only inside a build.
 run_stage 12-first-boot-seed
 
+# WHERE THE SUBSTAGE ENABLES THE UNIT, checked here rather than only in
+# verify-image.sh, because this is the one harness that runs the REAL substage
+# against a real tree -- verify-image.sh reads a hand-authored fixture, so the
+# two could agree with each other and both disagree with 00-run.sh.
+#
+# It must be cloud-init.target.wants and NOT multi-user.target.wants. See
+# stage-elspi/12-first-boot-seed/README.md, 2026-09-13: multi-user.target
+# plus After=cloud-final.service is an ordering cycle and systemd deletes our
+# job to break it.
+FBS_SEED_UNIT=elspi-first-boot-seed.service
+FBS_CI_WANTS="${ROOTFS_DIR}/etc/systemd/system/cloud-init.target.wants/${FBS_SEED_UNIT}"
+FBS_MU_WANTS="${ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants/${FBS_SEED_UNIT}"
+if [ -e "${FBS_CI_WANTS}" ]; then
+	echo "  ok: seed unit enabled in cloud-init.target.wants and the symlink resolves"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: seed unit is not enabled in cloud-init.target.wants (or the symlink dangles)"
+	FAIL=$((FAIL+1))
+fi
+if [ -L "${FBS_MU_WANTS}" ] || [ -e "${FBS_MU_WANTS}" ]; then
+	echo "  FAIL: seed unit is enabled in multi-user.target.wants -- that is the"
+	echo "        ordering cycle with cloud-final.service that stopped it running"
+	echo "        on the 2026-09-13 boot"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: seed unit is not enabled in multi-user.target.wants (no ordering cycle)"
+	PASS=$((PASS+1))
+fi
+
 # --- IDEMPOTENCE ------------------------------------------------------------
 # pi-gen re-runs stages on a resumed build. A second pass must not double-append
 # usb_max_current_enable or re-break an already-correct file.
@@ -178,6 +207,25 @@ if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG4}" ./00-ru
 	FAIL=$((FAIL+1))
 else
 	echo "  ok: seed stage refused a boot partition with no meta-data"
+	PASS=$((PASS+1))
+fi
+
+# THE ORDERING-CYCLE GATE MUST ACTUALLY FIRE. Pre-plant the
+# multi-user.target.wants symlink that image_2026-09-13-elspi shipped -- the
+# one that made systemd delete the seed unit's job -- and the substage must
+# REFUSE. A gate that is never handed the bad state is a gate nobody has seen
+# go red.
+NEG5="${WORK}/neg5"
+mkdir -p "${NEG5}/boot/firmware" "${NEG5}/etc/systemd/system/multi-user.target.wants"
+install -m 644 "${REPO}/stage2/04-cloud-init/files/meta-data" "${NEG5}/boot/firmware/"
+ln -sf ../elspi-first-boot-seed.service \
+	"${NEG5}/etc/systemd/system/multi-user.target.wants/elspi-first-boot-seed.service"
+if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG5}" ./00-run.sh >/dev/null 2>&1 ); then
+	echo "  FAIL: seed stage accepted a rootfs with the unit enabled in"
+	echo "        multi-user.target.wants (the 2026-09-13 ordering cycle)"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: seed stage refused the multi-user.target.wants enablement (ordering cycle)"
 	PASS=$((PASS+1))
 fi
 

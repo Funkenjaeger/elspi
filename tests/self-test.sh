@@ -173,13 +173,31 @@ mutate "the first-boot seed script is not executable" \
 mutate "the first-boot seed unit missing" \
 	"rm -f etc/systemd/system/elspi-first-boot-seed.service"
 mutate "the first-boot seed unit is installed but NOT enabled" \
-	"rm -f etc/systemd/system/multi-user.target.wants/elspi-first-boot-seed.service"
+	"rm -f etc/systemd/system/cloud-init.target.wants/elspi-first-boot-seed.service"
 # A dangling enablement symlink looks enabled to `ls` and is silently ignored
 # by systemd. This is the mutation that a `test -L` check would sail past.
 mutate "the first-boot seed enablement symlink dangles" \
-	"ln -sf ../elspi-first-boot-seed-TYPO.service etc/systemd/system/multi-user.target.wants/elspi-first-boot-seed.service"
+	"ln -sf ../elspi-first-boot-seed-TYPO.service etc/systemd/system/cloud-init.target.wants/elspi-first-boot-seed.service"
 mutate "the seed unit loses its WantedBy, so the wants symlink is invented" \
-	"sed -i '/^WantedBy=multi-user.target\$/d' etc/systemd/system/elspi-first-boot-seed.service"
+	"sed -i '/^WantedBy=cloud-init.target\$/d' etc/systemd/system/elspi-first-boot-seed.service"
+
+# THE 2026-09-13 ORDERING CYCLE, put back one half at a time.
+#
+# These two mutations reconstruct the image that shipped and did not run the
+# seed. Every OTHER check in the harness was green on it -- the unit was
+# installed, executable, '-' prefixed, After=cloud-final, and enabled by a
+# symlink that resolved. It just happened to be enabled in the one target
+# cloud-final.service is itself ordered after, so systemd deleted our job:
+#
+#   Job elspi-first-boot-seed.service/start deleted to break ordering cycle
+#   starting with cloud-final.service/start
+#
+# The FIRST of the two is the shape that actually shipped. It is a pure
+# ADDITION to a correct fixture, which is why nothing else can catch it.
+mutate "the seed unit ALSO enabled in multi-user.target.wants (the 2026-09-13 ordering cycle)" \
+	"mkdir -p etc/systemd/system/multi-user.target.wants && ln -sf ../elspi-first-boot-seed.service etc/systemd/system/multi-user.target.wants/elspi-first-boot-seed.service"
+mutate "the seed unit declares WantedBy=multi-user.target too ('systemctl reenable' restores the cycle)" \
+	"printf 'WantedBy=multi-user.target\\n' >> etc/systemd/system/elspi-first-boot-seed.service"
 # Without the '-' prefix a failing seed script fails the boot of a machine
 # that has no terminal and no serial console.
 mutate "the seed unit's ExecStart loses its '-' prefix (can fail the boot)" \

@@ -214,14 +214,19 @@ RemainAfterExit=yes
 ExecStart=-/usr/local/sbin/elspi-first-boot-seed
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=cloud-init.target
 UNIT
 
 # Enabled exactly the way `systemctl enable` would do it: a RELATIVE symlink in
-# multi-user.target.wants. Relative matters -- an absolute one would resolve
+# cloud-init.target.wants. Relative matters -- an absolute one would resolve
 # against the host root when the harness follows it from outside.
-mkdir -p "${DEST}/etc/systemd/system/multi-user.target.wants"
+#
+# cloud-init.target and NOT multi-user.target: this unit is After=cloud-final
+# and cloud-final is After=multi-user.target, so enabling it in
+# multi-user.target.wants is an ordering cycle. The fixture models the FIXED
+# image; tests/self-test.sh mutates it back to the broken shape.
+mkdir -p "${DEST}/etc/systemd/system/cloud-init.target.wants"
 ln -sf ../elspi-first-boot-seed.service \
-	"${DEST}/etc/systemd/system/multi-user.target.wants/elspi-first-boot-seed.service"
+	"${DEST}/etc/systemd/system/cloud-init.target.wants/elspi-first-boot-seed.service"
 
 echo "fixture built at ${DEST}"

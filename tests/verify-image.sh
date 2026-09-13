@@ -431,23 +431,61 @@ check "seed script installed: ${FBS_SCRIPT}" test -f "${FBS_SCRIPT_FILE}"
 check "seed script is executable"            test -x "${FBS_SCRIPT_FILE}"
 
 # --- enabled, and enabled in a way systemd will actually honour -------------
-FBS_WANTS="${ROOTFS}/etc/systemd/system/multi-user.target.wants/$(basename "${FBS_UNIT}")"
+#
+# cloud-init.target, NOT multi-user.target. Measured on the first boot of
+# image_2026-09-13-elspi: a unit that is WantedBy=multi-user.target and
+# After=cloud-final.service is an ORDERING CYCLE on this image, because
+# cloud-final.service is itself After=multi-user.target. systemd broke the
+# cycle by deleting OUR job and the seed never ran.
+FBS_WANTS="${ROOTFS}/etc/systemd/system/cloud-init.target.wants/$(basename "${FBS_UNIT}")"
 
 # TWO tests, not one. `test -L` alone passes a DANGLING symlink, which looks
 # enabled to `ls` and is silently ignored by systemd -- so `-e` (which follows
 # the link) is the one that matters. The unit ships a RELATIVE target, so
 # following it from outside stays inside the rootfs.
 if [ ! -L "${FBS_WANTS}" ]; then
-	bad "seed unit is enabled (no symlink in multi-user.target.wants)"
+	bad "seed unit is enabled (no symlink in cloud-init.target.wants)"
 elif [ ! -e "${FBS_WANTS}" ]; then
 	bad "seed unit's enablement symlink RESOLVES (it dangles: -> $(readlink "${FBS_WANTS}"))"
 else
-	ok "seed unit is enabled in multi-user.target and the symlink resolves"
+	ok "seed unit is enabled in cloud-init.target and the symlink resolves"
+fi
+
+# THE ORDERING-CYCLE CHECK. This is the assertion the 2026-09-13 boot proved
+# was missing, and it is deliberately phrased as a NEGATIVE: the unit must not
+# be wanted by any target that cloud-final.service is ordered After=.
+#
+# On this image cloud-final.service is After=multi-user.target and
+# WantedBy=cloud-init.target, and cloud-init.target is
+# After=cloud-config.service multi-user.target cloud-final.service. So pulling
+# our unit in from multi-user.target while ordering it after cloud-final gives
+# systemd multi-user.target -> us -> cloud-final -> multi-user.target, and it
+# resolves that by DELETING a job. Journal, first boot:
+#
+#   cloud-final.service: Found ordering cycle on multi-user.target/start
+#   Job elspi-first-boot-seed.service/start deleted to break ordering cycle
+#   starting with cloud-final.service/start
+#
+# Nothing else in this harness can see that. Every other check was green on
+# the image that did not run the seed.
+FBS_WANTS_MU="${ROOTFS}/etc/systemd/system/multi-user.target.wants/$(basename "${FBS_UNIT}")"
+if [ -L "${FBS_WANTS_MU}" ] || [ -e "${FBS_WANTS_MU}" ]; then
+	bad "seed unit is NOT wanted by multi-user.target (it is: ordering cycle -- cloud-final.service is After=multi-user.target, so systemd deletes our job)"
+else
+	ok "seed unit is not wanted by multi-user.target (no ordering cycle with cloud-final.service)"
 fi
 
 # The symlink above is only the right one if the unit asks to be wanted there.
-check "seed unit declares WantedBy=multi-user.target" \
-	grep -qxF "WantedBy=multi-user.target" "${FBS_UNIT_FILE}"
+check "seed unit declares WantedBy=cloud-init.target" \
+	grep -qxF "WantedBy=cloud-init.target" "${FBS_UNIT_FILE}"
+
+# And it must not ALSO ask for multi-user.target -- a unit declaring both would
+# be re-enabled into the cycle by any later `systemctl reenable`.
+if grep -qxF "WantedBy=multi-user.target" "${FBS_UNIT_FILE}" 2>/dev/null; then
+	bad "seed unit declares NO WantedBy=multi-user.target (it does -- 'systemctl reenable' would restore the ordering cycle)"
+else
+	ok "seed unit declares no WantedBy=multi-user.target"
+fi
 
 # THE SEED SCRIPT MUST NOT BE ABLE TO FAIL THE BOOT. elspi has no terminal and
 # no serial console (03-boot-config takes it off the Modbus UART), so a unit
@@ -461,7 +499,7 @@ check "seed unit orders After=cloud-final.service" \
 	grep -qE '^After=.*cloud-final\.service' "${FBS_UNIT_FILE}"
 
 # What none of the above can see.
-unknown "The first-boot seed has NEVER RUN. Whether the radio comes on, whether the regulatory domain takes, whether cloud-init applies the Imager password, and whether the seed is actually erased from the FAT partition are all Tier 3 items needing a real card in the real Pi."
+unknown "The first-boot seed has NEVER RUN -- image_2026-09-13-elspi booted on the real Pi and systemd deleted the unit's job to break an ordering cycle, so not one step executed. The checks above would have been green on that image except for the two ordering-cycle assertions added afterwards. Whether the radio comes on, whether the regulatory domain takes, whether cloud-init applies the Imager password, and whether the seed is actually erased from the FAT partition are all still Tier 3 items needing a real card in the real Pi."
 
 # ---------------------------------------------------------------------------
 section "Artifact integrity"

@@ -40,7 +40,14 @@ META="${ROOTFS_DIR}/boot/firmware/meta-data"
 UNIT_NAME="elspi-first-boot-seed.service"
 SCRIPT_DST="${ROOTFS_DIR}/usr/local/sbin/elspi-first-boot-seed"
 UNIT_DST="${ROOTFS_DIR}/etc/systemd/system/${UNIT_NAME}"
-WANTS_DIR="${ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants"
+# cloud-init.target.wants, NOT multi-user.target.wants. multi-user.target plus
+# the unit's After=cloud-final.service is an ORDERING CYCLE on this image, and
+# systemd breaks it by deleting our job -- measured on the 2026-09-13 boot; see
+# README.md and the [Install] comment in files/${UNIT_NAME}.
+WANTS_TARGET="cloud-init.target"
+WANTS_DIR="${ROOTFS_DIR}/etc/systemd/system/${WANTS_TARGET}.wants"
+# The target we must NOT be enabled in, gated on below.
+CYCLE_WANTS="${ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants/${UNIT_NAME}"
 
 # ---------------------------------------------------------------------------
 echo "== meta-data: instance-id =="
@@ -102,7 +109,7 @@ install -v -m 0644 -D "files/${UNIT_NAME}" "${UNIT_DST}"
 # ENABLED BY SYMLINK, NOT BY on_chroot systemctl.
 #
 # This is exactly what `systemctl enable` produces for a unit in
-# /etc/systemd/system whose [Install] section says WantedBy=multi-user.target,
+# /etc/systemd/system whose [Install] section says WantedBy=cloud-init.target,
 # and doing it directly keeps this whole substage chroot-free -- which is why
 # tests/dry-run-stages.sh can run it in seconds on any Linux box instead of
 # only inside a three-hour emulated build. 04-serial needs on_chroot because
@@ -121,7 +128,7 @@ ln -sf "../${UNIT_NAME}" "${WANTS_DIR}/${UNIT_NAME}"
 }
 [ -L "${WANTS_DIR}/${UNIT_NAME}" ] || {
 	echo "FATAL: post-write check failed -- ${UNIT_NAME} is not enabled"
-	echo "       (no symlink in multi-user.target.wants)"
+	echo "       (no symlink in ${WANTS_TARGET}.wants)"
 	exit 1
 }
 # The symlink must RESOLVE. A dangling enablement symlink is the failure mode
@@ -135,12 +142,37 @@ ln -sf "../${UNIT_NAME}" "${WANTS_DIR}/${UNIT_NAME}"
 # The unit must actually declare the target it is linked into, or the
 # enablement above is a symlink we invented rather than the one systemctl
 # would have made.
-grep -qxF "WantedBy=multi-user.target" "${UNIT_DST}" || {
-	echo "FATAL: ${UNIT_NAME} does not declare WantedBy=multi-user.target,"
-	echo "       so the multi-user.target.wants symlink is not what"
+grep -qxF "WantedBy=${WANTS_TARGET}" "${UNIT_DST}" || {
+	echo "FATAL: ${UNIT_NAME} does not declare WantedBy=${WANTS_TARGET},"
+	echo "       so the ${WANTS_TARGET}.wants symlink is not what"
 	echo "       'systemctl enable' would have produced."
 	exit 1
 }
+
+# THE ORDERING-CYCLE GATE, both halves. This is what the 2026-09-13 boot cost.
+#
+# multi-user.target wants us + we are After=cloud-final.service +
+# cloud-final.service is After=multi-user.target == a cycle, which systemd
+# breaks by DELETING our job. The unit then never runs and nothing looks
+# broken: no failed unit, no error, an empty ExecMainStartTimestamp, and a
+# seed still sitting on the FAT partition.
+#
+# Written as `if` rather than `cmd && { exit 1; }` on purpose: under `bash -e`
+# a gate whose test legitimately returns non-zero in the GOOD case is one
+# stray refactor away from either exiting the build or being skipped.
+if [ -L "${CYCLE_WANTS}" ] || [ -e "${CYCLE_WANTS}" ]; then
+	echo "FATAL: post-write check failed -- ${UNIT_NAME} is ALSO enabled in"
+	echo "       multi-user.target.wants. That is an ordering cycle with"
+	echo "       cloud-final.service and systemd will delete this unit's job"
+	echo "       to break it, exactly as it did on 2026-09-13."
+	exit 1
+fi
+if grep -qxF "WantedBy=multi-user.target" "${UNIT_DST}"; then
+	echo "FATAL: post-write check failed -- ${UNIT_NAME} still declares"
+	echo "       WantedBy=multi-user.target, so any later 'systemctl reenable'"
+	echo "       would restore the ordering cycle with cloud-final.service."
+	exit 1
+fi
 
 # The script must not be able to fail the boot. Checked here rather than
 # trusted, because "never fails the boot" is a hard requirement on a machine
@@ -154,4 +186,5 @@ grep -qE '^ExecStart=-' "${UNIT_DST}" || {
 
 echo "  installed: /usr/local/sbin/elspi-first-boot-seed (0755)"
 echo "  installed: /etc/systemd/system/${UNIT_NAME}"
-echo "  enabled:   multi-user.target.wants/${UNIT_NAME}"
+echo "  enabled:   ${WANTS_TARGET}.wants/${UNIT_NAME}"
+echo "  ok: not enabled in multi-user.target.wants (no cloud-final ordering cycle)"

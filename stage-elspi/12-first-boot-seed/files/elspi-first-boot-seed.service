@@ -15,7 +15,15 @@ Documentation=file:///usr/local/sbin/elspi-first-boot-seed
 # NetworkManager.service is the thing whose radio state we change. `nmcli`
 # against a dead daemon fails, and the failure would be silent because this
 # unit is not allowed to fail the boot.
-After=cloud-init.service cloud-config.service cloud-final.service
+#
+# cloud-init.service and cloud-config.service WERE named here too and have been
+# DROPPED (2026-09-13). They were redundant -- cloud-final.service is already
+# ordered after both -- and redundant ordering edges are not free on this
+# image: every extra cloud-init unit named here is another edge systemd has to
+# satisfy against a target we are now pulled in from, which is the exact class
+# of thing that produced the ordering cycle described under [Install]. One
+# edge, to the last stage, says all of it.
+After=cloud-final.service
 After=NetworkManager.service
 Wants=NetworkManager.service
 
@@ -45,4 +53,34 @@ ProtectHome=yes
 NoNewPrivileges=no
 
 [Install]
-WantedBy=multi-user.target
+# cloud-init.target, AND NOT multi-user.target. MEASURED, 2026-09-13, first
+# boot of image_2026-09-13-elspi on the real Pi.
+#
+# This unit shipped WantedBy=multi-user.target and never ran. On this image:
+#
+#   cloud-final.service   After=multi-user.target, WantedBy=cloud-init.target
+#   cloud-init.target     After=cloud-config.service multi-user.target
+#                               cloud-final.service
+#
+# So multi-user.target wanted us, we waited for cloud-final.service, and
+# cloud-final.service waited for multi-user.target. systemd resolved the cycle
+# the only way it can -- by deleting a job, and the job it deleted was ours:
+#
+#   cloud-final.service: Found ordering cycle on multi-user.target/start
+#   Job elspi-first-boot-seed.service/start deleted to break ordering cycle
+#   starting with cloud-final.service/start
+#
+# ExecMainStartTimestamp was empty. The radio came up only because cloud-init's
+# runcmd from Imager happened to do it, the regulatory domain came from the
+# cmdline, the password step never ran, and the seed was STILL ON THE CARD --
+# user-data with `passwd:` and network-config with `password:`, readable by any
+# machine with a card reader. Nothing failed; the unit simply was not there.
+#
+# cloud-init.target is the right anchor because it is the target that MEANS
+# "cloud-init is done": cloud-final.service is WantedBy it, and the target is
+# ordered after cloud-final.service. Being wanted by it is a pull with no
+# ordering edge of its own, so our After=cloud-final.service is the only
+# constraint we add -- and it points the same direction the target already
+# does. A unit that must run after cloud-init has finished belongs in
+# cloud-init.target, not in the target cloud-init itself waits for.
+WantedBy=cloud-init.target
