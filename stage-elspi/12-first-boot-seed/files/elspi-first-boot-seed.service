@@ -1,0 +1,48 @@
+[Unit]
+Description=elspi first-boot seed (radio, regulatory domain, seed neutralisation)
+Documentation=file:///usr/local/sbin/elspi-first-boot-seed
+
+# ORDERING IS THE WHOLE DESIGN HERE.
+#
+# cloud-final.service is the LAST cloud-init stage. Ordering after it means
+# every module that consumes the Imager seed has already run: the network
+# config is rendered, cc_users_groups has created or updated the account, and
+# cc_set_passwords has had its say about sshd. Anything earlier and this unit
+# would be neutralising a seed that had not been read yet -- which on a card
+# flashed for a machine shop means no Wi-Fi and no password, with no terminal
+# to find out why.
+#
+# NetworkManager.service is the thing whose radio state we change. `nmcli`
+# against a dead daemon fails, and the failure would be silent because this
+# unit is not allowed to fail the boot.
+After=cloud-init.service cloud-config.service cloud-final.service
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# THE LEADING '-' IS LOAD-BEARING, not defensive clutter.
+#
+# elspi has no terminal and no serial console (03-boot-config takes it off the
+# Modbus UART). A unit that can fail the boot is a unit that can cost a lathe
+# power cycle and an SD-card swap. The script reports its own verdict to the
+# journal and exits 0 by construction; this prefix is the second guard, for the
+# failure modes the script's author did not think of.
+#
+# stage-elspi/12-first-boot-seed/00-run.sh GATES on this prefix being present.
+ExecStart=-/usr/local/sbin/elspi-first-boot-seed
+
+StandardOutput=journal
+StandardError=journal
+
+# The script writes to the FAT boot partition and calls rfkill/nmcli/chpasswd,
+# so it needs root and a writable /boot/firmware. It is deliberately NOT
+# sandboxed beyond this: ProtectSystem would hide the very files it exists to
+# overwrite.
+ProtectHome=yes
+NoNewPrivileges=no
+
+[Install]
+WantedBy=multi-user.target
