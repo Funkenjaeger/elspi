@@ -220,44 +220,68 @@ fi
 # alone is a shell.
 phase "5/5  OT state-pull key (item 19)"
 OT_CMD="${HOME_DIR}/bin/ot-state"
+
+# --- the PAYLOAD, unconditionally and before the key check ------------------
+# THE BUG THIS RESTRUCTURING FIXES, first real card 2026-09-13. The payload
+# install used to live INSIDE the else-branch of the key check below. The key
+# line had been pre-installed on that card, so the grep matched, the else
+# branch never ran, the payload was never installed -- and the forced-command
+# key was INERT. Which is precisely what the block's own comment warned about:
+# the warning was in the right place and the control flow was not.
+#
+# A forced-command key whose command does not exist is inert in the quietest
+# possible way: the collector connects, ssh cannot exec the command, and the
+# row reports UNKNOWN forever. Nothing on this machine looks wrong. So the
+# payload is now installed whenever it is missing, REGARDLESS of whether the
+# key is already there -- the two are independent halves and the pre-installed
+# key is the case that needs the payload most.
+#
+# The file is captured verbatim from the live elspi 2026-09-07 so item 12's
+# diff stays clean -- it is read-only by construction and carries no
+# credential, no IP and no key.
+if [ ! -x "${OT_CMD}" ]; then
+	if [ -f "${HERE}/files/ot-state" ]; then
+		say "installing the ot-state payload (the key is inert without it)"
+		run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0755 "${HOME_DIR}/bin"
+		run install -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0755 \
+			"${HERE}/files/ot-state" "${OT_CMD}"
+		assert "ot-state payload installed and executable" test -x "${OT_CMD}"
+	else
+		warn "${OT_CMD} is not present and deltas/files/ot-state is missing --"
+		warn "  any ot-state key on this machine is INERT. Install the payload."
+	fi
+else
+	ok "ot-state payload already present"
+fi
+
+# GATE: it must REFUSE a wrong verb. The script validates the verb itself,
+# independently of the forced command, precisely because it is also directly
+# callable by anything already running as this user -- the dserver->webedge
+# defect narrowed 2026-08-14. If that check is not working, the confinement is
+# one layer thinner than it looks.
+#
+# Run against WHATEVER payload is in place, not only one this script just
+# wrote: a payload someone installed by hand is exactly the one whose verb
+# check nobody has exercised. The probe is read-only and needs no credential,
+# so there is no reason to skip it -- only dry-run, where there is nothing to
+# probe.
+if [ "${DRY_RUN}" = "1" ]; then
+	printf '  (skipped check: %s)\n' "ot-state refuses a wrong verb"
+elif [ -x "${OT_CMD}" ]; then
+	if sudo -u "${SERVICE_USER}" "${OT_CMD}" definitely-not-the-verb >/dev/null 2>&1; then
+		die "${OT_CMD} accepted a bogus verb. Its own verb check is not
+  working, so the forced command is the ONLY thing confining that key."
+	fi
+	ok "ot-state refuses a wrong verb on its own"
+fi
+
+# --- the KEY ----------------------------------------------------------------
 if grep -q 'ot-state' "${AK}" 2>/dev/null; then
 	ok "authorized_keys already carries an ot-state entry"
 else
 	say "This is a SECOND key, distinct from your workstation's: purpose-scoped,"
 	say "no-shell, read-only, and it runs exactly one verb (ot-state-v1)."
 	say "Without it the nightly cannot see this machine at all."
-	# INSTALL THE PAYLOAD FIRST. A forced-command key whose command does not
-	# exist is inert: the collector connects, ssh fails to exec, and the row
-	# reports UNKNOWN forever. Captured verbatim from the live elspi
-	# 2026-09-07 so item 12's diff stays clean -- it is read-only by
-	# construction and carries no credential, no IP and no key.
-	if [ ! -x "${OT_CMD}" ]; then
-		if [ -f "${HERE}/files/ot-state" ]; then
-			say "installing the ot-state payload (the key is inert without it)"
-			run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0755 "${HOME_DIR}/bin"
-			run install -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0755 \
-				"${HERE}/files/ot-state" "${OT_CMD}"
-			assert "ot-state payload installed and executable" test -x "${OT_CMD}"
-			# GATE: it must REFUSE a wrong verb. The script validates the verb
-			# itself, independently of the forced command, precisely because it
-			# is also directly callable by anything already running as this
-			# user -- the dserver->webedge defect narrowed 2026-08-14. If that
-			# check is not working, the confinement is one layer thinner than
-			# it looks.
-			if [ "${DRY_RUN}" != "1" ]; then
-				if sudo -u "${SERVICE_USER}" "${OT_CMD}" definitely-not-the-verb >/dev/null 2>&1; then
-					die "${OT_CMD} accepted a bogus verb. Its own verb check is not
-  working, so the forced command is the ONLY thing confining that key."
-				fi
-				ok "ot-state refuses a wrong verb on its own"
-			fi
-		else
-			warn "${OT_CMD} is not present and deltas/files/ot-state is missing --"
-			warn "  the key would be INERT. Install the payload before the key."
-		fi
-	else
-		ok "ot-state payload already present"
-	fi
 	if ask_yn "Install the OT state-pull key now?"; then
 		say "Paste the PUBLIC key line for the collector:"
 		printf '  > '; read -r OTKEY
