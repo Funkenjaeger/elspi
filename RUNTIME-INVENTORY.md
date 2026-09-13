@@ -230,13 +230,38 @@ is **Plymouth**, whose DRM renderer *is* a master. Hence
 `After=plymouth-quit-wait.service` in the fragment -- load-bearing, not
 cosmetic.
 
-`logind-seat` is option 1 verbatim, kept as the first fallback. Note it
-deliberately does **not** enable lingering: a lingering user manager starts at
+`logind-seat` was option 1 verbatim, kept as the first fallback. It
+deliberately did **not** enable lingering: a lingering user manager starts at
 boot with no session and therefore no seat, which is the opposite of the point.
 
 `cap-sys-admin` is the floor, so the flash session always has a way to leave
 the lathe working. If the machine ends up resting there, that is a finding to
 write up, not a resting place.
+
+### SETTLED 2026-09-13 on hardware: two modes, not three
+
+`first-opener` took the display on the real Pi at the **first attempt**. The
+hypothesis above — that the DRM core grants master to the first opener of an
+unclaimed device, so the seat machinery is not needed on a console-only
+machine — is now a measurement, and the `After=plymouth-quit-wait.service`
+ordering was enough to keep Plymouth out of the way.
+
+So **`logind-seat` was deleted**, not kept: the fragment, the tty1 autologin
+fragment, and the user-unit generation inside `elspi-drm-mode`. It existed for
+exactly one case — first-opener failing — which did not happen, and it was
+strictly more machinery on a machine with no terminal.
+`FLASH-SESSION.md` said to delete it if first-opener worked. The switcher now
+refuses the name with a message naming the two surviving modes rather than a
+bare "unknown mode", because an old note or the printed field sheet is the
+likeliest reason anyone types it.
+
+`cap-sys-admin` **stays**, for the reason stated above: it is the floor, not a
+preference, and a verified default does not remove the need for a way to leave
+the lathe working.
+
+The option list earlier in this section is left as written. It is the record of
+what was reasoned before anything was measured, and options 1 and 2 are the
+part that turned out to be unnecessary rather than wrong.
 
 ### The other half of not being able to test this: SSH must survive a UI failure
 

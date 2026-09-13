@@ -65,7 +65,7 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
   },
   "drm": {
     "default_mode": "first-opener",
-    "modes": ["first-opener", "logind-seat", "cap-sys-admin"],
+    "modes": ["first-opener", "cap-sys-admin"],
     "switcher": "/usr/local/sbin/elspi-drm-mode",
     "verified_on_hardware": true
   },
@@ -209,16 +209,20 @@ mkdir -p "${DEST}/usr/share/zoneinfo/America"
 ln -sf ../usr/share/zoneinfo/America/New_York "${DEST}/etc/localtime"
 
 # --- drm plumbing -----------------------------------------------------------
+# TWO fragments, not three. `logind-seat` -- and the tty1 autologin fragment
+# that only that mode installed -- were deleted 2026-09-13 once first-opener
+# was verified on hardware, so the fixture must NOT stage them: verify-image.sh
+# asserts they are absent, and a fixture that still carried them would make
+# that assertion unfalsifiable in the other direction.
 printf '[Service]\nUser=%s\nGroup=%s\n\n[Unit]\nAfter=plymouth-quit-wait.service\n' \
 	"${SU}" "${SU}" > "${DEST}/usr/share/elspi/drm-modes/first-opener.conf"
-printf '[Service]\nUser=%s\nGroup=%s\n' "${SU}" "${SU}" \
-	> "${DEST}/usr/share/elspi/drm-modes/logind-seat.conf"
 printf '[Service]\nUser=%s\nGroup=%s\nAmbientCapabilities=CAP_SYS_ADMIN\n' "${SU}" "${SU}" \
 	> "${DEST}/usr/share/elspi/drm-modes/cap-sys-admin.conf"
-printf '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin %s --noclear %%I $TERM\n' "${SU}" \
-	> "${DEST}/usr/share/elspi/getty-tty1-autologin.conf"
 
-printf '#!/bin/bash\n# fixture stub: first-opener logind-seat cap-sys-admin\n' \
+# The switcher stub carries its mode list the way the real one does -- a
+# VALID_MODES line -- because that is the form verify-image.sh asserts on, and
+# self-test.sh mutates this line to prove the assertion can go red.
+printf '#!/bin/bash\n# fixture stub\nVALID_MODES="first-opener cap-sys-admin"\n' \
 	> "${DEST}/usr/local/sbin/elspi-drm-mode"
 chmod 0755 "${DEST}/usr/local/sbin/elspi-drm-mode"
 

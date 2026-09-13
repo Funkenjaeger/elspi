@@ -111,6 +111,7 @@ of what has been *run* versus what is still only designed.
 | `tests/dry-run-stages.sh` | runs the chroot-free substages against the REAL upstream stage1 templates, twice (idempotence), plus two negative controls | **yes — 9/9** |
 | `tests/test-lockfile-drift.sh` | vendored `pyproject.toml`/`uv.lock` vs the reflex repo | **yes — in sync at reflex `dc5da79`** |
 | `tests/test-run-scripts-executable.sh` | every `*-run.sh`/`prerun.sh` is mode 100755 **in the git index** | **yes — 43/43** |
+| `tests/test-drm-mode-switcher.sh` | runs the real `elspi-drm-mode` and asserts its refusal paths — added 2026-09-13 with the deletion of the `logind-seat` rung, since `verify-image.sh` only ever sees a fixture *stub* of the switcher and so can check what it says, never what it does | **yes — 17/17** |
 | `tests/verify-image.sh` | Tier 2 offline assertions against a built rootfs | not yet — no image exists |
 | `tests/verify-image.sh --boot` | Tier 2 booted assertions under `systemd-nspawn` | not yet — needs the image and `qemu-user-static` |
 

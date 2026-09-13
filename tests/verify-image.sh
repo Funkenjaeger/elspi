@@ -162,6 +162,10 @@ CONFIG_DIR="$(jget "['paths']['config_dir']")"
 LOG_DIR="$(jget "['paths']['log_dir']")"
 DRM_DEFAULT="$(jget "['drm']['default_mode']")"
 DRM_SWITCHER="$(jget "['drm']['switcher']")"
+# The mode LIST, read out of the manifest for the same reason as the rest of
+# this section: the harness checks reality against the image's declaration
+# rather than against a list retyped here. Space-separated, order preserved.
+DRM_MODES="$(python3 -c "import json,sys; print(' '.join(json.load(open(sys.argv[1]))['drm']['modes']))" "${MANIFEST}" 2>/dev/null)"
 # The first-boot seed, read out of the manifest rather than hardcoded here --
 # same arrangement as drm.switcher, which 06-seat creates and 11-manifest
 # merely declares. A harness that keeps its own copy of these paths is checking
@@ -170,7 +174,7 @@ FBS_UNIT="$(jget "['first_boot_seed']['unit']")"
 FBS_SCRIPT="$(jget "['first_boot_seed']['script']")"
 
 for v in SERVICE_USER VENV APP_PARENT APP_ROOT CONFIG_DIR LOG_DIR DRM_DEFAULT DRM_SWITCHER \
-         FBS_UNIT FBS_SCRIPT; do
+         DRM_MODES FBS_UNIT FBS_SCRIPT; do
 	if [ -z "${!v}" ]; then bad "manifest declares ${v}"; else ok "manifest declares ${v}=${!v}"; fi
 done
 
@@ -469,19 +473,54 @@ fi
 # ---------------------------------------------------------------------------
 section "DRM mode plumbing"
 
-for m in first-opener logind-seat cap-sys-admin; do
+# TWO rungs since 2026-09-13. first-opener took the display on the real Pi at
+# the first attempt, so the logind-seat rung -- autologin on tty1 plus a
+# `systemd --user` unit -- was deleted rather than maintained, which is what
+# FLASH-SESSION.md said to do with it. cap-sys-admin STAYS: it is the
+# documented floor that leaves the lathe working.
+if [ "${DRM_MODES}" = "first-opener cap-sys-admin" ]; then
+	ok "manifest declares exactly the two surviving modes (${DRM_MODES})"
+else
+	bad "manifest declares exactly 'first-opener cap-sys-admin' (found: ${DRM_MODES})"
+fi
+
+for m in ${DRM_MODES}; do
 	check "fragment staged: ${m}" test -f "${ROOTFS}/usr/share/elspi/drm-modes/${m}.conf"
 done
 check "switcher installed: ${DRM_SWITCHER}" test -x "${ROOTFS}${DRM_SWITCHER}"
-check "tty1 autologin fragment staged (inert)" \
-	test -f "${ROOTFS}/usr/share/elspi/getty-tty1-autologin.conf"
 
-# It must be INERT until a mode selects it: an autologin that ships active
-# changes the boot path of a machine nobody can log into to undo it.
-if [ -e "${ROOTFS}/etc/systemd/system/getty@tty1.service.d/10-elspi-autologin.conf" ]; then
-	bad "tty1 autologin is NOT active in the image (it is mode-selected)"
+# --- the deleted rung, asserted ABSENT in each of its three forms ----------
+# A fragment, a switcher that still accepts the name, or the autologin file it
+# installed. The last one is the dangerous residue: an autologin that ships
+# active changes the boot path of a machine nobody can log into to undo it.
+if [ -e "${ROOTFS}/usr/share/elspi/drm-modes/logind-seat.conf" ]; then
+	bad "the logind-seat fragment is gone (that mode was deleted 2026-09-13)"
 else
-	ok "tty1 autologin is not active in the image (it is mode-selected)"
+	ok "the logind-seat fragment is gone (that mode was deleted 2026-09-13)"
+fi
+
+if [ -e "${ROOTFS}/usr/share/elspi/getty-tty1-autologin.conf" ]; then
+	bad "the tty1 autologin fragment is gone (it existed only for logind-seat)"
+else
+	ok "the tty1 autologin fragment is gone (it existed only for logind-seat)"
+fi
+
+if [ -e "${ROOTFS}/etc/systemd/system/getty@tty1.service.d/10-elspi-autologin.conf" ]; then
+	bad "no tty1 autologin is active in the image"
+else
+	ok "no tty1 autologin is active in the image"
+fi
+
+# Asserted on the switcher's VALID_MODES LINE, not on the whole file: the
+# script still mentions logind-seat on purpose, in the comment and in the
+# RETIRED_MODES list that makes it refuse the name with an explanation instead
+# of a bare "unknown mode". Grepping the file would go red on the refusal
+# itself.
+SWITCHER_FILE="${ROOTFS}${DRM_SWITCHER}"
+if grep -q '^VALID_MODES="first-opener cap-sys-admin"$' "${SWITCHER_FILE}"; then
+	ok "the switcher offers exactly first-opener and cap-sys-admin"
+else
+	bad "the switcher offers exactly first-opener and cap-sys-admin (VALID_MODES line: $(grep -m1 '^VALID_MODES=' "${SWITCHER_FILE}" 2>/dev/null || echo '<none>'))"
 fi
 
 # Plymouth holds DRM master. Ordering after it is load-bearing.
@@ -490,7 +529,7 @@ check "first-opener orders After=plymouth-quit-wait.service" \
 	"${ROOTFS}/usr/share/elspi/drm-modes/first-opener.conf"
 
 # THE THING THIS HARNESS STRUCTURALLY CANNOT ANSWER.
-unknown "DRM master acquisition under mode '${DRM_DEFAULT}' is UNTESTED. There is no GPU here and there never will be. This is a Tier 3 hardware item."
+unknown "DRM master acquisition under mode '${DRM_DEFAULT}' is NOT OBSERVABLE HERE. There is no GPU and there never will be; this is a Tier 3 hardware item. It was settled on the real Pi on 2026-09-13 -- first-opener took the display at the first attempt -- and this harness still cannot confirm that, so it does not claim to."
 
 # ---------------------------------------------------------------------------
 section "First-boot seed (cloud-init / Raspberry Pi Imager 2.x)"

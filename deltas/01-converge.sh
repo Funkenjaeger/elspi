@@ -13,9 +13,16 @@
 #   installed FROM THE CHECKOUT, never copied into elspi.git. A copy would
 #   drift from the app that has to start under it.
 #
-#   The privilege decision. The image ships three DRM options plus
-#   /usr/local/sbin/elspi-drm-mode. This calls the switcher; it never writes
-#   User= itself.
+#   The privilege decision. The image ships two DRM options -- first-opener
+#   (the default, verified on hardware 2026-09-13) and cap-sys-admin (the
+#   floor) -- plus /usr/local/sbin/elspi-drm-mode. This calls the switcher; it
+#   never writes User= itself. --drm-mode is passed through WITHOUT a mode list
+#   here on purpose: the switcher owns the list, so it is the only thing that
+#   can reject a name, and it exits non-zero for one -- including
+#   `logind-seat`, the third rung, deleted once first-opener was proven. A
+#   rejected mode writes no drop-in, and the User=root gate a few lines below
+#   is what then stops the run, because `run` does not abort on a non-zero
+#   exit and this script is not `set -e`.
 #
 # Those two combine into the wiring worth understanding before reading on:
 # THE APP'S STOCK UNIT SAYS User=root AND THE IMAGE RUNS NON-ROOT. The drop-in

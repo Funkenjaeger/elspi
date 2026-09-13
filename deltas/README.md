@@ -46,9 +46,12 @@ Converge installs the application and its wiring. It does **not** own:
 - **The unit file.** `reflex-ui.service` belongs to the reflex repo and is
   installed *from the checkout*, never copied into this repo. A copy would
   drift, and the app is the thing that knows how it wants to be started.
-- **The DRM mechanism.** The image ships three options and
-  `/usr/local/sbin/elspi-drm-mode`. Converge calls the switcher; it does not
-  write `User=` itself.
+- **The DRM mechanism.** The image ships two options — `first-opener`, the
+  default, verified on hardware 2026-09-13, and `cap-sys-admin`, the floor —
+  plus `/usr/local/sbin/elspi-drm-mode`. (There was a third, `logind-seat`;
+  it was deleted once first-opener was proven, and the switcher refuses the
+  name.) Converge calls the switcher; it does not write `User=` itself, and
+  `--drm-mode` is passed through to the switcher, which is what validates it.
 
 Those two facts combine into the one piece of wiring worth understanding
 before reading the code: **the app's stock unit says `User=root`, and the image

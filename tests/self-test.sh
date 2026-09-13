@@ -183,12 +183,29 @@ mutate "timezone reverted off America/New_York" \
 	"ln -sf ../usr/share/zoneinfo/Europe/London etc/localtime"
 
 # DRM plumbing
-mutate "tty1 autologin shipped ACTIVE rather than mode-selected" \
+mutate "a tty1 autologin shipped ACTIVE in the image" \
 	"mkdir -p etc/systemd/system/getty@tty1.service.d && touch etc/systemd/system/getty@tty1.service.d/10-elspi-autologin.conf"
 mutate "first-opener loses its plymouth ordering (Plymouth keeps DRM master)" \
 	"sed -i '/plymouth-quit-wait/d' usr/share/elspi/drm-modes/first-opener.conf"
 mutate "the drm-mode switcher missing" \
 	"rm -f usr/local/sbin/elspi-drm-mode"
+
+# THE DELETED RUNG (logind-seat, removed 2026-09-13 once first-opener was
+# verified on hardware). These mutations are the reason the deletion is
+# checkable at all: they put each piece of the seat machinery BACK, and the
+# harness must go red for every one of them. Note the direction -- there is no
+# mutation here for a MISSING seat piece, because a missing seat piece is now
+# the correct state and nothing could go red for it.
+mutate "the logind-seat fragment back in the drm-modes dir" \
+	"printf '[Service]\\nUser=default\\n' > usr/share/elspi/drm-modes/logind-seat.conf"
+mutate "the tty1 autologin fragment back (the seat rung's other half)" \
+	"printf '[Service]\\nExecStart=-/sbin/agetty --autologin default --noclear %%I \$TERM\\n' > usr/share/elspi/getty-tty1-autologin.conf"
+mutate "the switcher offering logind-seat again" \
+	"sed -i 's|^VALID_MODES=.*|VALID_MODES=\"first-opener logind-seat cap-sys-admin\"|' usr/local/sbin/elspi-drm-mode"
+mutate "the switcher forgetting the cap-sys-admin floor" \
+	"sed -i 's|^VALID_MODES=.*|VALID_MODES=\"first-opener\"|' usr/local/sbin/elspi-drm-mode"
+mutate "the manifest declaring logind-seat again" \
+	"sed -i 's|\"first-opener\", \"cap-sys-admin\"|\"first-opener\", \"logind-seat\", \"cap-sys-admin\"|' etc/elspi-image.json"
 
 # The first-boot seed (stage-elspi/12-first-boot-seed)
 #

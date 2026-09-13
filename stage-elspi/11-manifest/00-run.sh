@@ -44,7 +44,7 @@ cat > "${MANIFEST}" <<- JSON
 
 	  "drm": {
 	    "default_mode": "first-opener",
-	    "modes": ["first-opener", "logind-seat", "cap-sys-admin"],
+	    "modes": ["first-opener", "cap-sys-admin"],
 	    "switcher": "/usr/local/sbin/elspi-drm-mode",
 	    "verified_on_hardware": true
 	  },

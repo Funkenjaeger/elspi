@@ -231,35 +231,46 @@ gone.
 
 ---
 
-## The DRM question — the actual point of the session
+## The DRM question — SETTLED 2026-09-13
 
-The image ships **three** mechanisms and a switcher, so a wrong guess costs an
-SSH command instead of a reflash:
+**`first-opener` took the display on the first attempt on the real Pi.** The
+appliance runs non-root with no privilege, no seat and no session machinery,
+which is the outcome the whole ladder existed to find. `/etc/elspi-image.json`
+carries `"drm": {"verified_on_hardware": true}` on that evidence (commit
+`5be7ce2`).
+
+Because it worked, the **`logind-seat` rung was deleted** rather than
+maintained — see *After the session* below, which is where that instruction
+came from. It was autologin on tty1 plus a `systemd --user` unit, it existed
+only for the case where `first-opener` failed, and that case did not happen.
+`elspi-drm-mode logind-seat` now refuses the name and says so. The image ships
+**two** mechanisms and the switcher, so if a future card behaves differently a
+change still costs an SSH command instead of a reflash:
 
 ```sh
 elspi-drm-mode                  # what is it now?
-elspi-drm-mode first-opener     # image default
-elspi-drm-mode logind-seat      # autologin tty1 + user unit
+elspi-drm-mode first-opener     # image default, verified 2026-09-13
 elspi-drm-mode cap-sys-admin    # last resort
 ```
 
-**The ladder. Stop at the first that works.**
+**The ladder, for a machine that does NOT come up. Stop at the first that
+works.**
 
-1. **`first-opener`** is already active. If the UI takes the display, done —
-   the appliance runs non-root with no privilege and no seat machinery.
+1. **`first-opener`** is already active and is the verified mode. If the UI
+   takes the display, done — nothing to do.
 2. **If it fails, check Plymouth BEFORE changing mode.** Plymouth's DRM
    renderer is itself a master, and the likeliest failure is that it has not
    released the display. `systemctl status plymouth-quit-wait.service`; try
    stopping Plymouth by hand and restarting the app. **If that fixes it the
    fault is ordering, not mechanism** — a much better answer than escalating
    privilege, and one that changes what we ship.
-3. **`logind-seat`** — needs a **reboot**, not a restart: the seat session is
-   created at login.
-4. **`cap-sys-admin`** — takes the display regardless of seats. If the machine
-   ends up resting here, write it up. It is a floor, not a destination.
+3. **`cap-sys-admin`** — takes the display regardless of who else opened the
+   device. If the machine ends up resting here, write it up. It is a floor, not
+   a destination.
 
-Record which rung worked. `/etc/elspi-image.json` carries
-`"verified_on_hardware": false` and that flips only on evidence.
+There is no rung between 2 and 3 any more. If both Plymouth ordering and
+`cap-sys-admin` fail, that is a new finding and not a mode to switch to —
+`git log` for the deleted seat machinery rather than reinventing it.
 
 ---
 
@@ -334,9 +345,14 @@ journalctl -u reflex-ui -f
 
 ## After the session
 
-- Flip `verified_on_hardware` only if DRM was actually verified, and record
-  which rung.
-- If `first-opener` worked, say so plainly — the `logind-seat` machinery can
-  then be deleted rather than maintained.
+- ~~Flip `verified_on_hardware` only if DRM was actually verified, and record
+  which rung.~~ **DONE 2026-09-13: `first-opener`, first attempt.** The flag is
+  `true` in `stage-elspi/11-manifest/00-run.sh` (commit `5be7ce2`).
+- ~~If `first-opener` worked, say so plainly — the `logind-seat` machinery can
+  then be deleted rather than maintained.~~ **DONE.** It worked, so the seat
+  rung is gone: the fragment, the tty1 autologin fragment, the user-unit
+  generator in the switcher, the manifest entry and the fixture. The switcher
+  refuses the name with a message naming the two surviving modes, and
+  `tests/test-drm-mode-switcher.sh` executes that refusal.
 - Item 12: diff the provisioned Pi against the live elspi. That is the check
   that says whether the delta layer is complete, and it can only be done here.

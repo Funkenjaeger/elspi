@@ -100,11 +100,16 @@ for u in display-manager.service gdm.service gdm3.service lightdm.service sddm.s
 	fi
 done
 
-# --- tty1 autologin must be INERT in the image -----------------------------
+# --- there must be NO tty1 autologin at all --------------------------------
+# It used to be inert-but-staged, installable by `elspi-drm-mode logind-seat`.
+# That mode was deleted 2026-09-13 (first-opener was verified on hardware), so
+# nothing installs an autologin any more and the check is unconditional: an
+# autologin on a machine nobody can log into to undo it is not a thing to
+# tolerate as a side effect.
 if systemctl cat getty@tty1.service 2>/dev/null | grep -q -- "--autologin"; then
-	bad "tty1 autologin is inert (it is selected by elspi-drm-mode, not shipped on)"
+	bad "no tty1 autologin (the logind-seat mode that installed one is deleted)"
 else
-	ok "tty1 autologin is inert"
+	ok "no tty1 autologin"
 fi
 
 # --- the interpreter genuinely runs under qemu-user -------------------------
