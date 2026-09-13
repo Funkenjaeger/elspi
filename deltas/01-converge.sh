@@ -94,6 +94,9 @@ assert ".venv resolves to ${VENV}" \
 # --no-dev: main group only. The image already satisfies every dependency, so
 # this installs the reflex package itself and finishes in seconds.
 command -v uv >/dev/null 2>&1 || die "uv is not on PATH (the image installs it at /usr/local/bin/uv)"
+command -v git >/dev/null 2>&1 || die "git is not installed. The app half is a git checkout and the
+  in-app updater runs git fetch/show/checkout; without git the first Setup -> Update
+  refuses. Fix: apt-get install -y git   (found missing on the first real card, 2026-09-13)"
 run chown -h "${SERVICE_USER}:${SERVICE_USER}" "${UI_DIR}/.venv"
 run env UV_PROJECT_ENVIRONMENT="${VENV}" UV_PYTHON_DOWNLOADS=never \
 	sh -c "cd '${UI_DIR}' && uv sync --no-dev --frozen"
@@ -220,32 +223,56 @@ sudoers_install reflex-restart \
 sudoers_install reflex-stopstart \
 	"${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl stop reflex-ui.service"
 
-# GATE: prove the rule actually grants what it claims. `sudo -l` resolves the
-# whole policy, so this catches a rule that parses but is shadowed or scoped
-# wrong -- which a syntax check cannot see.
+# GATE: prove the rule actually grants what it claims, and no more.
+#
+# NOT `sudo -n -l <command>`. That asks whether the command is PERMITTED,
+# and on this image the service user is also in the sudo group with
+# (ALL:ALL) ALL by password -- so "restart ssh.service" is permitted, with a
+# password, and the old negative check tripped on the first real card
+# (2026-09-13). `-l` never needs a password either (listpw=any is satisfied by
+# the one NOPASSWD entry), so `-n` did not narrow it. Two probes instead:
+#   1. parse root's view of the policy for NOPASSWD grants and require every
+#      one of them to be exactly one of the two lines installed above;
+#   2. actually run a harmless command passwordless as the service user,
+#      ignoring any cached credential (-k), and require it to be REFUSED.
 if [ "${DRY_RUN}" != "1" ]; then
-	# POSITIVE: the thing the UI actually needs.
-	if sudo -u "${SERVICE_USER}" sudo -n -l /usr/bin/systemctl restart reflex-ui.service >/dev/null 2>&1; then
+	GRANTS="$(sudo -l -U "${SERVICE_USER}" 2>/dev/null | grep -E 'NOPASSWD' | sed -E 's/^[[:space:]]+//')"
+	RESTART_RE='^\(root\) NOPASSWD: /usr/bin/systemctl restart reflex-ui\.service$'
+	STOP_RE='^\(root\) NOPASSWD: /usr/bin/systemctl stop reflex-ui\.service$'
+	START_RE='^\(root\) NOPASSWD: /usr/bin/systemctl start reflex-ui\.service$'
+
+	# POSITIVE: the thing the UI actually needs, as a NOPASSWD grant.
+	if printf '%s\n' "${GRANTS}" | grep -Eq "${RESTART_RE}"; then
 		ok "${SERVICE_USER} can restart reflex-ui without a password"
 	else
-		die "the sudoers rule parsed but ${SERVICE_USER} still cannot restart
-  reflex-ui without a password. The UI's own restart button would fail."
+		die "the sudoers rule parsed but sudo -l shows no NOPASSWD grant for
+  restart reflex-ui.service. The UI's own restart button would fail.
+  grants seen:
+${GRANTS}"
 	fi
 
-	# NEGATIVE: the grant must be NARROW. Checking only that it works cannot
-	# distinguish a scoped rule from a blanket one, and a blanket NOPASSWD
-	# systemctl is a root shell in three moves. These are the assertions that
-	# would notice a rule quietly widening.
-	if sudo -u "${SERVICE_USER}" sudo -n -l /usr/bin/systemctl restart ssh.service >/dev/null 2>&1; then
-		die "${SERVICE_USER} can restart ARBITRARY units without a password.
-  The rule is not scoped to reflex-ui.service, which makes it a general
-  privilege escalation rather than a restart button."
+	# NEGATIVE: the grant must be NARROW. Every NOPASSWD line must be one of
+	# ours; anything else is a rule that quietly widened.
+	OTHER="$(printf '%s\n' "${GRANTS}" | grep -Ev "${RESTART_RE}|${STOP_RE}|${START_RE}|^$" || true)"
+	if [ -n "${OTHER}" ]; then
+		die "${SERVICE_USER} has NOPASSWD grants beyond reflex-ui.service:
+${OTHER}
+  A blanket NOPASSWD systemctl is a root shell in three moves. Refusing."
 	fi
-	ok "the grant does NOT extend to other units"
+	ok "the NOPASSWD grants do NOT extend beyond reflex-ui.service"
+
+	# NEGATIVE, executed: an arbitrary command must be REFUSED passwordless.
+	# /usr/bin/true is harmless; -k ignores the credential cache, which
+	# timestamp_type=global would otherwise share from the operator's session.
+	if sudo -u "${SERVICE_USER}" sudo -k -n /usr/bin/true >/dev/null 2>&1; then
+		die "${SERVICE_USER} can run an ARBITRARY command without a password.
+  Some rule grants blanket NOPASSWD (check /etc/sudoers.d). Refusing."
+	fi
+	ok "an arbitrary command is refused without a password"
 
 	# `start` is deliberately absent (see above). If it ever appears, something
 	# widened the rule beyond the live machine and this should say so.
-	if sudo -u "${SERVICE_USER}" sudo -n -l /usr/bin/systemctl start reflex-ui.service >/dev/null 2>&1; then
+	if printf '%s\n' "${GRANTS}" | grep -Eq "${START_RE}"; then
 		warn "${SERVICE_USER} can also START reflex-ui without a password."
 		warn "  The live machine grants only restart and stop. Not fatal, but this"
 		warn "  is wider than elspi and item 12's diff will show it."
