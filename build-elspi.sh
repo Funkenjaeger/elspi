@@ -133,4 +133,28 @@ if docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER_NAME}"; then
 fi
 
 echo "starting build at $(date -Is)"
-exec ./build-docker.sh -c elspi.conf
+BUILD_START="$(date +%s)"
+./build-docker.sh -c elspi.conf
+
+# --- trap 5: A BARE .img.xz CANNOT BE SEEDED -------------------------------
+# Raspberry Pi Imager 2.x never offers OS customisation for a "Use custom"
+# local image (tools/make-os-list.sh's header has the QML call chain), so an
+# operator who points Imager at deploy/image_*.img.xz gets an UNSEEDED card:
+# no password, no key, no Wi-Fi, no country -- and stage-elspi/12-first-boot-seed,
+# which exists to consume that seed, has nothing to consume. The seed arrives
+# only through a --repo OS-list entry declaring init_format cloudinit-rpi.
+#
+# So the JSON is part of the build product, not an afterthought, and failing to
+# produce it is a BUILD FAILURE. An image that shipped without it is an image
+# whose documented flash procedure does not work.
+IMG_XZ="$(ls -t deploy/image_*-"${IMG_NAME:-elspi}".img.xz 2>/dev/null | head -n1 || true)"
+[ -n "${IMG_XZ}" ] || { echo "FATAL: the build left no deploy/image_*.img.xz to describe"; exit 1; }
+if [ "$(date -r "${IMG_XZ}" +%s)" -lt "${BUILD_START}" ]; then
+	echo "FATAL: ${IMG_XZ} predates this build ($(date -r "${IMG_XZ}" -Is) < $(date -d "@${BUILD_START}" -Is))."
+	echo "  That is a LEFTOVER, not what was just built. Refusing to describe it."
+	exit 1
+fi
+echo "== describing ${IMG_XZ} for Imager's --repo path =="
+./tools/make-os-list.sh "${IMG_XZ}" --out deploy/os_list.json \
+	|| { echo "FATAL: could not write deploy/os_list.json -- see above."; exit 1; }
+echo "flash it with:  tools/flash-elspi.ps1   (Windows)   or   tools/flash-elspi.sh   (Linux)"
