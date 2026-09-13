@@ -76,6 +76,22 @@ mutate "service user dropped from the 'dialout' group (Modbus)" \
 mutate "a DRM mode fragment reverts to User=root" \
 	"sed -i 's|^User=default|User=root|' usr/share/elspi/drm-modes/first-opener.conf"
 
+# THE POLKIT RULE -- the other half of the non-root decision, and the half
+# that image addcb2e shipped without. Every check in the group above was green
+# on that image while the appliance UI could not turn the radio on.
+mutate "the polkit rule for the service user missing (2026-09-13: nmcli radio wifi on refused)" \
+	"rm -f etc/polkit-1/rules.d/50-reflex-service-user.rules"
+# The rule is generated from a template by substituting the service user into
+# the subject.user line. A substitution that no-ops leaves a syntactically
+# perfect rule scoped to a user who does not exist on this image: inert, and
+# identical to a working one in a directory listing.
+mutate "the polkit rule names a user that does not exist (the substitution no-opped)" \
+	"sed -i 's|default|nosuchuser|' etc/polkit-1/rules.d/50-reflex-service-user.rules"
+# A rule that returned YES for EVERY action id would still name the user, so
+# the scoping is its own assertion.
+mutate "the polkit rule loses its NetworkManager scoping (blanket YES)" \
+	"sed -i '/NetworkManager/d' etc/polkit-1/rules.d/50-reflex-service-user.rules"
+
 # Boot configuration
 mutate "SPI turned back off" \
 	"sed -i 's|^dtparam=spi=on|#dtparam=spi=on|' boot/firmware/config.txt"
@@ -101,6 +117,28 @@ mutate "network-manager missing (nmcli python package shells out to it)" \
 	"sed -i '/^Package: network-manager\$/,+2d' var/lib/dpkg/status"
 mutate "libmtdev missing (the touch path)" \
 	"sed -i '/^Package: libmtdev1t64\$/,+2d' var/lib/dpkg/status"
+mutate "the git PACKAGE missing (the gap on the first real card, 2026-09-13)" \
+	"sed -i '/^Package: git\$/,+2d' var/lib/dpkg/status"
+
+# --- the commands the runtime shells out to ---------------------------------
+# A missing COMMAND is a different question from a missing package, and until
+# 2026-09-13 nobody had asked the first one. Each of these is invoked by name
+# by something that has to work on a machine with no terminal, so losing one
+# is discovered by a human standing at a lathe.
+mutate "/usr/bin/git missing from the rootfs (the app half is a checkout)" \
+	"rm -f usr/bin/git"
+mutate "nmcli missing (the nmcli python package shells out to the BINARY)" \
+	"rm -f usr/bin/nmcli"
+mutate "tar missing (restore cannot unpack a tarball backup)" \
+	"rm -f usr/bin/tar"
+mutate "passwd missing (the account ships LOCKED; phase 3 could never unlock it)" \
+	"rm -f usr/bin/passwd"
+# visudo lives in /usr/sbin, so this also proves the harness searches more
+# than /usr/bin. Without it converge cannot validate a sudoers file before
+# moving it into place, and a malformed one breaks sudo for every user on a
+# machine that needs the SD card pulled to recover.
+mutate "visudo missing from /usr/sbin (converge validates sudoers before installing)" \
+	"rm -f usr/sbin/visudo"
 
 # The venv
 mutate "Kivy has no compiled extensions" \

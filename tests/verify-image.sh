@@ -111,6 +111,23 @@ rootfs_exists() { # <absolute path as seen from inside the rootfs>
 	return 1
 }
 
+# --- is this command on the image's PATH? -----------------------------------
+# Built on rootfs_exists for the same reason it exists: on a merged-usr trixie
+# rootfs /bin, /sbin and /usr/sbin are all symlinks into /usr/bin, and half of
+# these binaries are themselves symlinks. Anything that follows a link has to
+# say which root it means.
+#
+# The directories are the ones a non-login systemd service and a root shell
+# actually search; nothing here looks in the service user's ~/bin, because a
+# runtime that depends on that is a different (and worse) arrangement.
+rootfs_has_binary() { # <command name>
+	local n="$1" d
+	for d in /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin; do
+		rootfs_exists "${d}/${n}" && return 0
+	done
+	return 1
+}
+
 # ---------------------------------------------------------------------------
 section() { printf '\n\033[1m== %s ==\033[0m\n' "$1"; }
 # ---------------------------------------------------------------------------
@@ -184,6 +201,36 @@ else
 	ok "no DRM mode fragment runs as root"
 fi
 
+# --- the polkit rule that makes non-root actually WORK ----------------------
+# FOUND ON THE FIRST REAL CARD 2026-09-13, and invisible to every check above.
+# The service user runs under systemd with no logind session, so polkit
+# classifies it as neither active nor inactive and NetworkManager's "any"
+# default -- "no" for enable-disable-wifi -- applies. The UI's Network screen
+# runs `nmcli radio wifi on` at startup and got "Not authorized to perform
+# this operation". The netdev membership asserted above does NOT cover it:
+# Debian's shipped rules file handles only settings.modify.system, and only
+# for a local ACTIVE session.
+#
+# So the group checks and the "no fragment runs as root" check were both green
+# on an image whose appliance UI could not touch the radio. This is the
+# assertion that says the OTHER half of the non-root decision shipped.
+POLKIT_RULE="${ROOTFS}/etc/polkit-1/rules.d/50-reflex-service-user.rules"
+if [ ! -f "${POLKIT_RULE}" ]; then
+	bad "polkit rule /etc/polkit-1/rules.d/50-reflex-service-user.rules present"
+else
+	ok "polkit rule /etc/polkit-1/rules.d/50-reflex-service-user.rules present"
+	# NAMING THE USER IS THE WHOLE CONTENT. A rule scoped to a user that does
+	# not exist on this image is inert, and is indistinguishable from a
+	# working one in a directory listing -- which is exactly how a template
+	# whose substitution silently no-opped would ship.
+	check "  the polkit rule names '${SERVICE_USER}'" \
+		grep -q "subject.user === \"${SERVICE_USER}\"" "${POLKIT_RULE}"
+	# It must be the NetworkManager namespace, not a blanket YES. A rule that
+	# returned YES for every action id would also pass the check above.
+	check "  it is scoped to the NetworkManager action namespace" \
+		grep -q 'org\.freedesktop\.NetworkManager\.' "${POLKIT_RULE}"
+fi
+
 # ---------------------------------------------------------------------------
 section "Directories the application writes to"
 
@@ -240,7 +287,7 @@ pkg_installed() {
 for p in libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-ttf-2.0-0 libmtdev1t64 \
          libgbm1 libdrm2 libgl1-mesa-dri network-manager \
          libsdl2-dev libmtdev-dev python3-dev build-essential pkg-config \
-         gcc-arm-none-eabi cmake openocd plymouth; do
+         gcc-arm-none-eabi cmake openocd plymouth git; do
 	check "installed: ${p}" pkg_installed "${p}"
 done
 
@@ -259,6 +306,59 @@ done
 # But do NOT strip the X11 CLIENT libraries -- libsdl2 has hard NEEDED links.
 check "libx11-6 present (SDL2 links it; absence breaks SDL, not X)" \
 	pkg_installed libx11-6
+
+# ---------------------------------------------------------------------------
+section "Executables the runtime shells out to"
+
+# WHY THIS SECTION EXISTS. The card written from image addcb2e (2026-09-13)
+# had no git. Nothing in this harness noticed, because a missing COMMAND is
+# not the same question as a missing package and nobody had asked the first
+# one: the app half of the machine is a git checkout, the in-app updater runs
+# git fetch/show/checkout, and deltas/01-converge.sh syncs the venv against
+# it. It had to be apt-installed by hand -- a package mirror back on the
+# recovery path, which is the one thing the baked venv exists to remove.
+#
+# git is asserted twice on purpose. As a PACKAGE above (that is the contract
+# stage-elspi/08-venv/00-packages declares) and as a BINARY here at the path
+# every one of those callers resolves. The two can disagree: a package can be
+# installed-but-unconfigured, and dpkg status is a claim about a database
+# while this is a claim about the filesystem.
+check "/usr/bin/git exists in the rootfs" rootfs_exists /usr/bin/git
+
+# THE REST OF THE SHELL-OUT SET.
+#
+# Every one of these is invoked by name by something that has to work on a
+# machine with no terminal, so a missing one is discovered by a human standing
+# at a lathe. Grounded in real call sites rather than guessed at:
+#
+#   git        the checkout, the in-app updater, converge's uv sync
+#   systemctl  the UI's own restart button, converge (enable, daemon-reload,
+#              show -p User), ot-state
+#   sudo       the UI's restart path; converge and restore run probes as the
+#              service user through it
+#   nmcli      the UI's Network screen -- the nmcli PYTHON package shells out
+#              to this BINARY, which no Python manifest can express
+#   uv         converge's `uv sync --no-dev --frozen` (at /usr/local/bin/uv,
+#              not a distro path: it is installed by stage-elspi/07-uv)
+#   python3    the venv's interpreter, lib.sh's manifest reader, ot-state
+#   sed grep awk    all three delta phases and ot-state parse with them
+#   getent     restore and phase 3 resolve the service user's home
+#   stat       converge's and restore's ownership gates
+#   find       restore and phase 3
+#   mktemp     converge's validate-before-install of the sudoers files
+#   tar        restore unpacks a tarball backup
+#   ssh-keygen phase 3 prints authorized_keys fingerprints
+#   passwd     phase 3 sets the service account's password; the account ships
+#              LOCKED, so without this the machine cannot be commissioned
+#   openocd    the firmware toolchain SEAM.md call 3 bakes in unconditionally
+#   install    every file the delta layer puts in place
+#   visudo     converge validates each sudoers file BEFORE moving it in, and a
+#              malformed /etc/sudoers.d file breaks sudo for every user on a
+#              machine that cannot be rescued without pulling the card
+for b in git systemctl sudo nmcli uv python3 sed grep awk getent stat find \
+         mktemp tar ssh-keygen passwd openocd install visudo; do
+	check "  on PATH: ${b}" rootfs_has_binary "${b}"
+done
 
 # ---------------------------------------------------------------------------
 section "The venv (Kivy compiled, reflex absent)"
