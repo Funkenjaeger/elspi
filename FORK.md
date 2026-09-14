@@ -5,9 +5,10 @@ the `reflex-ui` electronic-leadscrew control application on the lathe. It is a
 **soft fork of [RPi-Distro/pi-gen](https://github.com/RPi-Distro/pi-gen)**: we
 intend to keep merging upstream indefinitely, not to diverge from it.
 
-Everything except this file and our own stage is upstream's code. `README.md`
-still opens with "# pi-gen" because it is upstream's file, unmodified on purpose
-— see [Keep the merge surface small](#keep-the-merge-surface-small).
+Everything except this file and our own stage is upstream's code. Upstream's
+README is still here, **byte-identical**, as `README.pi-gen.md`; it was moved
+aside rather than edited so that the root `README.md` can describe elspi — see
+[Keep the merge surface small](#keep-the-merge-surface-small).
 
 ## Syncing with upstream
 
@@ -68,14 +69,31 @@ Every file we *add* is free. So:
 - **Prefer new files** — our own stage directory, our own build config.
 - Confine edits to upstream files to cases where there is genuinely no
   alternative, and note each one here when it happens.
-- Never edit `README.md`, `build.sh`, or anything under `stage0`–`stage5` to
-  express our configuration. Stage selection belongs in our build config's
+- Never edit `README.pi-gen.md`, `build.sh`, or anything under `stage0`–`stage5`
+  to express our configuration. Stage selection belongs in our build config's
   `STAGE_LIST`.
 
 Upstream files edited so far: **one — `Dockerfile`, one word.**
+Upstream files **renamed**: one — `README.md` → `README.pi-gen.md`.
+
+#### The README rename, and why it is not an edit (2026-09-13)
+
+Upstream's README is 19 KB of pi-gen build documentation and it was the first
+thing a reader of this repository saw. Before the repo went public it was moved
+to `README.pi-gen.md`, **unmodified**, and a short elspi README written in its
+place.
+
+This is the one rename on the merge surface, and it is cheaper than an edit but
+not free: a future `git merge upstream/master` that touches `README.md`
+conflicts as rename/modify rather than merging into the moved file. Resolve it
+by taking upstream's change into `README.pi-gen.md` and keeping ours at
+`README.md`. Git's rename detection makes that a one-line resolution, and it
+beats the alternatives — editing upstream's README (a content conflict on every
+sync, forever) or leaving a public repository whose front page describes a
+different project.
 
 Everything else we add lives in new files: `stage-elspi/`, `elspi.conf`,
-`ci.conf`, `build-elspi.sh`, `tests/`.
+`ci.conf`, `build-elspi.sh`, `tests/`, `docs/`.
 
 #### A case that would have made it two, and did not (2026-09-12)
 
