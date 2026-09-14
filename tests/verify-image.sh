@@ -337,15 +337,15 @@ check "/usr/bin/git exists in the rootfs" rootfs_exists /usr/bin/git
 #
 #   git        the checkout, the in-app updater, converge's uv sync
 #   systemctl  the UI's own restart button, converge (enable, daemon-reload,
-#              show -p User), ot-state
+#              show -p User)
 #   sudo       the UI's restart path; converge and restore run probes as the
 #              service user through it
 #   nmcli      the UI's Network screen -- the nmcli PYTHON package shells out
 #              to this BINARY, which no Python manifest can express
 #   uv         converge's `uv sync --no-dev --frozen` (at /usr/local/bin/uv,
 #              not a distro path: it is installed by stage-elspi/07-uv)
-#   python3    the venv's interpreter, lib.sh's manifest reader, ot-state
-#   sed grep awk    all three delta phases and ot-state parse with them
+#   python3    the venv's interpreter, and lib.sh's manifest reader
+#   sed grep awk    all three delta phases parse with them
 #   getent     restore and phase 3 resolve the service user's home
 #   stat       converge's and restore's ownership gates
 #   find       restore and phase 3

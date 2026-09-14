@@ -2,7 +2,8 @@
 # Run the three delta phases in order.
 #
 #   provision.sh --app <checkout> --config-backup <dir|tarball> [--firmware F]
-#                [--drm-mode MODE] [--dry-run] [--skip-interactive]
+#                [--drm-mode MODE] [--site-hooks DIR] [--dry-run]
+#                [--skip-interactive]
 #
 # This is a CONVENIENCE, not a merge. The phases keep their own contracts and
 # their own exit codes, and a failure stops everything after it -- the ordering
@@ -18,6 +19,26 @@
 #
 # The app is NOT started by any of this. Starting it is a deliberate act after
 # a human has looked at the restored values -- see the end of phase 2.
+#
+# --- SITE HOOKS -------------------------------------------------------------
+# --site-hooks DIR is the seam for everything that is true of ONE estate and
+# not of the image. Nothing machine-specific lives in this repo (item 13), so
+# a step that names a particular network, collector or backup host cannot be a
+# phase -- but it still has to run in the same order, with the same helpers,
+# right after the phases. It runs as a hook out of a directory OUTSIDE this
+# tree.
+#
+# Every executable DIR/*.sh runs, in sorted filename order, as root, each with
+# DELTAS_DIR, SERVICE_USER, HOME_DIR, APP_DIR, CONFIG_DIR and DRY_RUN
+# exported. DELTAS_DIR is there so a hook can `. "${DELTAS_DIR}/lib.sh"` and
+# get say/ok/warn/die/run/assert -- the point being that a hook should look
+# like a phase and honour --dry-run through the same `run` wrapper.
+#
+# A hook that exits non-zero STOPS provisioning, named. Hooks run last on
+# purpose: a site step that fails must not be able to leave a half-converged
+# machine behind it.
+#
+# The contract is in deltas/README.md. This repo ships no hooks.
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,7 +46,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${HERE}/lib.sh"
 
 APP="" ; BACKUP="" ; FIRMWARE="" ; DRM_MODE="first-opener"
-SKIP_INTERACTIVE=0 ; PASS_DRY=""
+SKIP_INTERACTIVE=0 ; PASS_DRY="" ; SITE_HOOKS=""
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -33,9 +54,16 @@ while [ $# -gt 0 ]; do
 		--config-backup)    BACKUP="${2:-}"; shift 2 ;;
 		--firmware)         FIRMWARE="${2:-}"; shift 2 ;;
 		--drm-mode)         DRM_MODE="${2:-}"; shift 2 ;;
+		# Checked HERE rather than at the hook phase, which is the last thing
+		# that runs: a typo in this path must not be discovered after converge
+		# and restore have already changed the machine.
+		--site-hooks)       SITE_HOOKS="${2:-}"
+		                    [ -n "${SITE_HOOKS}" ] || die "--site-hooks needs a directory"
+		                    [ -d "${SITE_HOOKS}" ] || die "--site-hooks ${SITE_HOOKS} is not a directory that exists"
+		                    shift 2 ;;
 		--skip-interactive) SKIP_INTERACTIVE=1; shift ;;
 		--dry-run)          DRY_RUN=1; PASS_DRY="--dry-run"; shift ;;
-		-h|--help)          sed -n '2,20p' "$0"; exit 0 ;;
+		-h|--help)          sed -n '2,41p' "$0"; exit 0 ;;
 		*) die "unknown argument: $1" ;;
 	esac
 done
@@ -66,8 +94,8 @@ printf '\n\033[1melspi delta provisioning\033[0m\n'
   no commissioned config. DO NOT START IT until this is resolved."
 
 if [ "${SKIP_INTERACTIVE}" = "1" ]; then
-	warn "phase 3 skipped by request. The account may still be LOCKED and this"
-	warn "  machine may be outside the evidence perimeter (item 19)."
+	warn "phase 3 skipped by request. The account may still be LOCKED, and"
+	warn "  nothing that phase asks a human for has been set."
 else
 	# --app is passed to phase 3 the same way it is to phase 1. Phase 3 never
 	# writes there -- it reports whether the firmware sources (<app>/fw since
@@ -75,6 +103,59 @@ else
 	# and beats hardcoding this machine's.
 	"${HERE}/03-interactive.sh" --app "${APP}" ${PASS_DRY} \
 		|| warn "phase 3 did not complete. Re-run it alone: ./03-interactive.sh --app ${APP}"
+fi
+
+# --- site hooks -------------------------------------------------------------
+# Runs whether or not phase 3 was skipped: --skip-interactive is about not
+# blocking on a human, and a site step may well have nothing to ask.
+if [ -z "${SITE_HOOKS}" ]; then
+	say "no site hooks (none given)"
+else
+	# --maxdepth 1, not recursive: a hooks directory sitting beside the
+	# payload directory its hooks install from is the normal shape, and those
+	# payloads are not hooks. Sorted under LC_ALL=C so the order is the
+	# filename order a human reading `ls` sees, on every machine.
+	SITE_HOOK_LIST=()
+	while IFS= read -r _h; do
+		[ -x "${_h}" ] && SITE_HOOK_LIST+=("${_h}")
+	done < <(find "${SITE_HOOKS}" -maxdepth 1 -type f -name '*.sh' | LC_ALL=C sort)
+
+	phase "Site hooks (${#SITE_HOOK_LIST[@]})"
+
+	if [ "${#SITE_HOOK_LIST[@]}" -eq 0 ]; then
+		# Said out loud rather than passed over. A hooks directory that
+		# matched nothing is usually a lost executable bit, and a silent
+		# no-op there looks exactly like a hook that ran and found nothing
+		# to do.
+		warn "${SITE_HOOKS} holds no executable *.sh -- nothing ran."
+		warn "  A lost executable bit looks identical to a hook with nothing"
+		warn "  to do. Check: ls -l ${SITE_HOOKS}"
+	else
+		# The environment every hook gets, and the only environment it may
+		# assume. Resolved here rather than in each hook so a hook cannot
+		# disagree with the phases about who the service user is.
+		resolve_service_user            # SERVICE_USER
+		resolve_paths                   # CONFIG_DIR (and VENV, LOG_DIR, APP_ROOT)
+		HOME_DIR="$(getent passwd "${SERVICE_USER}" | cut -d: -f6)"
+		if [ -d "${APP}" ]; then APP_DIR="$(cd "${APP}" && pwd)"; else APP_DIR="${APP}"; fi
+		DELTAS_DIR="${HERE}"
+		export DELTAS_DIR SERVICE_USER HOME_DIR APP_DIR CONFIG_DIR DRY_RUN
+
+		[ "${DRY_RUN}" = "1" ] && say "DRY RUN -- DRY_RUN=1 is exported; each hook is responsible for honouring it"
+
+		for _h in "${SITE_HOOK_LIST[@]}"; do
+			if [ "${DRY_RUN}" = "1" ]; then
+				say "would run (with DRY_RUN=1): ${_h}"
+			else
+				say "running: ${_h}"
+			fi
+			# A failing hook stops everything after it, named. Hooks are last,
+			# so nothing is left half-done by the stop itself.
+			"${_h}" || die "site hook FAILED: ${_h}
+  Provisioning stopped. The phases completed; this hook did not."
+		done
+		ok "all ${#SITE_HOOK_LIST[@]} site hook(s) completed"
+	fi
 fi
 
 phase "Provisioning finished"

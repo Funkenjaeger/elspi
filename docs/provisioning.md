@@ -143,7 +143,7 @@ stop now if they are not what you expect.
 
 ### Phase 3 — interactive
 
-Five prompts, in order, and it skips whatever is already set:
+Four prompts, in order, and it skips whatever is already set:
 
 1. **The password** for the service user — for the case where Imager's seed did
    not carry one, or you want to change it.
@@ -154,10 +154,44 @@ Five prompts, in order, and it skips whatever is already set:
    firmware moved into the application monorepo there is no second repository to
    clone and nothing for a "no" to withhold. This phase reports whether the
    toolchain is present and whether `<app>/fw` landed in the checkout.
-5. **The OT state-pull key.**
 
 It is the only phase that cannot run unattended, which is why it is last.
 `--skip-interactive` skips it; the account may then still be locked.
+
+There was a fifth prompt until 2026-09-13: enrolling the machine with one
+estate's monitoring collector, via a purpose-scoped forced-command SSH key.
+That named a particular network, so it is a **site hook** now.
+
+## Site hooks
+
+Some provisioning steps are true of **one installation** rather than of the
+image — enrolling with a monitoring system, installing a payload that knows a
+backup host's name. Nothing machine-specific lives in this repository, so those
+steps live in a directory of their own, outside it, and `provision.sh` runs
+them:
+
+```sh
+sudo ./provision.sh --app /home/default/projects/reflex \
+                    --config-backup /path/to/elspi-reflex-config-YYYY-MM-DD \
+                    --site-hooks /path/to/site/hooks
+```
+
+A hook is an **executable `*.sh` directly in that directory**. All of them run,
+in sorted filename order, as root, after phase 3 — and still after phase 2 if
+`--skip-interactive` skipped phase 3. The directory must exist, and
+`provision.sh` refuses a path that does not *before* phase 1 changes anything.
+
+Each hook is run with `DELTAS_DIR`, `SERVICE_USER`, `HOME_DIR`, `APP_DIR`,
+`CONFIG_DIR` and `DRY_RUN` exported; `DELTAS_DIR` is there so a hook can
+`. "${DELTAS_DIR}/lib.sh"` and get the same `say`/`run`/`assert` helpers the
+phases use. `DRY_RUN` is passed through, not enforced — a hook is responsible
+for honouring it. **A hook that fails stops provisioning, named**, which is why
+hooks run last.
+
+`--site-hooks` is optional and this repository ships no hooks. Without it,
+`provision.sh` says `no site hooks (none given)` and carries on. The full
+contract, for anyone writing one, is in
+[`deltas/README.md`](https://github.com/Funkenjaeger/elspi/blob/master/deltas/README.md).
 
 ## Starting the UI
 

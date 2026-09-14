@@ -52,6 +52,50 @@ it; phase 3 only **reads** it, to report whether the firmware sources are there.
 Run alone, phase 3 falls back to the `paths.app_root` the image manifest
 declares, and says so — it never guesses a path.
 
+## Site hooks — the seam for what cannot be here
+
+A step that is true of **one estate** rather than of the image cannot be a
+phase. It still has to run in the same order, with the same helpers, right
+after the phases. So it runs as a **hook**, out of a directory that lives
+outside this repo:
+
+    sudo ./provision.sh --app <checkout> --config-backup <dir> \
+        --site-hooks /path/to/site/hooks
+
+**A hook is an executable `*.sh` directly in that directory.** Every one of
+them runs, in sorted filename order, as root, after phase 3 — and after phase 2
+when `--skip-interactive` skipped phase 3, because skipping the interactive
+phase is about not blocking on a human, not about skipping site steps. The
+directory must exist: `provision.sh` refuses a path that does not, during
+argument parsing, *before* phase 1 changes anything.
+
+**The environment a hook gets**, and the only environment it may assume:
+
+| Variable | Meaning |
+|---|---|
+| `DELTAS_DIR` | this directory — `. "${DELTAS_DIR}/lib.sh"` for `say`/`ok`/`warn`/`die`/`run`/`assert` |
+| `SERVICE_USER` | the account the app runs as, resolved the same way the phases resolve it |
+| `HOME_DIR` | that account's home directory |
+| `APP_DIR` | the reflex monorepo checkout, as `--app` gave it |
+| `CONFIG_DIR` | the commissioned-config directory |
+| `DRY_RUN` | `1` when provisioning was asked to change nothing |
+
+`DELTAS_DIR` exists so a hook can look like a phase rather than reinventing
+one. `DRY_RUN` is **passed through, not enforced** — a hook is responsible for
+honouring it, and sourcing `lib.sh` and putting every mutating action through
+its `run` wrapper is how to get that for free. `provision.sh` names each hook
+it would run either way.
+
+**A hook that exits non-zero stops provisioning, named.** Hooks run last for
+that reason: a site step that fails must not be able to leave a half-converged
+machine behind it. A hooks directory that matched no executable `*.sh` is
+reported as a warning rather than passed over — a lost executable bit looks
+exactly like a hook with nothing to do.
+
+**This repo ships no hooks and no hooks directory.** That is the point: the
+hooks are where the IP addresses, collector names and backup hosts live, and
+they live somewhere else.
+
 ## What phase 1 deliberately does not own
 
 - **The unit file.** `reflex-ui.service` belongs to the reflex repo and is
@@ -76,8 +120,9 @@ Nothing edits the app's unit file.
   brand-new machine has none. The refusal is correct; the missing path is a real
   gap, and a `--fresh` flag is not the fix. See the warning at the top of
   `docs/provisioning.md`.
-- **Item 19**, the OT state-pull key. Phase 3 prompts for it, but the
-  `authorized_keys` line must be written against the forced-command defect
-  narrowed 2026-08-14 — never as a bare key line.
+- **Monitoring enrolment.** Phase 3 used to have a fifth step that installed a
+  purpose-scoped forced-command SSH key for one estate's collector. It named a
+  particular network, so it is a **site hook** now (see above) and lives
+  outside this repo. Nothing here replaces it, and nothing here needs to.
 - Verification by **diffing a freshly-provisioned Pi against the live elspi**
   (item 12). That needs the hardware.

@@ -77,7 +77,7 @@ ask_yn() { # ask_yn <prompt> ; returns 0 for yes
 # The image ships this account LOCKED (SEAM.md call 2: no credential enters the
 # repo, and the build's throwaway is revoked by passwd -l). Locked means sudo
 # and password-SSH do not work, so this is usually the first thing needed.
-phase "1/5  password for ${SERVICE_USER}"
+phase "1/4  password for ${SERVICE_USER}"
 if passwd -S "${SERVICE_USER}" 2>/dev/null | awk '{print $2}' | grep -q '^P$'; then
 	ok "${SERVICE_USER} already has a usable password -- leaving it alone"
 else
@@ -96,7 +96,7 @@ fi
 
 # --- 2. authorized_keys -----------------------------------------------------
 # Names another machine by definition, so it cannot be in the repo.
-phase "2/5  SSH access for your workstation"
+phase "2/4  SSH access for your workstation"
 HOME_DIR="$(getent passwd "${SERVICE_USER}" | cut -d: -f6)"
 AK="${HOME_DIR}/.ssh/authorized_keys"
 if [ -s "${AK}" ]; then
@@ -144,7 +144,7 @@ fi
 # nmcli, because RUNTIME-INVENTORY.md records that the nmcli PYTHON package
 # shells out to the nmcli BINARY -- the app needs NetworkManager present, and
 # the image installs it for that reason.
-phase "3/5  network"
+phase "3/4  network"
 if command -v nmcli >/dev/null 2>&1; then
 	say "current connections:"
 	nmcli -t -f NAME,TYPE,DEVICE connection show --active 2>/dev/null | sed 's/^/      /' \
@@ -197,7 +197,7 @@ fi
 #
 # What is left is a REPORT, not a decision, so it is not a prompt: the bytes
 # SEAM.md promises, and whether the sources actually landed in this checkout.
-phase "4/5  firmware toolchain (report only -- the dev-role question is retired)"
+phase "4/4  firmware toolchain (report only -- the dev-role question is retired)"
 if command -v openocd >/dev/null 2>&1 && command -v arm-none-eabi-gcc >/dev/null 2>&1; then
 	ok "toolchain present in the image (openocd, arm-none-eabi-gcc) -- as designed"
 else
@@ -222,106 +222,17 @@ else
 	warn "  have refused -- has converge actually run on this machine?"
 fi
 
-# --- 5. the OT state-pull key (item 19) -------------------------------------
-# WITHOUT THIS, A REBUILT elspi FALLS OUT OF THE EVIDENCE PERIMETER and every
-# claim about it reverts to "per source, unverified live".
+# --- what used to be step 5 -------------------------------------------------
+# A fifth step lived here until 2026-09-13: a purpose-scoped, forced-command
+# SSH key for one estate's monitoring collector. It was the one thing in this
+# file that named a specific network rather than asking a human about theirs,
+# and item 13 says nothing machine-specific lives in this repo.
 #
-# It is a FORCED-COMMAND key and must never be written as a bare key line --
-# item 19 says so explicitly, against the dserver->webedge login-key defect
-# narrowed 2026-08-14. The restrictions are the security boundary; the key
-# alone is a shell.
-phase "5/5  OT state-pull key (item 19)"
-OT_CMD="${HOME_DIR}/bin/ot-state"
-
-# --- the PAYLOAD, unconditionally and before the key check ------------------
-# THE BUG THIS RESTRUCTURING FIXES, first real card 2026-09-13. The payload
-# install used to live INSIDE the else-branch of the key check below. The key
-# line had been pre-installed on that card, so the grep matched, the else
-# branch never ran, the payload was never installed -- and the forced-command
-# key was INERT. Which is precisely what the block's own comment warned about:
-# the warning was in the right place and the control flow was not.
-#
-# A forced-command key whose command does not exist is inert in the quietest
-# possible way: the collector connects, ssh cannot exec the command, and the
-# row reports UNKNOWN forever. Nothing on this machine looks wrong. So the
-# payload is now installed whenever it is missing, REGARDLESS of whether the
-# key is already there -- the two are independent halves and the pre-installed
-# key is the case that needs the payload most.
-#
-# The file is captured verbatim from the live elspi 2026-09-07 so item 12's
-# diff stays clean -- it is read-only by construction and carries no
-# credential, no IP and no key.
-if [ ! -x "${OT_CMD}" ]; then
-	if [ -f "${HERE}/files/ot-state" ]; then
-		say "installing the ot-state payload (the key is inert without it)"
-		run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0755 "${HOME_DIR}/bin"
-		run install -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0755 \
-			"${HERE}/files/ot-state" "${OT_CMD}"
-		assert "ot-state payload installed and executable" test -x "${OT_CMD}"
-	else
-		warn "${OT_CMD} is not present and deltas/files/ot-state is missing --"
-		warn "  any ot-state key on this machine is INERT. Install the payload."
-	fi
-else
-	ok "ot-state payload already present"
-fi
-
-# GATE: it must REFUSE a wrong verb. The script validates the verb itself,
-# independently of the forced command, precisely because it is also directly
-# callable by anything already running as this user -- the dserver->webedge
-# defect narrowed 2026-08-14. If that check is not working, the confinement is
-# one layer thinner than it looks.
-#
-# Run against WHATEVER payload is in place, not only one this script just
-# wrote: a payload someone installed by hand is exactly the one whose verb
-# check nobody has exercised. The probe is read-only and needs no credential,
-# so there is no reason to skip it -- only dry-run, where there is nothing to
-# probe.
-if [ "${DRY_RUN}" = "1" ]; then
-	printf '  (skipped check: %s)\n' "ot-state refuses a wrong verb"
-elif [ -x "${OT_CMD}" ]; then
-	if sudo -u "${SERVICE_USER}" "${OT_CMD}" definitely-not-the-verb >/dev/null 2>&1; then
-		die "${OT_CMD} accepted a bogus verb. Its own verb check is not
-  working, so the forced command is the ONLY thing confining that key."
-	fi
-	ok "ot-state refuses a wrong verb on its own"
-fi
-
-# --- the KEY ----------------------------------------------------------------
-if grep -q 'ot-state' "${AK}" 2>/dev/null; then
-	ok "authorized_keys already carries an ot-state entry"
-else
-	say "This is a SECOND key, distinct from your workstation's: purpose-scoped,"
-	say "no-shell, read-only, and it runs exactly one verb (ot-state-v1)."
-	say "Without it the nightly cannot see this machine at all."
-	if ask_yn "Install the OT state-pull key now?"; then
-		say "Paste the PUBLIC key line for the collector:"
-		printf '  > '; read -r OTKEY
-		if [ -n "${OTKEY}" ]; then
-			case "${OTKEY}" in
-				ssh-*|ecdsa-*|sk-*) ;;
-				*) die "that does not look like a public key line." ;;
-			esac
-			# Restrictions FIRST, key last. A bare key line here would be a
-			# general-purpose login.
-			OTLINE="command=\"${OT_CMD}\",no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding ${OTKEY}"
-			run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0700 "${HOME_DIR}/.ssh"
-			run bash -c "printf '%s\n' \"\${OTLINE}\" >> '${AK}'"
-			run chown "${SERVICE_USER}:${SERVICE_USER}" "${AK}"
-			run chmod 0600 "${AK}"
-			# GATE: the line must carry the forced command. A key that landed
-			# without it is a shell, and looks identical in a directory listing.
-			assert "the OT entry carries command= and no-pty" \
-				bash -c "grep -F 'command=\"${OT_CMD}\"' '${AK}' | grep -q 'no-pty'"
-			say "VERIFY FROM THE COLLECTOR before trusting it -- a forced command that"
-			say "does not confine is the defect this was written against:"
-			say "    ssh -i <key> -o IdentitiesOnly=yes ${SERVICE_USER}@<this-pi> id"
-			say "  must NOT return a uid. It must run ot-state or fail."
-		fi
-	else
-		warn "skipped -- this machine will be outside the evidence perimeter."
-	fi
-fi
+# It is a SITE HOOK now. provision.sh --site-hooks DIR runs every executable
+# DIR/*.sh as root after this phase, with DELTAS_DIR, SERVICE_USER, HOME_DIR,
+# APP_DIR, CONFIG_DIR and DRY_RUN exported -- so a hook can source lib.sh and
+# behave like a phase without living in this repo. deltas/README.md has the
+# contract; the hooks themselves live outside this tree, by design.
 
 phase "Phase 3 complete"
 say "Nothing here was recorded in the repo, which is the point."
