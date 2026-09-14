@@ -17,7 +17,7 @@
 #
 # What the operator sees: Imager opens with exactly ONE OS entry (this image),
 # the normal Device and Storage steps, and then the customisation page.
-# FLASH-SESSION.md says what to type on it.
+# docs/flashing.md says what to type on it, and what each field becomes.
 
 set -euo pipefail
 
