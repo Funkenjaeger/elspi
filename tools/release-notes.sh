@@ -6,6 +6,21 @@
 # bash, no network, writes only to stdout.
 #
 # ---------------------------------------------------------------------------
+# BRIEF, AND DELIBERATELY SO (2026-09-13)
+#
+# This used to print the flashing instructions -- which version of Imager, what
+# each field on the customisation page means, why the country matters. It was a
+# second copy of docs/flashing.md living on a page nobody edits again after the
+# release is cut, so the two could only drift, and the release page is the copy
+# a stranger finds first.
+#
+# So the output is now four things and nothing more: one sentence, the two
+# PINNED commands, a link to docs/flashing.md AT THE TAG, and the
+# required-assets line. tests/test-release-notes.sh enforces an upper bound on
+# the length and the absence of the retired prose, so this cannot grow back by
+# accident.
+#
+# ---------------------------------------------------------------------------
 # WHY PINNED, NOT /latest/
 #
 # README.md and docs/flashing.md use
@@ -16,6 +31,11 @@
 # .../releases/download/<tag>/os_list.json. Both forms are redirects Imager
 # follows (see docs/flashing.md); pinning here just means the commands on
 # THIS page keep flashing THIS release even after a newer one ships.
+#
+# The docs link is pinned the same way, to /blob/<tag>/docs/flashing.md rather
+# than /blob/main/. A reader who lands on an old release should get the
+# instructions that shipped WITH that image, not today's -- the fields on the
+# customisation page and what consumes them are properties of the image.
 #
 # ---------------------------------------------------------------------------
 # THE os_list.json THIS ASSUMES
@@ -62,17 +82,14 @@ case "${REPO_SLUG}" in
 esac
 
 PINNED_URL="https://github.com/${REPO_SLUG}/releases/download/${TAG}/os_list.json"
+DOCS_URL="https://github.com/${REPO_SLUG}/blob/${TAG}/docs/flashing.md"
 
 # --- write ------------------------------------------------------------------
 cat <<MD
 ## Flashing this release
 
-Raspberry Pi Imager 2.x from raspberrypi.com is required — distro packages
-ship 1.x, which seeds a card via \`firstrun.sh\`, and this image ignores that
-file entirely. Imager downloads and verifies the image itself; nothing is
-downloaded by hand. Take the one OS entry it offers, then fill in the
-customisation page (user \`default\`, public-key SSH only, Wi-Fi, country US)
-— see FLASH-SESSION.md for what each field means and why.
+Flash with **Raspberry Pi Imager 2.x** from
+[raspberrypi.com](https://www.raspberrypi.com/software/); the instructions that shipped with this image are in [docs/flashing.md](${DOCS_URL}).
 
 **Windows**, from Win+R, cmd or PowerShell alike:
 
