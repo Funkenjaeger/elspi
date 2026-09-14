@@ -250,10 +250,10 @@ So **`logind-seat` was deleted**, not kept: the fragment, the tty1 autologin
 fragment, and the user-unit generation inside `elspi-drm-mode`. It existed for
 exactly one case — first-opener failing — which did not happen, and it was
 strictly more machinery on a machine with no terminal.
-`FLASH-SESSION.md` said to delete it if first-opener worked. The switcher now
-refuses the name with a message naming the two surviving modes rather than a
-bare "unknown mode", because an old note or the printed field sheet is the
-likeliest reason anyone types it.
+The 2026-09-13 flash-session notes said to delete it if first-opener worked,
+and it did. The switcher now refuses the name with a message naming the two
+surviving modes rather than a bare "unknown mode", because an old note or the
+printed field sheet is the likeliest reason anyone types it.
 
 `cap-sys-admin` **stays**, for the reason stated above: it is the floor, not a
 preference, and a verified default does not remove the need for a way to leave

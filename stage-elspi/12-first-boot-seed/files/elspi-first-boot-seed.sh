@@ -507,7 +507,7 @@ fi
 #
 # This is REPORTED and not reverted on purpose. The checkbox is an explicit
 # operator choice made at flash time, and an image that silently undoes what
-# the operator asked for is worse than one that tells them. FLASH-SESSION.md
+# the operator asked for is worse than one that tells them. docs/flashing.md
 # tells them which box to tick.
 if [ -f "${SSHD_CONFIG}" ]; then
 	if grep -qiE '^[[:blank:]]*PasswordAuthentication[[:blank:]]+yes' "${SSHD_CONFIG}"; then

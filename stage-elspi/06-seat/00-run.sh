@@ -59,9 +59,9 @@
 #   untested, strictly-more-machinery mode (an autologin drop-in, a user unit
 #   generated from the system unit's ExecStart, a mode in which the system unit
 #   is deliberately inert) on a machine with no terminal is maintenance for a
-#   fallback nobody needs. FLASH-SESSION.md said to delete it if first-opener
-#   worked. It worked. The switcher now REFUSES the name by hand so the failure
-#   explains itself.
+#   fallback nobody needs. The 2026-09-13 flash-session notes said to delete
+#   it if first-opener worked. It worked. The switcher now REFUSES the name by
+#   hand so the failure explains itself.
 #
 # The unit itself is a DELTA (docs/design/seam.md), so this stage ships the FRAGMENTS and
 # the switcher; the delta layer calls the switcher.

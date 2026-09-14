@@ -18,10 +18,10 @@
 # device to seat0's active session. It existed as the fallback for the case
 # where the first-opener hypothesis was wrong. It was not wrong -- first-opener
 # took the display on hardware 2026-09-13 at the first attempt -- so the seat
-# machinery was DELETED rather than maintained, which is what FLASH-SESSION.md
-# said to do with it. The name is refused explicitly below rather than falling
-# into "unknown mode", because an old note, an old field sheet or a printed
-# ladder is the likeliest reason anyone types it.
+# machinery was DELETED rather than maintained, which is what the 2026-09-13
+# flash-session notes said to do with it. The name is refused explicitly below
+# rather than falling into "unknown mode", because an old note, an old field
+# sheet or a printed ladder is the likeliest reason anyone types it.
 
 set -euo pipefail
 

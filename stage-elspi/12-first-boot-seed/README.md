@@ -8,7 +8,7 @@ Nothing here puts a credential in the repo or in the image. The operator types
 the password, the public key and the Wi-Fi SSID/PSK into Imager; Imager writes
 them to the FAT partition; cloud-init consumes them on first boot; this
 substage's unit then takes them off the card. See `docs/design/seam.md` and
-`FLASH-SESSION.md`.
+`docs/flashing.md`.
 
 **Imager only shows that page for an OS-list entry, never for a local file.**
 2.x calls `setSrc(fileUrl)` with an empty `initFormat` for "Use custom"
@@ -20,7 +20,7 @@ which is why `tools/make-os-list.sh` writes `deploy/os_list.json` as part of
 the build and `tools/flash-elspi.ps1` / `tools/flash-elspi.sh` are the
 documented way to start a flash. **Pick the image by hand and this whole
 substage runs against an empty seed**: no password to install, no country to
-apply, nothing to wipe. `FLASH-SESSION.md` has the procedure.
+apply, nothing to wipe. `docs/flashing.md` has the procedure.
 
 ## Why it is numbered 12
 
@@ -163,7 +163,7 @@ file is broken".
 - It does not revert `PasswordAuthentication yes` if the operator ticked
   Imager's password-SSH option. That was an explicit choice on the
   customisation page; the unit **warns** in the journal and leaves it.
-  `FLASH-SESSION.md` says which box to tick.
+  `docs/flashing.md` says which box to tick.
 - It does not set the hostname, create users, install keys, or configure
   Wi-Fi. cloud-init does all of that from the seed. This substage only fixes
   what cloud-init cannot do on this image and then cleans up.

@@ -476,7 +476,7 @@ section "DRM mode plumbing"
 # TWO rungs since 2026-09-13. first-opener took the display on the real Pi at
 # the first attempt, so the logind-seat rung -- autologin on tty1 plus a
 # `systemd --user` unit -- was deleted rather than maintained, which is what
-# FLASH-SESSION.md said to do with it. cap-sys-admin STAYS: it is the
+# the flash-session notes said to do with it. cap-sys-admin STAYS: it is the
 # documented floor that leaves the lathe working.
 if [ "${DRM_MODES}" = "first-opener cap-sys-admin" ]; then
 	ok "manifest declares exactly the two surviving modes (${DRM_MODES})"

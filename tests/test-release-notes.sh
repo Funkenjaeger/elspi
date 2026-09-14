@@ -95,7 +95,11 @@ check_brief() {
 	[ "${n}" -le "${MAX_LINES}" ] || { echo "    ${n} lines, cap is ${MAX_LINES}" >&2; return 1; }
 	# Each of these belongs in docs/flashing.md and nowhere else.
 	local phrase
-	for phrase in 'firstrun.sh' 'customisation page' 'FLASH-SESSION.md' 'distro packages'; do
+	# There was a fourth phrase here until 2026-09-13: the name of the old
+	# root-level flash-session document, which left the repo that day. A
+	# forbidden string that nothing can write any more is not a check, so it
+	# is dropped rather than left standing to look like one.
+	for phrase in 'firstrun.sh' 'customisation page' 'distro packages'; do
 		if grep -qF "${phrase}" "${f}"; then
 			echo "    duplicates docs/flashing.md prose: '${phrase}'" >&2
 			return 1
