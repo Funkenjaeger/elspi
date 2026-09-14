@@ -2,10 +2,10 @@
 #
 # WHY THIS IMAGE EXISTS
 #
-# Tier 2's booted half needs systemd-nspawn, which needs root. On dserver sudo
-# is interactive-only, so every --boot run would otherwise be a hand-off to
-# Evan -- and a verification you have to ask permission for is a verification
-# that stops being run.
+# Tier 2's booted half needs systemd-nspawn, which needs root. On our build
+# host sudo is interactive-only, so every --boot run would otherwise be a
+# hand-off to a human -- and a verification you have to ask permission for is
+# a verification that stops being run.
 #
 # Docker group membership already grants the equivalent capability, so a
 # privileged container reaches the same place without a password prompt and

@@ -48,7 +48,7 @@ docker build -q -f "${HERE}/Dockerfile.verify" -t elspi-verify "${HERE}" >/dev/n
 if [ -n "${BOOT_ARG}" ]; then
 	if ! ls /proc/sys/fs/binfmt_misc/qemu-arm >/dev/null 2>&1; then
 		echo "UNKNOWN: no qemu-arm binfmt handler registered in the host kernel."
-		echo "  The booted assertions cannot run. On dserver (bash):"
+		echo "  The booted assertions cannot run. On the build host (bash):"
 		echo "    sudo apt-get install -y qemu-user-static binfmt-support"
 		exit 2
 	fi
@@ -76,9 +76,10 @@ echo "== running Tier 2 ${BOOT_ARG:+(with --boot)} =="
 # `timeout ... docker run` kills the docker CLIENT, not the container. On
 # 2026-09-07 an nspawn attempt was abandoned that way and the container ran on
 # for two hours -- holding --volumes-from against a volume that had since been
-# "deleted", so the space was never reclaimed. dserver's Docker filesystem hit
-# 100% and the next build died on "No space left on device" while df showed
-# 69G free on / (Docker lives on a separate /disk0).
+# "deleted", so the space was never reclaimed. The build host's Docker
+# filesystem hit 100% and the next build died on "No space left on device"
+# while df showed 69G free on / -- Docker's storage was on a separate
+# filesystem, which is why the obvious check said there was room.
 #
 # Reaping it recovered 16GB. A named container plus a trap means the next
 # interrupted run cannot do that again.

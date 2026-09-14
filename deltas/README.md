@@ -45,7 +45,7 @@ So: no IP addresses, no hostnames of other machines, no keys, no passwords, no
 Wi-Fi SSIDs. Anything that names the world outside this Pi arrives at run time —
 as an argument, or from the human in phase 3. The restore source is a path you
 hand it, not a server it knows how to reach. That is also why `02-restore.sh`
-cannot fetch the backup itself: it would have to know where dserver is.
+cannot fetch the backup itself: it would have to know where the backup host is.
 
 `--app` is passed to phase 1 *and* phase 3. Phase 1 requires it and writes to
 it; phase 3 only **reads** it, to report whether the firmware sources are there.

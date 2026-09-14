@@ -25,9 +25,9 @@
 # restore put the right numbers on the lathe" are different claims and only the
 # first one is checkable here.
 #
-# WHY IT CANNOT FETCH THE BACKUP ITSELF. It would have to know where dserver
-# is, and item 13 forbids anything machine-specific in this repo. You bring the
-# backup to the Pi; this phase refuses to proceed without it.
+# WHY IT CANNOT FETCH THE BACKUP ITSELF. It would have to know where the
+# backup host is, and item 13 forbids anything machine-specific in this repo.
+# You bring the backup to the Pi; this phase refuses to proceed without it.
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -66,8 +66,9 @@ if [ -z "${BACKUP}" ]; then
 
   Bring the most recent capture to this Pi and pass it:
       --config-backup /path/to/elspi-reflex-config-YYYY-MM-DD
-  On dserver these live in ~/backups/elspi/ . CHECK THE DATE -- a stale
-  capture restores stale geometry, which is the failure this text exists for."
+  On the backup host these live under ~/backups/elspi/ . CHECK THE DATE -- a
+  stale capture restores stale geometry, which is the failure this text exists
+  for."
 fi
 
 [ -e "${BACKUP}" ] || die "--config-backup ${BACKUP} does not exist"

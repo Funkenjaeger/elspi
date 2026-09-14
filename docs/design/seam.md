@@ -133,7 +133,11 @@ table above has been rewritten accordingly. What **stays** interactive:
 - **Anything naming another machine.** The commissioned-config backup still has
   to be carried to the Pi by hand ([Provisioning](../provisioning.md)), because `02-restore.sh`
   would otherwise have to know where the backup host lives.
-- **The OT state-pull forced-command key**, for the same reason.
+- **Enrolling the machine with a monitoring system**, for the same reason --
+  though as of 2026-09-13 that is no longer a phase-3 prompt at all. It was
+  the one step that named a particular network rather than asking, so it
+  became a **site hook** run out of a directory outside this repo. The seam
+  is `provision.sh --site-hooks`; the contract is in `deltas/README.md`.
 - **Any credential the operator did not type into Imager**, and re-setting the
   password later. The seed is a convenience, not the only path — and Imager
   1.9.x cannot write one at all.

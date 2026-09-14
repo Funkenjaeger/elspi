@@ -93,11 +93,11 @@ assuming the allowance is generous — though even at two hours a build, 2000
 minutes is roughly 16 builds a month, and GitHub's 6-hour job ceiling is not
 close.
 
-Revisit a self-hosted runner on dserver only if that measured number comes back
-bad. Persisting pi-gen's `work/` directory between runs would make iteration much
-faster there, but note that cuts against the point of this harness: a verification
-build should start clean, or it stops proving the image is reproducible from
-scratch.
+Revisit a self-hosted runner on our own build host only if that measured number
+comes back bad. Persisting pi-gen's `work/` directory between runs would make
+iteration much faster there, but note that cuts against the point of this
+harness: a verification build should start clean, or it stops proving the image
+is reproducible from scratch.
 
 ## Built 2026-09-07 — what exists now, and what it has actually proven
 

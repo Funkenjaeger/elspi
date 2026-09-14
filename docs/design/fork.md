@@ -198,13 +198,22 @@ never do.
 
 ### Before making this public
 
-The intent is to make this repository public once it is moderately mature. Two
-things to do first, neither of which is urgent while it is private:
+Both of these are **done**, 2026-09-13, in the pass that added `LICENSE-elspi`
+and the CI workflows:
 
-- Generalize the **Remotes** section below. `dserver` and `/mnt/git` are our git
-  hosting, not something a reader of a Pi image builder needs.
-- Re-check the tree for anything internal. As of 2026-08-17 there are no
-  credentials, keys, or LAN addresses in any file we have added.
+- The **Remotes** section below is generalized. Our own git hosting is not a
+  fact about the fork, and a reader of a Pi image builder has no use for the
+  name of a box on someone else's LAN.
+- The tree was re-grepped for anything internal: LAN addresses, our own
+  hostnames and usernames, Wi-Fi SSIDs. What came back was one line, in
+  `README.pi-gen.md` — upstream's own `--add-host` example, in an upstream
+  file this fork does not edit. Test fixtures were checked too; none embeds a
+  real hostname.
+
+The one thing that could not be generalized, because it is not a string, was
+`deltas/03-interactive.sh`'s fifth step: it enrolled the machine with our own
+monitoring. That moved to a private repo and left a `--site-hooks` seam
+behind — see `deltas/README.md`.
 
 Upstream's EOL release branches (`bookworm`, `bullseye`, `buster`, `jessie` and
 their `-arm64` variants) were deleted from this repo so that its branch list means
@@ -213,28 +222,29 @@ their `-arm64` variants) were deleted from this repo so that its branch list mea
 
 ## Remotes
 
-`origin` fetches from GitHub and pushes to **both** GitHub and dserver, matching
-how the `reflex` monorepo is configured:
+`origin` fetches from GitHub and pushes to **two** places: GitHub, and a
+private mirror on our own git host. The `reflex` monorepo is configured the
+same way, with a second `pushurl` on the same remote, so one
+`git push origin <branch>` reaches both:
 
 ```
-origin    git@github.com:Funkenjaeger/elspi.git   (fetch)
-origin    git@github.com:Funkenjaeger/elspi.git   (push)
-origin    dserver:/mnt/git/elspi.git              (push)
+origin    git@github.com:Funkenjaeger/elspi.git    (fetch)
+origin    git@github.com:Funkenjaeger/elspi.git    (push)
+origin    <internal-host>:<path>/elspi.git         (push)
 upstream  https://github.com/RPi-Distro/pi-gen.git (fetch; push disabled)
 ```
 
-A single `git push origin <branch>` reaches both. The dserver copy lives on an
-NFS mount from the NAS whose UIDs do not match dserver's, so every bare repo
-there needs a one-time registration on dserver before it will accept a push:
+The mirror's address is ours and is not interesting. The arrangement is, and so
+is one failure it produces, because the error names the wrong cause: when the
+bare repo sits on a **network mount whose UIDs do not match the git host's**,
+git refuses the push with `fatal: Could not read from remote repository`, which
+reads as a credentials or connectivity problem and is neither. It is
+ownership. The fix is a one-time registration on the host that serves the
+mount:
 
 ```sh
-git config --global --add safe.directory /mnt/git/elspi.git
+git config --global --add safe.directory <path-to-the-bare-repo>
 ```
-
-This is already done for this repo. It is recorded because the failure it
-produces — `fatal: Could not read from remote repository` on push — points at
-credentials rather than at ownership, and there are 29 prior repos on that mount
-carrying the same registration.
 
 ## What is deliberately *not* here
 
