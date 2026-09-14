@@ -1,0 +1,119 @@
+name: tier1
+
+# Tier 1: everything that runs without a built image, a chroot or a Pi.
+# Tier 2 (tests/verify-built-image.sh) needs the preserved pi-gen container
+# and Tier 3 is a real card in the real Pi; neither runs here.
+#
+# Every step below was run as a NON-ROOT user against a checkout with no
+# image, no rootfs and no reflex checkout before being put in this file. The
+# tools they reach for beyond bash and git are python3, git, xz and coreutils,
+# all of which the ubuntu-latest runner image already carries -- nothing here
+# apt-installs anything.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tier1:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The pathspec is load-bearing and easy to get wrong in a way that
+      # cannot fail: `git ls-files` matching nothing would syntax-check zero
+      # files and exit 0, which is why `test "$n" -gt 0` is here.
+      #
+      # ':(exclude)*.service' is NOT cosmetic. `stage-elspi/**/files/elspi-*`
+      # is there for elspi-drm-mode, which has no extension -- and it also
+      # catches elspi-first-boot-seed.service, a systemd unit. `bash -n` on
+      # that unit FAILS ("unexpected token `('" on the Description line), so
+      # without the exclusion this step is red on a clean tree.
+      - name: bash -n on every shell script we own
+        run: |
+          set -e
+          n=0
+          while IFS= read -r f; do bash -n "$f"; n=$((n+1)); done < <(git ls-files \
+            'stage-elspi/**/*.sh' \
+            'deltas/*.sh' \
+            'deltas/tests/*.sh' \
+            'tests/*.sh' \
+            'tools/*.sh' \
+            'build-elspi.sh' \
+            'stage-elspi/**/files/elspi-*' \
+            ':(exclude)*.service')
+          echo "syntax-checked $n scripts"
+          test "$n" -gt 0
+
+      # Reads the INDEX, not the filesystem: build.sh:68 silently skips a
+      # *-run.sh without the executable bit, and Git for Windows does not
+      # treat the working-tree mode as authoritative.
+      - name: run-scripts are executable in the index
+        run: bash tests/test-run-scripts-executable.sh
+
+      - name: self-test (the harness goes red on every mutation it claims to catch)
+        run: bash tests/self-test.sh
+
+      - name: dry-run the substages
+        run: bash tests/dry-run-stages.sh
+
+      - name: os_list and release-notes contracts
+        run: |
+          set -e
+          bash tests/test-os-list.sh
+          bash tests/test-release-notes.sh
+
+      - name: DRM mode switcher contract
+        run: bash tests/test-drm-mode-switcher.sh
+
+      # deltas/tests/*.sh, driven by the glob rather than by a list, so a new
+      # contract test runs here the day it lands. The loop asserts it found
+      # something: an empty glob would otherwise pass silently.
+      - name: delta-layer contracts
+        run: |
+          set -e
+          n=0
+          for t in deltas/tests/*.sh; do echo "== $t"; bash "$t"; n=$((n+1)); done
+          echo "ran $n delta contract test(s)"
+          test "$n" -gt 0
+
+      # NOT A PASS/FAIL GATE HERE, and it says so out loud.
+      #
+      # test-lockfile-drift.sh compares stage-elspi/08-venv/files/{pyproject
+      # .toml,uv.lock} against the reflex repo, which is a SEPARATE private
+      # checkout that this runner does not have. Its exit codes are three-way
+      # on purpose: 0 in sync, 1 DRIFTED, 2 could not measure.
+      #
+      # So 2 is reported as SKIPPED and does not fail the job, while 1 still
+      # does. Swallowing 2 without printing it would turn the one check whose
+      # whole point is "never report success when you could not measure" into
+      # a green tick that proves nothing -- hence the explicit banner.
+      - name: vendored lockfile drift (skips cleanly without a reflex checkout)
+        run: |
+          set +e
+          bash tests/test-lockfile-drift.sh
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo "::notice title=lockfile::vendored deps are in sync with reflex" ;;
+            2) echo "::warning title=lockfile::SKIPPED -- no reflex checkout on this runner, so drift was NOT measured. This is not a pass." ;;
+            *) echo "::error title=lockfile::DRIFTED -- re-vendor pyproject.toml, uv.lock and REFLEX_COMMIT"; exit "$rc" ;;
+          esac
+
+      # Pinned, and pinned to the version the site was actually built with.
+      # mkdocs-material's own build banner warns that MkDocs 2.0 removes the
+      # plugin system with no migration path, so an unpinned install is a
+      # future red build on a day nobody touched the docs.
+      #
+      # pip, not pipx: pipx would isolate the install from the interpreter
+      # this step then runs mkdocs with, and pip is present on every runner.
+      # --strict makes a broken internal link fail here rather than ship.
+      - name: docs build
+        run: |
+          set -e
+          pip install "mkdocs-material==9.7.7"
+          mkdocs build --strict

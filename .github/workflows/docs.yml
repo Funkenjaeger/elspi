@@ -1,0 +1,81 @@
+name: docs
+
+# The published site. Builds on every push and PR so a broken internal link
+# fails here rather than on the site; deploys to GitHub Pages from master.
+#
+# Mirrors the pattern the reflex repo uses (.github/workflows/docs.yml there):
+# a build job that always runs and uploads the artifact only on the publishing
+# branch, and a separate deploy job with the pages/id-token permissions and
+# the github-pages environment. Two jobs rather than one because
+# actions/deploy-pages needs write permissions that the build must not have.
+#
+# PAGES IS NOT ENABLED ON THIS REPOSITORY YET. That is a repository setting --
+# Settings -> Pages -> Source: GitHub Actions -- and no workflow can turn it
+# on. Until someone does, the BUILD job passes and the DEPLOY job fails; the
+# site at the site_url in mkdocs.yml does not exist.
+#
+# Publishes from master, unlike reflex, which publishes from integration.
+# elspi has no branch ladder: master is the only line, and the recovery
+# instructions on the site should describe the image the tags were cut from.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Pinned to the version the site is built with locally. Same pin as
+      # tier1.yml's docs step, and as reflex's.
+      - name: Install MkDocs
+        run: pip install "mkdocs-material==9.7.7"
+
+      # --strict so a dangling internal link is a red build, not a 404 for a
+      # reader standing at a lathe.
+      - name: Build
+        run: mkdocs build --strict
+
+      # mkdocs.yml sets site_dir: deploy/site, so the output lands under the
+      # directory upstream pi-gen's .gitignore already ignores. Keep this path
+      # and site_dir in step.
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/master'
+        with:
+          path: deploy/site
+
+  deploy:
+    if: github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

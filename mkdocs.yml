@@ -7,10 +7,18 @@ edit_uri: edit/master/docs/
 # additions are not under upstream's terms. LICENSE-elspi names the split.
 copyright: "elspi additions: MIT (LICENSE-elspi) &middot; upstream pi-gen: BSD 3-Clause (LICENSE)"
 
-# No `site_url`: nothing is published yet, and a site_url pointing at a page
-# that does not exist is a claim rather than a configuration. Add it in the
-# same change that turns Pages on -- Material only needs it for the sitemap
-# and for absolute canonical links.
+# Set in the same change that added the Pages workflow. NOTE: the workflow
+# existing is not the same as Pages being ENABLED -- that is a repository
+# setting (Settings -> Pages -> Source: GitHub Actions) and it has not been
+# turned on. Until it is, the deploy job is the thing that fails, not this.
+site_url: https://funkenjaeger.github.io/elspi/
+
+# Build output goes under deploy/, which upstream pi-gen's .gitignore already
+# ignores wholesale (`deploy/*`). Deliberate: the default `site/` would need a
+# new .gitignore entry, and .gitignore is an UPSTREAM file -- docs/design/fork.md's
+# merge-surface rule keeps "upstream files edited: none" true, so a generated
+# directory is not worth spending the first edit on.
+site_dir: deploy/site
 
 # docs_dir is the repo root docs/. The design notes moved INTO it (2026-09-13)
 # rather than being mirrored there: MkDocs cannot reference a file outside its
