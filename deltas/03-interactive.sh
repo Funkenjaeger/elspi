@@ -119,10 +119,22 @@ if [ -z "${SKIP_AK:-}" ]; then
 			*PRIVATE*) die "that looks like a PRIVATE key. Never paste one here." ;;
 		esac
 		run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0700 "${HOME_DIR}/.ssh"
-		run bash -c "printf '%s\n' \"\${PUBKEY}\" >> '${AK}'"
+		# Append from THIS shell, never through `run bash -c`. PUBKEY is a
+		# plain variable and was never exported, so the child shell expanded
+		# it to nothing and appended a bare newline -- and the old post-check,
+		# `test -s`, passed on that one-byte file. Found 2026-09-13; present
+		# since the step was written. The dry-run branch is spelled out
+		# because a redirection cannot go through `run`.
+		if [ "${DRY_RUN}" = "1" ]; then
+			printf '  would: append the pasted key to %s\n' "${AK}"
+		else
+			printf '%s\n' "${PUBKEY}" >> "${AK}"
+		fi
 		run chown "${SERVICE_USER}:${SERVICE_USER}" "${AK}"
 		run chmod 0600 "${AK}"
-		assert "key appended to authorized_keys" test -s "${AK}"
+		# GATE: the pasted line itself, whole, is in the file. "Non-empty" is
+		# not a check -- a lone newline satisfies it.
+		assert "the pasted key is in authorized_keys" grep -qxF -- "${PUBKEY}" "${AK}"
 	else
 		warn "skipped."
 	fi
