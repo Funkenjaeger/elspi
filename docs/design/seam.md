@@ -16,7 +16,7 @@ The obvious split — "OS in the image, application in the deltas" — is roughl
 right and gives the wrong answer in the one place that matters most here. Three
 sharper tests, applied in order:
 
-1. **Can CI prove it?** `VERIFICATION.md` says a booted-rootfs harness can assert
+1. **Can CI prove it?** `verification.md` says a booted-rootfs harness can assert
    packages, units, users, and file contents, but nothing about GPU, touchscreen,
    or the STM32 link. **Anything in the image is machine-checkable on every push;
    anything in the deltas needs a real Pi and a human.** That is a strong reason
@@ -73,7 +73,7 @@ app-independent path (`/opt/reflex-venv`) out of the application checkout, and
 image+app become a version pair that wants tagging together rather than floating.
 
 This is the load-bearing recommendation. **No `cp313`/`armv7l` Kivy wheel exists**
-(`RUNTIME-INVENTORY.md`), so somebody compiles Kivy from sdist. The only question
+(`runtime-inventory.md`), so somebody compiles Kivy from sdist. The only question
 is who.
 
 Putting it in the deltas means every provision compiles Kivy on the Pi — natively,

@@ -4,7 +4,7 @@
 #   ./build-elspi.sh                       # bake ~/.ssh/id_ed25519.pub
 #   ./build-elspi.sh path/to/key.pub       # bake a specific public key
 #
-# A NEW file, per FORK.md: build-docker.sh is upstream and stays untouched.
+# A NEW file, per docs/design/fork.md: build-docker.sh is upstream and stays untouched.
 #
 # ---------------------------------------------------------------------------
 # THE THREE TRAPS THIS EXISTS FOR

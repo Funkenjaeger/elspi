@@ -3,7 +3,7 @@
 #
 #   tests/test-restore-contract.sh
 #
-# SEAM.md: "restore refuses to invent data ... the restore contract is the one
+# docs/design/seam.md: "restore refuses to invent data ... the restore contract is the one
 # that must not be softened." A refusal that has never been observed is a
 # comment. This exercises the refusal paths against real inputs and requires a
 # NON-ZERO exit and an untouched target for each.

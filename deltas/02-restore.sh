@@ -3,7 +3,7 @@
 #
 #   02-restore.sh --config-backup <dir|tarball> [--firmware <flashed.json>] [--dry-run]
 #
-# Checklist item 14, and the one contract SEAM.md says must not be softened:
+# Checklist item 14, and the one contract docs/design/seam.md says must not be softened:
 #
 #   "Provisioning must RESTORE the commissioned config from backup, never
 #    generate it -- and must fail loudly rather than silently coming up with
@@ -154,7 +154,7 @@ if [ "${DRY_RUN}" != "1" ]; then
 fi
 
 # --- firmware manifest: SOFT, and says so -----------------------------------
-# SEAM.md: "~/firmware/flashed.json if available (soft -- its loss costs
+# docs/design/seam.md: "~/firmware/flashed.json if available (soft -- its loss costs
 # knowledge, not function)".
 if [ -n "${FIRMWARE}" ]; then
 	if [ -s "${FIRMWARE}" ]; then

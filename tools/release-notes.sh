@@ -8,14 +8,14 @@
 # ---------------------------------------------------------------------------
 # WHY PINNED, NOT /latest/
 #
-# ELSPI.md's own Flashing section uses
+# README.md and docs/flashing.md use
 # .../releases/latest/download/os_list.json -- GitHub's stable redirect to
 # whichever release is newest, right for a reader who always wants "the
 # current one". A single release's page describes ONE fixed release, so the
 # commands on it pin the tag instead:
 # .../releases/download/<tag>/os_list.json. Both forms are redirects Imager
-# follows (see ELSPI.md); pinning here just means the commands on THIS page
-# keep flashing THIS release even after a newer one ships.
+# follows (see docs/flashing.md); pinning here just means the commands on
+# THIS page keep flashing THIS release even after a newer one ships.
 #
 # ---------------------------------------------------------------------------
 # THE os_list.json THIS ASSUMES

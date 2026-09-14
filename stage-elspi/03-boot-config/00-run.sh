@@ -3,7 +3,7 @@
 # Firmware-level configuration: SPI, I2C, UART, camera off, quiet+splash, and
 # the touchscreen brownout workaround.
 #
-# SEAM.md puts all of this in the IMAGE: it needs a reboot, and wrong means no
+# docs/design/seam.md puts all of this in the IMAGE: it needs a reboot, and wrong means no
 # display or no Modbus. Cheap to bake, painful to retrofit.
 #
 # EVERY edit below ASSERTS ITS ANCHOR BEFORE WRITING and RE-GREPS THE TARGET

@@ -6,7 +6,7 @@
 # this image: hostname, the `default` account's password, the desktop's public
 # key, and the Wi-Fi SSID/PSK are typed into Imager at flash time and land on
 # the FAT partition as cloud-init NoCloud files. No credential enters this
-# repo or the image -- see SEAM.md.
+# repo or the image -- see docs/design/seam.md.
 #
 # Imager's seed does not work on a stock cloudinit-rpi image. Three defects,
 # all fixed here:
@@ -16,7 +16,7 @@
 #      UNDERSCORE. cloud-init 25.2's NoCloud datasource reads `instance-id`
 #      (hyphen) and falls back to the literal "nocloud". This substage rewrites
 #      it -- rather than editing upstream's template, which would put a second
-#      file on the merge surface forever (FORK.md).
+#      file on the merge surface forever (docs/design/fork.md).
 #
 #   2. NOTHING TURNS THE RADIO ON. netplan's `regulatory-domain` key is
 #      networkd-only and this image uses NetworkManager; and with WPA_COUNTRY

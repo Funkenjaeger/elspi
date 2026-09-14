@@ -34,7 +34,7 @@ reason. **CORRECTED 2026-09-07: upstream already has it.** At our pin
 `if ! grep -q "^interpreter ${qemu_arm}" /proc/sys/fs/binfmt_misc/qemu-arm*`,
 so skipping-when-already-registered is upstream behavior and there is nothing
 to port. Corrected rather than deleted, so the record shows the claim was
-checked instead of quietly losing it. See `FORK.md`.
+checked instead of quietly losing it. See `fork.md`.
 
 What ospi does **not** do is verify anything. It builds and releases; there is no
 boot test and no assertions, and its `todo.md` still lists "test full build
@@ -56,7 +56,7 @@ Boot the *root filesystem* instead, which needs no Pi emulation:
   rootfs — a more faithful init, still not the Pi firmware path.
 
 Worth asserting: expected packages present and unexpected ones absent (no X
-server, no compositor — see `RUNTIME-INVENTORY.md`), `reflex-ui.service` enabled
+server, no compositor — see `runtime-inventory.md`), `reflex-ui.service` enabled
 and its unit valid, the `default` user with its full group list, the single
 sudoers rule, the venv resolving to the versions in `uv.lock`, timezone correct,
 and `config.txt`/`cmdline.txt` containing the expected lines.
@@ -87,7 +87,7 @@ is moderately mature.
 
 The number nobody has yet is *our* build's duration, and there is a specific
 reason to expect it to exceed ospi's: **we compile Kivy from source under
-QEMU-emulated armhf**, which ospi never pays for (see `RUNTIME-INVENTORY.md`).
+QEMU-emulated armhf**, which ospi never pays for (see `runtime-inventory.md`).
 Emulated Cython compilation is slow. Measure the first manual build before
 assuming the allowance is generous — though even at two hours a build, 2000
 minutes is roughly 16 builds a month, and GitHub's 6-hour job ceiling is not

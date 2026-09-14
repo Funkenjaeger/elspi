@@ -1,6 +1,6 @@
 # Build toolchain: Kivy is COMPILED here, not downloaded.
 #
-# RUNTIME-INVENTORY.md, the single most consequential finding: the installed
+# docs/design/runtime-inventory.md, the single most consequential finding: the installed
 # Kivy-2.3.1.dist-info/WHEEL reads "Tag: cp313-cp313-linux_armv7l" and NO SUCH
 # WHEEL EXISTS ON PyPI. It was built from sdist on the device. ospi never pays
 # this cost -- on its Python version rotary-controller-python pulls a prebuilt

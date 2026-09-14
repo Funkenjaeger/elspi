@@ -1,12 +1,12 @@
 # The STM32 firmware toolchain.
 #
-# SEAM.md call 3, RATIFIED 2026-08-22 WITH AN AMENDMENT: the BYTES are baked
+# docs/design/seam.md call 3, RATIFIED 2026-08-22 WITH AN AMENDMENT: the BYTES are baked
 # into the image unconditionally; the interactive provision phase asks whether
 # to ENABLE the dev role (the reflex-fw checkout, PATH exposure, the udev rules
 # being active) -- not whether to install it.
 #
 # Installing these at provision time instead would put a package mirror back on
-# the recovery path, which is the one thing SEAM.md test 2 exists to remove.
+# the recovery path, which is the one thing docs/design/seam.md test 2 exists to remove.
 # Disk is cheap; a network in a machine shop on the day the SD card died is not.
 #
 # So STAGE_LIST is NOT the mechanism here. This stage always runs.

@@ -9,7 +9,7 @@
 # runs `06-seat` by name, and renumbering a substage reorders the build).
 # What it installs now: the two DRM-mode fragments and the switcher.
 #
-# RUNTIME-INVENTORY.md, measured 2026-09-01: user `default` already holds
+# docs/design/runtime-inventory.md, measured 2026-09-01: user `default` already holds
 # video(44) and render(992), so /dev/dri/card0 PERMISSION IS ALREADY SATISFIED.
 # "It needs root for DRM" is the wrong model. What root bought is the right to
 # be DRM master.
@@ -52,7 +52,7 @@
 #   default or not: it is the documented fallback.
 #
 # logind-seat -- DELETED 2026-09-13:
-#   Option 1 from RUNTIME-INVENTORY.md verbatim: autologin on tty1 so logind
+#   Option 1 from docs/design/runtime-inventory.md verbatim: autologin on tty1 so logind
 #   creates a session on seat0, plus a `systemd --user` unit, so the app runs
 #   as the seat's active session. It existed for exactly one reason -- the case
 #   where first-opener did not work -- and that case did not happen. Keeping an
@@ -63,7 +63,7 @@
 #   worked. It worked. The switcher now REFUSES the name by hand so the failure
 #   explains itself.
 #
-# The unit itself is a DELTA (SEAM.md), so this stage ships the FRAGMENTS and
+# The unit itself is a DELTA (docs/design/seam.md), so this stage ships the FRAGMENTS and
 # the switcher; the delta layer calls the switcher.
 
 MODES_DIR="${ROOTFS_DIR}/usr/share/elspi/drm-modes"

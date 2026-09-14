@@ -1,13 +1,13 @@
 # The delta layer
 
-Everything the image deliberately does **not** contain. `SEAM.md` decides what
+Everything the image deliberately does **not** contain. `docs/design/seam.md` decides what
 lives on which side; this is the other side of that line.
 
 The image is `flash → boot`. This is `restore → run`.
 
 ## Three phases, three different failure contracts
 
-`SEAM.md` is explicit that this is the point, and that collapsing them loses
+`docs/design/seam.md` is explicit that this is the point, and that collapsing them loses
 it:
 
 > The three delta phases have deliberately different failure contracts:
@@ -28,7 +28,7 @@ merge them, and a failure in one does not let the next run.
 ## Why there is nothing machine-specific in this directory
 
 Checklist item 13, Evan's hard requirement: *"Nothing machine-specific
-hard-coded in the repo."* `SEAM.md` call 2 adds: no credential enters this
+hard-coded in the repo."* `docs/design/seam.md` call 2 adds: no credential enters this
 repo, because it is going public.
 
 So: no IP addresses, no hostnames of other machines, no keys, no passwords, no
@@ -63,7 +63,7 @@ the other. Nothing edits the app's unit file.
 
 ## The venv bridge
 
-`SEAM.md` call 1 puts the dependency set in the image at `/opt/reflex-venv`,
+`docs/design/seam.md` call 1 puts the dependency set in the image at `/opt/reflex-venv`,
 without the `reflex` package itself. But `deploy/start.sh` in the app repo
 activates `$UI_DIR/.venv` — the checkout's own venv.
 
@@ -101,7 +101,7 @@ sudo ./03-interactive.sh --app /home/default/projects/reflex
 
 ## What phase 3 no longer asks
 
-The **dev-role question is retired.** `SEAM.md` call 3 bakes the firmware
+The **dev-role question is retired.** `docs/design/seam.md` call 3 bakes the firmware
 toolchain bytes into the image unconditionally and left phase 3 asking whether
 to *enable* the role — which meant cloning `reflex-fw` and asking for its URL.
 The firmware moved **into the reflex monorepo** at the 2026-08-17 weld, so it
@@ -110,7 +110,7 @@ There is no second repository to clone and nothing for a "no" to withhold, so
 phase 3 reports instead of asking: the toolchain bytes are present or not, and
 `<app>/fw` is present or not.
 
-The decision `SEAM.md` call 3 protects — toolchain bytes baked in, never
+The decision `docs/design/seam.md` call 3 protects — toolchain bytes baked in, never
 fetched at provision time — is unchanged. It was the *mechanism* of enabling
 the role that the weld overtook.
 

@@ -2,7 +2,7 @@
 
 # The service user, and the directories the application writes to.
 #
-# DECIDED 2026-09-01 (RUNTIME-INVENTORY.md): the image runs reflex-ui as a
+# DECIDED 2026-09-01 (docs/design/runtime-inventory.md): the image runs reflex-ui as a
 # NON-ROOT service user. Root was inherited from ospi and never justified.
 # Measured on the live machine, four of the five reasons for root were
 # self-inflicted -- serial access, kivy config location, config-dir ownership,
@@ -46,7 +46,7 @@ on_chroot << EOF
 set -e
 
 # --- Lock the service account -----------------------------------------------
-# SEAM.md call 2, RATIFIED: no credential enters this repo, and the image ships
+# docs/design/seam.md call 2, RATIFIED: no credential enters this repo, and the image ships
 # no usable password. The build config had to set FIRST_USER_PASS to a random
 # throwaway purely to satisfy build.sh's DISABLE_FIRST_BOOT_USER_RENAME guard
 # (build.sh:291 exits 1 without it). That throwaway is revoked here.
@@ -68,7 +68,7 @@ install -d -o ${SERVICE_USER} -g ${SERVICE_USER} -m 0755 /var/lib/reflex-config
 # The Kivy log directory. Do NOT reproduce the live state, which scatters
 # root-owned kivy_*.txt files across /var/log.
 #
-# SEQUENCING TRAP, carried from RUNTIME-INVENTORY.md and NOT optional: this
+# SEQUENCING TRAP, carried from docs/design/runtime-inventory.md and NOT optional: this
 # directory must exist and be writable BEFORE anything points KCFG_KIVY_LOG_DIR
 # at it. In the image the two are created together by construction. The
 # constraint therefore lands on the DELTA layer, which installs start.sh -- see

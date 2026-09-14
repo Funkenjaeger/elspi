@@ -59,7 +59,7 @@ say "app:          ${APP_DIR}"
 say "venv:         ${VENV}"
 
 # --- the venv bridge --------------------------------------------------------
-# SEAM.md call 1 puts every dependency in the image venv WITHOUT the reflex
+# docs/design/seam.md call 1 puts every dependency in the image venv WITHOUT the reflex
 # package. deploy/start.sh activates $UI_DIR/.venv. Reconcile by symlinking.
 #
 # HARD FAIL if the image venv is absent: this delta targets the pi-gen image,
@@ -116,7 +116,7 @@ run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0755 "${LOG_DIR}"
 assert "${LOG_DIR} writable by ${SERVICE_USER}" sudo -u "${SERVICE_USER}" test -w "${LOG_DIR}"
 
 # --- config.ini -------------------------------------------------------------
-# SEAM.md gives converge "/reflex-ui/config.ini (use_case = lathe)". Two things
+# docs/design/seam.md gives converge "/reflex-ui/config.ini (use_case = lathe)". Two things
 # it does NOT do:
 #   - It does not touch current_mode. That is RUNTIME state the app writes; on
 #     the live machine it reads `current_mode = 2`. Pinning it here would mean

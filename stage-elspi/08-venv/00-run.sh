@@ -2,7 +2,7 @@
 
 # THE VENV, WITH KIVY ALREADY COMPILED -- but not reflex itself.
 #
-# SEAM.md call 1, RATIFIED 2026-08-22. This is the load-bearing decision in the
+# docs/design/seam.md call 1, RATIFIED 2026-08-22. This is the load-bearing decision in the
 # whole split. No cp313/armv7l Kivy wheel exists on PyPI, so somebody compiles
 # Kivy from sdist. If that somebody is the DELTA layer, then recovery depends
 # on PyPI still serving that exact sdist on the day the SD card dies -- in a
@@ -13,7 +13,7 @@
 # layer drops the app and runs `uv sync --no-dev`, which finds its dependencies
 # already satisfied and finishes in seconds.
 #
-# THIS IS ALSO THE RISKIEST STEP IN THE BUILD, and SEAM.md says so: compiling
+# THIS IS ALSO THE RISKIEST STEP IN THE BUILD, and docs/design/seam.md says so: compiling
 # Kivy inside pi-gen's emulated armhf chroot is slow, on the critical path, and
 # native-build failures under qemu-user are not exotic. If the build dies, it
 # most likely dies here.
@@ -25,7 +25,7 @@
 # case -- but it does mean images want tagging against app versions rather than
 # floating. tests/test-lockfile-drift.sh is the tripwire.
 #
-# KNOWN GAP, decided but NOT applied: SEAM.md also ratified "promote Pillow to
+# KNOWN GAP, decided but NOT applied: docs/design/seam.md also ratified "promote Pillow to
 # a runtime dependency in pyproject.toml". In the vendored lock, pillow is
 # still in the DEV group only, so --no-dev drops it and Kivy loses the img_pil
 # provider. That fix belongs in the reflex repo, not here; until it lands, this

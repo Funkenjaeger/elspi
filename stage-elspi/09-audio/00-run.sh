@@ -6,7 +6,7 @@
 #   [CRITICAL] AudioSDL2: Unable to open mixer: ALSA: Couldn't open audio
 #              device: Unknown error 524
 #
-# SEAM.md's CORRECTION of 2026-08-22 is what this file encodes, and it matters
+# docs/design/seam.md's CORRECTION of 2026-08-22 is what this file encodes, and it matters
 # because the first diagnosis was wrong twice over. elspi's /etc/asound.conf is
 # BYTE-IDENTICAL to ospi's reference, and the shape was never the bug. THE BUG
 # IS THE CARD INDEX. `aplay -l` shows two HDMI outputs (vc4hdmi0/vc4hdmi1); the

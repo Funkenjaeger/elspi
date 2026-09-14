@@ -3,7 +3,7 @@
 #
 #   tests/verify-image.sh <rootfs-dir> [--boot] [--self-test]
 #
-# VERIFICATION.md's three tiers:
+# docs/design/verification.md's three tiers:
 #   1. it builds                        -> CI
 #   2. it boots and matches the declaration -> THIS SCRIPT
 #   3. it runs the lathe                -> real hardware only, still mandatory
@@ -295,7 +295,7 @@ for p in libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-ttf-2.0-0 libmtdev1t64 \
 	check "installed: ${p}" pkg_installed "${p}"
 done
 
-# Forbidden. RUNTIME-INVENTORY.md: KMS/DRM is selected BY ABSENCE. SDL2 falls
+# Forbidden. docs/design/runtime-inventory.md: KMS/DRM is selected BY ABSENCE. SDL2 falls
 # back to kmsdrm only because neither DISPLAY nor WAYLAND_DISPLAY exists. Ship
 # a compositor and the backend changes silently -- which is a black screen on a
 # machine with no terminal.
@@ -354,7 +354,7 @@ check "/usr/bin/git exists in the rootfs" rootfs_exists /usr/bin/git
 #   ssh-keygen phase 3 prints authorized_keys fingerprints
 #   passwd     phase 3 sets the service account's password; the account ships
 #              LOCKED, so without this the machine cannot be commissioned
-#   openocd    the firmware toolchain SEAM.md call 3 bakes in unconditionally
+#   openocd    the firmware toolchain docs/design/seam.md call 3 bakes in unconditionally
 #   install    every file the delta layer puts in place
 #   visudo     converge validates each sudoers file BEFORE moving it in, and a
 #              malformed /etc/sudoers.d file breaks sudo for every user on a
@@ -391,7 +391,7 @@ else
 	bad "Kivy carries compiled extensions (.so)"
 fi
 
-# SEAM.md call 1: the image ships the DEPENDENCIES, the delta ships the APP.
+# docs/design/seam.md call 1: the image ships the DEPENDENCIES, the delta ships the APP.
 if found_any "${ROOTFS}${VENV}" -maxdepth 5 -iname 'reflex-*.dist-info'; then
 	bad "the reflex package is NOT in the image venv (it is a delta)"
 else
@@ -405,14 +405,14 @@ else
 	bad "uv is an ARM binary"
 fi
 
-# KNOWN GAP, not a failure: SEAM.md ratified promoting Pillow to a runtime
+# KNOWN GAP, not a failure: docs/design/seam.md ratified promoting Pillow to a runtime
 # dependency, and that fix belongs in the reflex repo. Until it lands, --no-dev
 # drops pillow and Kivy loses img_pil. Reported as UNKNOWN rather than PASS so
 # it cannot quietly become "fine".
 if found_any "${ROOTFS}${VENV}" -maxdepth 5 -iname 'pillow-*.dist-info'; then
 	ok "pillow present (img_pil provider available)"
 else
-	unknown "pillow ABSENT -- img_pil unavailable. SEAM.md ratified promoting it to a runtime dep in the reflex repo; that has not landed."
+	unknown "pillow ABSENT -- img_pil unavailable. docs/design/seam.md ratified promoting it to a runtime dep in the reflex repo; that has not landed."
 fi
 
 # ---------------------------------------------------------------------------
@@ -694,7 +694,7 @@ section "In-image assertions (chroot)"
 
 # WHY THIS EXISTS ALONGSIDE --boot, rather than instead of it.
 #
-# VERIFICATION.md planned `systemd-nspawn --boot` because it "really starts
+# docs/design/verification.md planned `systemd-nspawn --boot` because it "really starts
 # systemd". That plan DID NOT SURVIVE CONTACT for an armhf rootfs under
 # qemu-user inside Docker: measured 2026-09-07, nspawn produces no console
 # output and never reaches the assertion unit, with /run on tmpfs, with

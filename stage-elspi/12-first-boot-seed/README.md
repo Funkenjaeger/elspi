@@ -7,7 +7,7 @@ and this substage ships what the fork needs for that to actually work.
 Nothing here puts a credential in the repo or in the image. The operator types
 the password, the public key and the Wi-Fi SSID/PSK into Imager; Imager writes
 them to the FAT partition; cloud-init consumes them on first boot; this
-substage's unit then takes them off the card. See `SEAM.md` and
+substage's unit then takes them off the card. See `docs/design/seam.md` and
 `FLASH-SESSION.md`.
 
 **Imager only shows that page for an OS-list entry, never for a local file.**
@@ -53,7 +53,7 @@ of only inside a three-hour emulated build. It:
    reads the **hyphen** form and otherwise falls back to the literal
    `"nocloud"`. The fix is applied here, at image-build time, **rather than by
    editing upstream's template** — that would add a second file to the merge
-   surface forever (`FORK.md`). The anchor is asserted before the `sed` and
+   surface forever (`docs/design/fork.md`). The anchor is asserted before the `sed` and
    re-grepped after, in both directions: the hyphen must be present *and* the
    underscore must be gone, because a file carrying both keys is ambiguous.
 
@@ -171,7 +171,7 @@ file is broken".
   `image_2026-09-13-elspi` — but the unit's job was deleted by systemd before
   it started, so not one of the six steps has ever executed. Everything above
   is still derived from cloud-init 25.2 source and upstream's stage scripts and
-  verified only by the offline harness. See `VERIFICATION.md`'s tiers — this
+  verified only by the offline harness. See `docs/design/verification.md`'s tiers — this
   remains a Tier 3 item until a card boots *and the unit runs*.
 
 ## 2026-09-13 — first boot on hardware: the unit never started

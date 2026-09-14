@@ -3,7 +3,7 @@
 #
 #   tests/test-lockfile-drift.sh [path-to-reflex-ui-dir]
 #
-# SEAM.md call 1 accepted a consequence honestly: "the image and the app become
+# docs/design/seam.md call 1 accepted a consequence honestly: "the image and the app become
 # a version pair. Add a dependency to reflex-ui and the image's venv lacks it,
 # so that provision needs network after all." This is the tripwire for that.
 #

@@ -1,0 +1,79 @@
+site_name: elspi
+site_description: The SD-card image for the Raspberry Pi that runs Reflex on a lathe
+repo_url: https://github.com/Funkenjaeger/elspi
+repo_name: Funkenjaeger/elspi
+edit_uri: edit/master/docs/
+copyright: See LICENSE in the repository root.
+
+# No `site_url`: nothing is published yet, and a site_url pointing at a page
+# that does not exist is a claim rather than a configuration. Add it in the
+# same change that turns Pages on -- Material only needs it for the sitemap
+# and for absolute canonical links.
+
+# docs_dir is the repo root docs/. The design notes moved INTO it (2026-09-13)
+# rather than being mirrored there: MkDocs cannot reference a file outside its
+# docs_dir, and a mirror is exactly where a document and its copy drift.
+docs_dir: docs
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: cyan
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.keys
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Design notes:
+      - Where the image ends: design/seam.md
+      - This is not pi-gen: design/fork.md
+      - Runtime inventory: design/runtime-inventory.md
+      - Verifying the image: design/verification.md
+  - Changelog: changelog.md

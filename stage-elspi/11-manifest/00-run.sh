@@ -9,7 +9,7 @@
 #    that its author can copy a path; one that reads the image's declaration
 #    and checks reality against it is checking the image.
 #
-# 2. THE DELTA LAYER gates on it. The sequencing trap from RUNTIME-INVENTORY.md
+# 2. THE DELTA LAYER gates on it. The sequencing trap from docs/design/runtime-inventory.md
 #    -- the log directory must exist and be writable BEFORE KCFG_KIVY_LOG_DIR
 #    points at it -- is enforceable only if the delta can ASK where that
 #    directory is instead of assuming. On a machine with no terminal, a delta

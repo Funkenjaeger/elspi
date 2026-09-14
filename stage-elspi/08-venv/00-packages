@@ -3,7 +3,7 @@
 # FOUND ON THE FIRST REAL CARD 2026-09-13: no substage in stage-elspi listed
 # git, none of the upstream stages pulls it in, and the card had to have it
 # apt-installed by hand before provisioning could finish. That is a package
-# mirror back on the recovery path, which is the one thing SEAM.md's baked
+# mirror back on the recovery path, which is the one thing docs/design/seam.md's baked
 # venv exists to remove.
 #
 # Two consumers, both load-bearing:

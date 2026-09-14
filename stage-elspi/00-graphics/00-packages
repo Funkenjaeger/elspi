@@ -1,6 +1,6 @@
 # Runtime graphics, input and network stack for a Kivy/SDL2 app on KMS/DRM.
 #
-# Source: RUNTIME-INVENTORY.md, measured on the live elspi 2026-08-17.
+# Source: docs/design/runtime-inventory.md, measured on the live elspi 2026-08-17.
 # ospi's stage-base/40-rotary-controller/00-packages is the starting point; the
 # additions below are the ones it omits and we need.
 
