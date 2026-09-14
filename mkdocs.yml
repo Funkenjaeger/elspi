@@ -3,7 +3,9 @@ site_description: The SD-card image for the Raspberry Pi that runs Reflex on a l
 repo_url: https://github.com/Funkenjaeger/elspi
 repo_name: Funkenjaeger/elspi
 edit_uri: edit/master/docs/
-copyright: See LICENSE in the repository root.
+# Two licenses, and the footer says which is which: this is a fork, and the
+# additions are not under upstream's terms. LICENSE-elspi names the split.
+copyright: "elspi additions: MIT (LICENSE-elspi) &middot; upstream pi-gen: BSD 3-Clause (LICENSE)"
 
 # No `site_url`: nothing is published yet, and a site_url pointing at a page
 # that does not exist is a claim rather than a configuration. Add it in the

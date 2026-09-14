@@ -59,4 +59,18 @@ becomes on the machine: **[docs/flashing.md](docs/flashing.md)**.
 
 Building the image: `./build-elspi.sh <ssh-pubkey>`; tests are in `tests/`.
 
-License: see `LICENSE`.
+## License
+
+Two licenses, because this is a fork with additions:
+
+* **Our additions are MIT** — `stage-elspi/`, `deltas/`, `tests/`, `tools/`,
+  `docs/`, `build-elspi.sh`, `elspi.conf`, this README and the GitHub
+  workflows. See [`LICENSE-elspi`](LICENSE-elspi).
+* **Upstream pi-gen is BSD 3-Clause**, © Raspberry Pi (Trading) Ltd —
+  `stage0` through `stage5`, `export-image`, `export-noobs`, `scripts`,
+  `depends`, `build.sh`, `build-docker.sh`, `Dockerfile` and
+  `README.pi-gen.md`. See [`LICENSE`](LICENSE), which is upstream's file,
+  unmodified.
+
+`LICENSE-elspi` names the split itself, so the boundary lives in one place
+rather than in a header on every file.
