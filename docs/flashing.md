@@ -68,6 +68,31 @@ rpi-imager --repo https://github.com/Funkenjaeger/elspi/releases/latest/download
     pinned to its own tag instead of `latest`, which is what you want if you
     are reproducing a known-good pair.
 
+!!! info "Publishing a build: `OS_LIST_URL`"
+    `os_list.json` carries a `url` field pointing at the image, and
+    `build-elspi.sh` has no way to know in advance where a given build will end
+    up being served from — so by default it writes a `file://` URL for the
+    image's path on the machine that built it. That is fine for a `--repo`
+    flash from that same machine, and useless anywhere else: `rpi-imager` on
+    another machine cannot open a `file://` path from a box it isn't running
+    on, and fails with something like "not found: /the/build/machine/path".
+
+    Before publishing a release, re-run the build with `OS_LIST_URL` set to the
+    URL the JSON's `url` field should actually contain — the shape GitHub gives
+    a release asset:
+
+    ```
+    OS_LIST_URL=https://github.com/Funkenjaeger/elspi/releases/download/<tag>/os_list.json ./build-elspi.sh
+    ```
+
+    (Note: that URL is for `os_list.json` itself, matching the `--repo` value
+    used above; `os_list.json`'s own `url` field inside it points at the
+    `image_*.img.xz` asset next to it in the same release.) Leave it unset for
+    a local-only build-and-flash — `build-elspi.sh` prints a WARNING naming the
+    `file://` URL it wrote and which machine it is only good on, so a build
+    headed for a release does not get published by accident with the wrong
+    `url` field.
+
 ### What Imager shows
 
 1. **One OS entry** — this image, from the repository you passed. There is no

@@ -138,6 +138,20 @@ SHORT_SHA="${BUILD_SHA:0:7}"
 # next to the image.
 if [ -z "${URL}" ]; then
 	URL="$("${PY}" -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "${IMG_ABS}")"
+	# A file:// URL is only ever usable on the machine that built it -- WSL's
+	# /mnt/c/... case (below) is one instance of that, but so is a plain
+	# /home/... path on a Linux build box: it opens fine in a browser on that
+	# same box and fails everywhere else, including in rpi-imager on any other
+	# machine, with nothing more specific than "download failed" / "not found".
+	# So this fires for every default URL, not only the WSL shape.
+	echo "NOTE: no --url given; the url field below is a file:// URL for THIS"
+	echo "  machine only ($(hostname 2>/dev/null || echo "this host")):"
+	echo "      ${URL}"
+	echo "  A file:// URL is not portable -- rpi-imager on any other machine cannot"
+	echo "  open it and will fail with something like 'not found: <path>'. Re-run"
+	echo "  with --url once you know where this image and this JSON will actually"
+	echo "  be served from, e.g. a published release:"
+	echo "      --url https://github.com/<org>/<repo>/releases/download/<tag>/os_list.json"
 	# Under WSL a Windows image is at /mnt/c/... and the file:// URL built from
 	# it is a path only WSL can resolve -- Imager.exe, which is the thing that
 	# will read this JSON, cannot open it and says only that the download
@@ -146,9 +160,9 @@ if [ -z "${URL}" ]; then
 		/mnt/[a-z]/*)
 			drive="$(printf '%s' "${IMG_ABS}" | cut -d/ -f3 | tr '[:lower:]' '[:upper:]')"
 			winpath="/${drive}:/$(printf '%s' "${IMG_ABS}" | cut -d/ -f4-)"
-			echo "NOTE: this looks like a Windows path seen from WSL."
-			echo "  The url written below is ${URL}, which rpi-imager.exe cannot open."
-			echo "  For a flash from Windows, re-run with:"
+			echo "  This looks like a Windows path seen from WSL: rpi-imager.exe cannot"
+			echo "  resolve ${URL} at all (not even 'wrong machine' -- WSL's /mnt is"
+			echo "  invisible to it). For a flash from Windows, re-run with:"
 			echo "      --url file://${winpath}"
 			;;
 	esac

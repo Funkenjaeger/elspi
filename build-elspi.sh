@@ -4,6 +4,18 @@
 #   ./build-elspi.sh                       # bake ~/.ssh/id_ed25519.pub
 #   ./build-elspi.sh path/to/key.pub       # bake a specific public key
 #
+# OS_LIST_URL=<https-or-file-url>  (env var, not a flag -- $1 above is already
+#   taken by the pubkey path, and every other knob here, PRESERVE_CONTAINER /
+#   CONTINUE / IMG_NAME / CONTAINER_NAME, is env-var-only, so this follows the
+#   same shape). Passed straight through as `--url` to tools/make-os-list.sh.
+#   Unset by default: the build still succeeds and deploy/os_list.json still
+#   gets written, but with a file:// URL good on THIS machine only, and this
+#   script prints a loud WARNING below saying so. Set it once you know where
+#   the image and its os_list.json will actually be served from -- for a
+#   tagged GitHub release that is:
+#     OS_LIST_URL=https://github.com/<org>/<repo>/releases/download/<tag>/os_list.json
+#   See docs/flashing.md.
+#
 # A NEW file, per docs/design/fork.md: build-docker.sh is upstream and stays untouched.
 #
 # ---------------------------------------------------------------------------
@@ -155,6 +167,23 @@ if [ "$(date -r "${IMG_XZ}" +%s)" -lt "${BUILD_START}" ]; then
 	exit 1
 fi
 echo "== describing ${IMG_XZ} for Imager's --repo path =="
-./tools/make-os-list.sh "${IMG_XZ}" --out deploy/os_list.json \
+MAKE_OS_LIST_ARGS=("${IMG_XZ}" --out deploy/os_list.json)
+[ -z "${OS_LIST_URL:-}" ] || MAKE_OS_LIST_ARGS+=(--url "${OS_LIST_URL}")
+./tools/make-os-list.sh "${MAKE_OS_LIST_ARGS[@]}" \
 	|| { echo "FATAL: could not write deploy/os_list.json -- see above."; exit 1; }
+
+if [ -z "${OS_LIST_URL:-}" ]; then
+	WRITTEN_URL="$(grep -m1 '"url"' deploy/os_list.json | sed -E 's/.*"url": *"([^"]*)".*/\1/')"
+	echo "=================================================================="
+	echo "WARNING: no OS_LIST_URL set -- deploy/os_list.json points at itself."
+	echo "  url: ${WRITTEN_URL:-<see deploy/os_list.json>}"
+	echo "  That file:// URL only opens on THIS machine ($(hostname 2>/dev/null || echo "this host"))."
+	echo "  rpi-imager on any OTHER machine (including whatever actually flashes"
+	echo "  a card) cannot open it and fails with something like 'not found: <path>'."
+	echo "  This deploy/os_list.json is fine for testing a --repo flash from THIS"
+	echo "  machine only. Before publishing it anywhere else, re-run with:"
+	echo "      OS_LIST_URL=https://github.com/<org>/<repo>/releases/download/<tag>/os_list.json ./build-elspi.sh"
+	echo "  (or whatever URL this image will actually be served from). See docs/flashing.md."
+	echo "=================================================================="
+fi
 echo "flash it with:  tools/flash-elspi.ps1   (Windows)   or   tools/flash-elspi.sh   (Linux)"

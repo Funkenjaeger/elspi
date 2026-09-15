@@ -31,6 +31,12 @@ trap 'rm -rf "${WORK}"' EXIT
 PASSED=0
 FAILED=0
 
+# The commit this build order's premise was verified against: master before
+# the OS_LIST_URL / file:// NOTE-guard-widening fix. Used below to prove the
+# guard-widening and --url-plumbing cases are actually RED beforehand, not
+# merely GREEN now by coincidence.
+BASE_SHA="3de42c792cacf0106b7f2f0b25cbecd1678cca2e"
+
 PY=""
 for c in python3 python; do
 	if command -v "$c" >/dev/null 2>&1; then PY="$c"; break; fi
@@ -140,6 +146,15 @@ else
 	bad "--url run failed"
 fi
 
+echo
+echo "== green: --url is written verbatim (build order's literal case) =="
+OUT2B="${WORK}/os_list.explicit-url.json"
+if "${GEN}" "${IMG}" --url "https://example.invalid/os_list.json" --out "${OUT2B}" >/dev/null 2>&1; then
+	eq "url (--url, verbatim)" "https://example.invalid/os_list.json" "$(jget "${OUT2B}" os_list.0.url)"
+else
+	bad "--url https://example.invalid/os_list.json run failed"
+fi
+
 # ---------------------------------------------------------------------------
 echo
 echo "== red: each of these MUST fail =="
@@ -205,6 +220,73 @@ expect_red "imager block with an empty devices list" \
 # 7. a bad --url scheme
 expect_red "--url with an unsupported scheme" \
 	"${GEN}" "${IMG}" --url "ftp://example.invalid/x.img.xz" --out "${WORK}/never6.json"
+
+echo
+echo "== seen-red: the file:// NOTE guard must fire for ANY default URL, not just /mnt =="
+# A dserver-shaped absolute path: under \$WORK, itself under \$TMPDIR (/tmp or
+# /home -- never /mnt). The OLD guard (base :146, /mnt/[a-z]/* only) would
+# have matched nothing here; that is the defect this build fixes.
+DSERVER_DIR="${WORK}/dserver-shaped/home/evand"
+mkdir -p "${DSERVER_DIR}"
+case "${DSERVER_DIR}" in
+	/mnt/*) echo "  UNKNOWN fixture landed under /mnt -- TMPDIR is Windows-mounted here"; exit 2 ;;
+esac
+DSERVER_IMG="${DSERVER_DIR}/image_2026-09-13-elspi.img.xz"
+cp "${IMG}" "${DSERVER_IMG}"
+
+NOTE_OUT="${WORK}/note.out"
+"${GEN}" "${DSERVER_IMG}" --out "${WORK}/note.json" >"${NOTE_OUT}" 2>&1
+if grep -q "^NOTE:" "${NOTE_OUT}"; then
+	ok "current make-os-list.sh prints a NOTE for a default file:// URL on a non-/mnt path"
+else
+	bad "current make-os-list.sh stayed silent for ${DSERVER_IMG} -- the guard did not widen"
+	sed 's/^/           /' "${NOTE_OUT}"
+fi
+
+# Prove RED: the identical case against the BASE SHA's generator must print
+# nothing at all, since base :146 only matches /mnt/[a-z]/*.
+if git -C "${REPO}" cat-file -e "${BASE_SHA}" 2>/dev/null; then
+	BASE_GEN="${WORK}/base-make-os-list.sh"
+	git -C "${REPO}" show "${BASE_SHA}:tools/make-os-list.sh" > "${BASE_GEN}"
+	chmod +x "${BASE_GEN}"
+	cp "${REPO}/tools/os_list.imager-block.json" "${WORK}/os_list.imager-block.json"
+	BASE_NOTE_OUT="${WORK}/base-note.out"
+	"${BASE_GEN}" "${DSERVER_IMG}" --out "${WORK}/base-note.json" >"${BASE_NOTE_OUT}" 2>&1
+	if grep -q "^NOTE:" "${BASE_NOTE_OUT}"; then
+		bad "RED PROOF FAILED: base SHA ${BASE_SHA} ALSO printed a NOTE for a non-/mnt path -- the premise (guard only matches /mnt/[a-z]/*) does not hold here"
+		sed 's/^/           /' "${BASE_NOTE_OUT}"
+	else
+		ok "RED proven: base SHA ${BASE_SHA}'s make-os-list.sh prints NOTHING for the same non-/mnt case"
+	fi
+else
+	echo "  UNKNOWN base SHA ${BASE_SHA} not reachable from this clone -- skipping RED proof"
+fi
+
+echo
+echo "== static: build-elspi.sh's make-os-list.sh invocation carries --url plumbing =="
+# check_url_plumbing <path-to-build-elspi.sh> -- a static grep, not an
+# execution: build-elspi.sh needs docker and a real pi-gen build to run, which
+# is out of bounds for this test.
+check_url_plumbing() {
+	awk '
+		/make-os-list\.sh/ { found_call=1 }
+		found_call && /--url/ { found_url=1 }
+		END { exit(found_url ? 0 : 1) }
+	' "$1"
+}
+if check_url_plumbing "${REPO}/build-elspi.sh"; then
+	ok "current build-elspi.sh: make-os-list.sh invocation carries --url plumbing"
+else
+	bad "current build-elspi.sh has no --url plumbing to make-os-list.sh"
+fi
+if git -C "${REPO}" cat-file -e "${BASE_SHA}" 2>/dev/null; then
+	BASE_BUILD="${WORK}/base-build-elspi.sh"
+	git -C "${REPO}" show "${BASE_SHA}:build-elspi.sh" > "${BASE_BUILD}"
+	expect_red "base SHA build-elspi.sh has no --url plumbing (static grep)" \
+		check_url_plumbing "${BASE_BUILD}"
+else
+	echo "  UNKNOWN base SHA ${BASE_SHA} not reachable from this clone -- skipping RED proof"
+fi
 
 echo
 echo "RESULT: ${PASSED} passed, ${FAILED} failed"
