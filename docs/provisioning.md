@@ -21,6 +21,52 @@ and the credentials that could not be typed into Imager.
     fix — first commissioning needs a procedure of its own, and it does not
     exist yet. If this is a first commissioning, stop here.
 
+## Image identity: `/etc/elspi-release` and `IMAGE_RELEASE`
+
+Every image declares what it is in `/etc/elspi-image.json`
+(`stage-elspi/11-manifest/00-run.sh`), and, from order 2026-09-14#5 onward,
+in a second file rendered FROM the same data: `/etc/elspi-release`, in
+os-release's flat `KEY=VALUE` shape. One declaration, two renderings --
+`stage-elspi/11-manifest/files/render-release.sh` owns the mapping between
+them, so nobody hand-writes the flat file to agree with the JSON by eye.
+
+The **UI and order 2026-09-14#6's reflex updater read the flat file**; the
+verification harness and the delta layer keep reading the JSON. Agreed key
+names:
+
+| `/etc/elspi-release` key | `/etc/elspi-image.json` path        | What it is |
+|---------------------------|--------------------------------------|------------|
+| `ELSPI_IMAGE_RELEASE`     | `.image_release`                     | monotonic integer, see below |
+| `ELSPI_IMAGE_BUILD`       | `.image_build_sha`                   | git rev of this repo at build (elspi is a soft fork of pi-gen; there is no separate checkout) |
+| `ELSPI_IMAGE_DATE`        | `.built_utc`                         | build timestamp, UTC |
+| `ELSPI_REFLEX_COMMIT`     | `.reflex_lock_commit`                | the reflex commit the venv was locked against |
+| `ELSPI_PYTHON`            | `.runtime_versions.python`           | `python3 --version`, measured in the chroot |
+| `ELSPI_KIVY`              | `.runtime_versions.kivy`             | installed Kivy's dist-info version |
+| `ELSPI_UV`                | `.runtime_versions.uv`               | `uv --version`, measured in the chroot |
+
+`ELSPI_IMAGE_RELEASE` is the one field that is **not** measured -- it is a
+manually maintained counter, like a version file, that the reflex updater
+compares against to decide whether an image is new enough. It started at `1`
+for v2026.09.13's successor (the first image to carry this file).
+
+**Bump `IMAGE_RELEASE` whenever an image adds an apt package or moves a
+runtime dependency** -- anything that changes what the venv or the rootfs
+provides such that a delta or the application could depend on the new state.
+A change that touches only this repository's own scripts (a sed anchor, a
+comment, a test) does not need a bump. When in doubt, bump: the updater
+comparing a stale number against a newer image is a much smaller failure than
+the reverse.
+
+`stage-elspi/11-manifest/00-run.sh` measures `ELSPI_PYTHON` and `ELSPI_UV` by
+actually running `python3 --version` / `uv --version` inside the chroot
+(`on_chroot`, the same mechanism `stage-elspi/08-venv` uses to build the venv
+in the first place) rather than hardcoding a number that could drift from
+what the build actually produced. That measurement needs a real chroot, so
+`tests/dry-run-stages.sh` -- which exercises this substage without one, on a
+plain CI runner -- gets a loudly-labelled placeholder value instead
+(`"unmeasured (no chroot available)"` / `"unmeasured (no venv)"`) rather than
+a number nobody took. Only a real pi-gen build produces the true values.
+
 ## What you need on the Pi
 
 **A checkout of this repository**, for the delta scripts. `git` is in the image

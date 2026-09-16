@@ -54,6 +54,7 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
   "image": "elspi-fixture",
   "arch": "armhf",
   "release": "trixie",
+  "built_utc": "2026-01-01T00:00:00Z",
   "service_user": "${SU}",
   "runs_as_root": false,
   "paths": {
@@ -81,6 +82,13 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
     "verified_on_hardware": true
   },
   "reflex_lock_commit": "0000000000000000000000000000000000000000",
+  "image_build_sha": "fixture0000000000000000000000000000000000",
+  "image_release": 1,
+  "runtime_versions": {
+    "python": "Python 3.13.0",
+    "kivy": "2.3.1",
+    "uv": "uv 0.4.18"
+  },
   "cannot_be_verified_without_hardware": [
     "DRM master acquisition (no GPU in the harness)",
     "the touchscreen",
@@ -273,5 +281,17 @@ UNIT
 mkdir -p "${DEST}/etc/systemd/system/cloud-init.target.wants"
 ln -sf ../elspi-first-boot-seed.service \
 	"${DEST}/etc/systemd/system/cloud-init.target.wants/elspi-first-boot-seed.service"
+
+# --- /etc/elspi-release -------------------------------------------------
+# Generated FROM the manifest above by the same script the real build runs
+# (stage-elspi/11-manifest/files/render-release.sh), not hand-written here --
+# a fixture that reimplements the mapping would only prove the author copied
+# it twice the same way. This is the one exception to this file's "written by
+# hand, not by the code under test" rule stated at the top, and it is
+# deliberate for the reason stage-elspi/11-manifest/files/render-release.sh's
+# own header gives: the mapping from JSON keys to flat KEY=VALUE names lives
+# in exactly one place.
+HERE="$(cd "$(dirname "$0")" && pwd)"
+bash "${HERE}/../stage-elspi/11-manifest/files/render-release.sh" generate "${DEST}" >/dev/null
 
 echo "fixture built at ${DEST}"

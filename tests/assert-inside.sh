@@ -192,6 +192,44 @@ else
 	ok "reflex is absent from the image venv (it is a delta)"
 fi
 
+# --- /etc/elspi-release agrees with /etc/elspi-image.json (order 2026-09-14#5) ---
+#
+# The generation logic lives in stage-elspi/11-manifest/files/render-release.sh
+# (its `validate` mode does the same three checks); NOT shelled out to here,
+# because this script is copied into the rootfs and run ALONE -- see
+# verify-image.sh's `install -m 0755 ... assert-inside.sh ${ASSERT_BIN}` --
+# so it cannot assume anything else from the source tree rode along with it.
+if [ -f /etc/elspi-release ]; then
+	ok "/etc/elspi-release exists"
+
+	if grep -vE '^[A-Za-z_][A-Za-z0-9_]*=.*$|^[[:space:]]*(#.*)?$' /etc/elspi-release | grep -q .; then
+		bad "/etc/elspi-release parses as KEY=VALUE"
+	else
+		ok "/etc/elspi-release parses as KEY=VALUE"
+	fi
+
+	# Sourced in a SUBSHELL, never this one, so a malformed flat file cannot
+	# clobber this script's own variables.
+	FLAT_RELEASE="$(set -a; . /etc/elspi-release 2>/dev/null; printf '%s' "${ELSPI_IMAGE_RELEASE:-}")"
+	FLAT_REFLEX="$(set -a; . /etc/elspi-release 2>/dev/null; printf '%s' "${ELSPI_REFLEX_COMMIT:-}")"
+	JSON_RELEASE="$(python3 -c "import json; print(json.load(open('/etc/elspi-image.json')).get('image_release',''))" 2>/dev/null)"
+	JSON_REFLEX="$(python3 -c "import json; print(json.load(open('/etc/elspi-image.json')).get('reflex_lock_commit',''))" 2>/dev/null)"
+
+	if [ -n "${JSON_RELEASE}" ] && [ "${FLAT_RELEASE}" = "${JSON_RELEASE}" ]; then
+		ok "ELSPI_IMAGE_RELEASE (${FLAT_RELEASE}) agrees with /etc/elspi-image.json"
+	else
+		bad "ELSPI_IMAGE_RELEASE ('${FLAT_RELEASE}') agrees with the manifest's image_release ('${JSON_RELEASE}')"
+	fi
+
+	if [ -n "${JSON_REFLEX}" ] && [ "${FLAT_REFLEX}" = "${JSON_REFLEX}" ]; then
+		ok "ELSPI_REFLEX_COMMIT (${FLAT_REFLEX}) agrees with /etc/elspi-image.json"
+	else
+		bad "ELSPI_REFLEX_COMMIT ('${FLAT_REFLEX}') agrees with the manifest's reflex_lock_commit ('${JSON_REFLEX}')"
+	fi
+else
+	bad "/etc/elspi-release exists"
+fi
+
 # --- units the delta layer will drop in must be VALID once present ---------
 # Nothing to verify yet at image time; recorded so the delta harness inherits
 # the obligation rather than discovering it.

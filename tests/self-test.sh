@@ -31,6 +31,25 @@ run_harness() { # -> 0 if harness passed, 1 if it failed
 	"${HERE}/verify-image.sh" "${FIX}" >"${WORK}/out.txt" 2>&1
 }
 
+# --- /etc/elspi-release (order 2026-09-14#5) ---------------------------
+#
+# This one does NOT go through run_harness()/verify-image.sh. That order's
+# bound is an explicit allow-list -- stage-elspi/11-manifest/, this file,
+# make-fixture.sh, assert-inside.sh, docs/provisioning.md -- and
+# tests/verify-image.sh is not on it, so the Tier-2 offline harness does not
+# (yet) know /etc/elspi-release exists. See REPORT.md for the gap this
+# leaves: a real build's verify-image.sh run does not check this file at all
+# today; only this self-test and the booted/chrooted assert-inside.sh do.
+#
+# So "the harness" for THESE mutations is
+# stage-elspi/11-manifest/files/render-release.sh's own `validate` mode,
+# exercised directly on the fixture -- the same standalone-script split that
+# lets it run without a chroot in the first place.
+run_release_check() { # -> 0 if the release file checks out, 1 if it failed
+	"${HERE}/../stage-elspi/11-manifest/files/render-release.sh" validate "${FIX}" \
+		>"${WORK}/out.txt" 2>&1
+}
+
 expect_green() {
 	"${HERE}/make-fixture.sh" "${FIX}" >/dev/null
 	if run_harness; then
@@ -54,6 +73,33 @@ mutate() { # mutate <name> <shell to break the fixture>
 		FAILED=$((FAILED+1))
 	else
 		echo "  OK    harness went red for: ${name}"
+		PASSED=$((PASSED+1))
+	fi
+}
+
+expect_release_green() {
+	"${HERE}/make-fixture.sh" "${FIX}" >/dev/null
+	if run_release_check; then
+		echo "  OK    baseline fixture passes the /etc/elspi-release check"
+		PASSED=$((PASSED+1))
+	else
+		echo "  BROKEN baseline fixture FAILS the release check -- the fixture is"
+		echo "         wrong, so no mutation below proves anything. Output:"
+		sed 's/^/           /' "${WORK}/out.txt"
+		FAILED=$((FAILED+1))
+	fi
+}
+
+mutate_release() { # mutate_release <name> <shell to break the fixture>
+	local name="$1"; shift
+	"${HERE}/make-fixture.sh" "${FIX}" >/dev/null
+	( cd "${FIX}" && eval "$*" ) >/dev/null 2>&1
+	if run_release_check; then
+		echo "  MISS  release check stayed GREEN after: ${name}"
+		echo "        ^ this property is NOT actually enforced."
+		FAILED=$((FAILED+1))
+	else
+		echo "  OK    release check went red for: ${name}"
 		PASSED=$((PASSED+1))
 	fi
 }
@@ -269,6 +315,19 @@ mutate "the manifest is not valid JSON" \
 	"printf 'not json' > etc/elspi-image.json"
 mutate "the manifest is missing entirely" \
 	"rm -f etc/elspi-image.json"
+
+echo
+echo "== /etc/elspi-release (order 2026-09-14#5) =="
+echo "   Checked via render-release.sh validate, not verify-image.sh -- see the"
+echo "   comment above run_release_check() for why."
+expect_release_green
+
+mutate_release "the release file is missing" \
+	"rm -f etc/elspi-release"
+mutate_release "the flat file and the manifest disagree on REFLEX_COMMIT" \
+	"sed -i 's|^ELSPI_REFLEX_COMMIT=.*|ELSPI_REFLEX_COMMIT=\"deadbeef\"|' etc/elspi-release"
+mutate_release "ELSPI_IMAGE_RELEASE is not an integer" \
+	"sed -i 's|^ELSPI_IMAGE_RELEASE=.*|ELSPI_IMAGE_RELEASE=notanumber|' etc/elspi-release"
 
 echo
 echo "== result =="

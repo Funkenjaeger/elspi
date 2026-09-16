@@ -16,11 +16,86 @@
 #    that assumes wrong costs a lathe power cycle.
 
 MANIFEST="${ROOTFS_DIR}/etc/elspi-image.json"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 REFLEX_COMMIT="$(tr -d '[:space:]' < "${ROOTFS_DIR}/etc/elspi/reflex-lock-commit")"
 [ -n "${REFLEX_COMMIT}" ] || { echo "FATAL: reflex-lock-commit missing or empty"; exit 1; }
 
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# IMAGE_BUILD_SHA -- the git rev of THIS repo (elspi is a soft fork of pi-gen
+# itself; there is no separate "elspi repo" checkout) at build time.
+# build-docker.sh:67 already computes this on the host and forwards it into
+# the container by NAME as GIT_HASH (build-elspi.sh's trap #2) specifically so
+# every stage can see it; 12-first-boot-seed/00-run.sh already reads it for
+# the same reason. Read here, not re-derived with a second `git rev-parse`,
+# so there is one measurement of "what commit is this build" and not two that
+# could disagree if the build runs from a dirty tree.
+IMAGE_BUILD_SHA="${GIT_HASH:-unknown}"
+
+# IMAGE_RELEASE -- the monotonic integer the reflex updater (order
+# 2026-09-14#6) compares against. NOT measured: it is a manually maintained
+# counter, like a version file, bumped by the rule in docs/provisioning.md.
+# Starts at 1 for v2026.09.13's successor -- this is that successor.
+IMAGE_RELEASE=1
+
+# The runtime versions ACTUALLY INSTALLED, measured now rather than hardcoded,
+# so a version bump elsewhere in the build (a trixie point release, a Kivy or
+# uv version bump in files/uv.lock) cannot leave the manifest lying about what
+# shipped.
+#
+# python and uv are ARM binaries in this rootfs; on_chroot runs them under the
+# qemu-user emulation build-elspi.sh sets up, exactly as stage-elspi/08-venv
+# already does to build the venv in the first place.
+#
+# GUARDED on `on_chroot` being DEFINED, not just attempted-and-caught: a real
+# pi-gen build always has it (build.sh sources scripts/common before any
+# stage runs), but tests/dry-run-stages.sh -- which CI's tier1 job runs on a
+# plain Ubuntu runner with no chroot and no qemu, deliberately, per its own
+# header -- calls this script directly and does not. That harness already
+# documents three OTHER substages (04-serial, 05-service-user, 08-venv) it
+# cannot exercise chroot-free; this is now a fourth, and the fallback below
+# says so loudly rather than reporting a measured value that was never taken.
+if command -v on_chroot >/dev/null 2>&1; then
+	RUNTIME_VERSIONS="$(on_chroot << 'EOF'
+set -e
+/usr/bin/python3 --version 2>&1
+/usr/local/bin/uv --version 2>&1
+EOF
+	)"
+	PYTHON_VERSION="$(echo "${RUNTIME_VERSIONS}" | sed -n '1p')"
+	UV_VERSION="$(echo "${RUNTIME_VERSIONS}" | sed -n '2p')"
+	[ -n "${PYTHON_VERSION}" ] || { echo "FATAL: could not measure python3 --version in the chroot"; exit 1; }
+	[ -n "${UV_VERSION}" ] || { echo "FATAL: could not measure uv --version in the chroot"; exit 1; }
+else
+	echo "  WARNING: on_chroot is not defined -- this is not a real pi-gen build"
+	echo "           (tests/dry-run-stages.sh, most likely). python/uv versions"
+	echo "           are UNMEASURED placeholders, not what would actually ship."
+	PYTHON_VERSION="unmeasured (no chroot available)"
+	UV_VERSION="unmeasured (no chroot available)"
+fi
+
+# Kivy's version comes from its installed dist-info, not from importing it:
+# `import kivy` creates $HOME/.kivy (see tests/assert-inside.sh's own note on
+# this, and the 2026-09-01 non-root decision), and the manifest stage has no
+# business creating that as a side effect of measuring a version string. This
+# is also, precisely, "measure the venv" rather than "assume 08-venv's pin
+# matches what's on disk": if the .so build failed over to a different
+# resolved version, this catches it instead of reporting yesterday's number.
+#
+# Same dry-run guard as above, on the venv's PRESENCE rather than a command:
+# tests/dry-run-stages.sh never builds /opt/reflex-venv (08-venv is one of the
+# substages it explicitly cannot exercise chroot-free), so its absence here
+# means "not a real build" rather than "the build lost Kivy".
+if [ -d "${ROOTFS_DIR}/opt/reflex-venv" ]; then
+	KIVY_DIST_INFO="$(find "${ROOTFS_DIR}/opt/reflex-venv" -maxdepth 5 -iname 'kivy-*.dist-info' -print -quit)"
+	[ -n "${KIVY_DIST_INFO}" ] || { echo "FATAL: no kivy-*.dist-info found under /opt/reflex-venv"; exit 1; }
+	KIVY_VERSION="$(basename "${KIVY_DIST_INFO}" .dist-info | sed 's/^kivy-//')"
+else
+	echo "  WARNING: /opt/reflex-venv does not exist -- this is not a real pi-gen"
+	echo "           build. kivy version is an UNMEASURED placeholder."
+	KIVY_VERSION="unmeasured (no venv)"
+fi
 
 cat > "${MANIFEST}" <<- JSON
 	{
@@ -30,6 +105,14 @@ cat > "${MANIFEST}" <<- JSON
 	  "built_utc": "${BUILD_DATE}",
 	  "pi_gen_upstream_pin": "314262c",
 	  "reflex_lock_commit": "${REFLEX_COMMIT}",
+	  "image_build_sha": "${IMAGE_BUILD_SHA}",
+	  "image_release": ${IMAGE_RELEASE},
+
+	  "runtime_versions": {
+	    "python": "${PYTHON_VERSION}",
+	    "kivy": "${KIVY_VERSION}",
+	    "uv": "${UV_VERSION}"
+	  },
 
 	  "service_user": "${FIRST_USER_NAME}",
 	  "runs_as_root": false,
@@ -92,7 +175,8 @@ if command -v python3 >/dev/null 2>&1; then
 fi
 
 for key in log_dir config_dir venv app_parent default_mode reflex_lock_commit \
-           first_boot_seed unit script; do
+           first_boot_seed unit script image_build_sha image_release \
+           runtime_versions; do
 	grep -q "\"${key}\"" "${MANIFEST}" || {
 		echo "FATAL: manifest is missing required key '${key}'"
 		exit 1
@@ -100,3 +184,14 @@ for key in log_dir config_dir venv app_parent default_mode reflex_lock_commit \
 done
 
 echo "  wrote /etc/elspi-image.json (reflex lock ${REFLEX_COMMIT})"
+
+# /etc/elspi-release -- the SAME data, reshaped for the UI and the reflex
+# updater (order 2026-09-14#6). One declaration (above), two renderings: this
+# is the flat os-release-shaped one. Generated FROM the manifest just written,
+# by files/render-release.sh, so there is exactly one place that maps JSON
+# keys to flat KEY=VALUE names and the tests can drive that same mapping on a
+# synthetic fixture without a chroot.
+bash "${HERE}/files/render-release.sh" generate "${ROOTFS_DIR}" || {
+	echo "FATAL: render-release.sh generate failed"
+	exit 1
+}
