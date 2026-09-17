@@ -104,6 +104,56 @@ mutate_release() { # mutate_release <name> <shell to break the fixture>
 	fi
 }
 
+# --- USB automount (stage-elspi/13-usb-automount, order 2026-09-16#6) -------
+#
+# Same situation as /etc/elspi-release above: this order's bound is an
+# explicit allow-list -- stage-elspi/13-usb-automount/, tests/assert-inside.sh,
+# tests/self-test.sh, tests/make-fixture.sh, tests/test-usb-automount-name.sh,
+# docs/provisioning.md -- and tests/verify-image.sh is not on it. So this
+# checks the fixture's udev rule and helper directly, the same way
+# run_release_check checks the fixture's release file directly.
+run_usb_automount_check() { # -> 0 if the USB automount contract holds, 1 if broken
+	# Explicit && chaining, NOT `set -e` in a subshell: called repeatedly as
+	# an `if` condition (once per mutation, same as run_release_check), and
+	# a `set -e` subshell used that way stopped honoring errexit after the
+	# first call -- observed directly in this sandbox's bash 5.2.21, where a
+	# later `[ -x ... ]` failure silently fell through to the next command
+	# instead of aborting the subshell, so the LAST command's (unrelated)
+	# exit status decided the result instead. `&&` short-circuiting does not
+	# depend on that errexit machinery at all.
+	local RULE="${FIX}/etc/udev/rules.d/90-elspi-usb-automount.rules"
+	local HELPER="${FIX}/usr/local/lib/elspi/elspi-usb-mount-name"
+	{ [ -f "${RULE}" ] && [ -x "${HELPER}" ] && grep -q 'noexec' "${RULE}"; } \
+		>"${WORK}/out.txt" 2>&1
+}
+
+expect_usb_automount_green() {
+	"${HERE}/make-fixture.sh" "${FIX}" >/dev/null
+	if run_usb_automount_check; then
+		echo "  OK    baseline fixture passes the USB automount check"
+		PASSED=$((PASSED+1))
+	else
+		echo "  BROKEN baseline fixture FAILS the USB automount check -- the fixture is"
+		echo "         wrong, so no mutation below proves anything. Output:"
+		sed 's/^/           /' "${WORK}/out.txt"
+		FAILED=$((FAILED+1))
+	fi
+}
+
+mutate_usb_automount() { # mutate_usb_automount <name> <shell to break the fixture>
+	local name="$1"; shift
+	"${HERE}/make-fixture.sh" "${FIX}" >/dev/null
+	( cd "${FIX}" && eval "$*" ) >/dev/null 2>&1
+	if run_usb_automount_check; then
+		echo "  MISS  USB automount check stayed GREEN after: ${name}"
+		echo "        ^ this property is NOT actually enforced."
+		FAILED=$((FAILED+1))
+	else
+		echo "  OK    USB automount check went red for: ${name}"
+		PASSED=$((PASSED+1))
+	fi
+}
+
 echo "== baseline =="
 expect_green
 
@@ -328,6 +378,20 @@ mutate_release "the flat file and the manifest disagree on REFLEX_COMMIT" \
 	"sed -i 's|^ELSPI_REFLEX_COMMIT=.*|ELSPI_REFLEX_COMMIT=\"deadbeef\"|' etc/elspi-release"
 mutate_release "ELSPI_IMAGE_RELEASE is not an integer" \
 	"sed -i 's|^ELSPI_IMAGE_RELEASE=.*|ELSPI_IMAGE_RELEASE=notanumber|' etc/elspi-release"
+
+echo
+echo "== USB automount (order 2026-09-16#6) =="
+echo "   Checked directly against the fixture's udev rule and helper, not"
+echo "   through verify-image.sh -- see the comment above"
+echo "   run_usb_automount_check() for why."
+expect_usb_automount_green
+
+mutate_usb_automount "the udev rule missing" \
+	"rm -f etc/udev/rules.d/90-elspi-usb-automount.rules"
+mutate_usb_automount "the sanitizer helper not executable" \
+	"chmod 0644 usr/local/lib/elspi/elspi-usb-mount-name"
+mutate_usb_automount "'noexec' dropped from the systemd-mount options" \
+	"sed -i 's/,noexec//' etc/udev/rules.d/90-elspi-usb-automount.rules"
 
 echo
 echo "== result =="

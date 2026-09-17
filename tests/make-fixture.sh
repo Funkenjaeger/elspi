@@ -282,6 +282,34 @@ mkdir -p "${DEST}/etc/systemd/system/cloud-init.target.wants"
 ln -sf ../elspi-first-boot-seed.service \
 	"${DEST}/etc/systemd/system/cloud-init.target.wants/elspi-first-boot-seed.service"
 
+# --- USB automount (stage-elspi/13-usb-automount, order 2026-09-16#6) ------
+# Written by hand, for the reason stated at the top of this file: mirrors
+# the SHAPE the real stage installs (a udev rule naming the service user's
+# uid/gid and carrying noexec among the systemd-mount options, plus an
+# executable sanitizer helper) rather than depending on the real rule's
+# exact wording, so self-test.sh's mutations below have a real contract to
+# break rather than a copy of the file under test.
+#
+# @@SU_UID@@/@@SU_GID@@ substituted the same way the real stage substitutes
+# @@SERVICE_UID@@/@@SERVICE_GID@@ -- a quoted heredoc first, so none of the
+# udev rule's own $-syntax ($env{...}, $kernel, $devnode) is touched by THIS
+# script's shell, then a targeted sed for just the two placeholders.
+mkdir -p "${DEST}/etc/udev/rules.d"
+cat > "${DEST}/etc/udev/rules.d/90-elspi-usb-automount.rules" <<'RULE'
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", ENV{ID_FS_TYPE}=="vfat|exfat|ntfs", \
+	PROGRAM="/usr/local/lib/elspi/elspi-usb-mount-name '$env{ID_FS_LABEL}' '$kernel'", \
+	ENV{ELSPI_MOUNT_NAME}="%c", \
+	RUN+="/usr/bin/systemd-mount --no-block --automount=yes --bind-device --collect -o uid=@@SU_UID@@,gid=@@SU_GID@@,umask=022,nosuid,nodev,noexec $devnode /media/$env{ELSPI_MOUNT_NAME}"
+RULE
+sed -i -e "s/@@SU_UID@@/${SU_UID}/g" -e "s/@@SU_GID@@/${SU_GID}/g" \
+	"${DEST}/etc/udev/rules.d/90-elspi-usb-automount.rules"
+chmod 0644 "${DEST}/etc/udev/rules.d/90-elspi-usb-automount.rules"
+
+mkdir -p "${DEST}/usr/local/lib/elspi"
+printf '#!/bin/bash\n# fixture stub: elspi-usb-mount-name\nprintf "%%s\\n" "${1:-fallback}"\n' \
+	> "${DEST}/usr/local/lib/elspi/elspi-usb-mount-name"
+chmod 0755 "${DEST}/usr/local/lib/elspi/elspi-usb-mount-name"
+
 # --- /etc/elspi-release -------------------------------------------------
 # Generated FROM the manifest above by the same script the real build runs
 # (stage-elspi/11-manifest/files/render-release.sh), not hand-written here --

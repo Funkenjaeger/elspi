@@ -235,6 +235,85 @@ fi
 # the obligation rather than discovering it.
 echo "  NOTE  reflex-ui.service is a DELTA artifact and is absent by design."
 
+# --- USB automount (stage-elspi/13-usb-automount, order 2026-09-16#6) ------
+# Reads unit files and installed files off disk, exactly like the checks
+# above -- answerable booted or chrooted, no mount actually needs to happen
+# for these.
+USB_RULE=/etc/udev/rules.d/90-elspi-usb-automount.rules
+USB_HELPER=/usr/local/lib/elspi/elspi-usb-mount-name
+
+chk "the USB automount udev rule exists (${USB_RULE})" \
+	test -f "${USB_RULE}"
+if [ -f "${USB_RULE}" ]; then
+	if [ "$(stat -c %a "${USB_RULE}" 2>/dev/null)" = "644" ]; then
+		ok "the USB automount udev rule is mode 644"
+	else
+		bad "the USB automount udev rule is mode 644 (got $(stat -c %a "${USB_RULE}" 2>/dev/null))"
+	fi
+else
+	bad "the USB automount udev rule is mode 644 (file missing)"
+fi
+
+chk "the USB automount name-sanitizer helper exists (${USB_HELPER})" \
+	test -f "${USB_HELPER}"
+chk "the USB automount name-sanitizer helper is executable" \
+	test -x "${USB_HELPER}"
+if [ -f "${USB_HELPER}" ]; then
+	if [ "$(stat -c %a "${USB_HELPER}" 2>/dev/null)" = "755" ]; then
+		ok "the USB automount helper is mode 755"
+	else
+		bad "the USB automount helper is mode 755 (got $(stat -c %a "${USB_HELPER}" 2>/dev/null))"
+	fi
+else
+	bad "the USB automount helper is mode 755 (file missing)"
+fi
+
+# The rule must carry the SERVICE user's ACTUAL uid/gid from THIS image's own
+# /etc/passwd, not a literal chosen when the rule was written -- a rule that
+# happens to say uid=1000 because 1000 is usually the first user is
+# indistinguishable from a rule that CORRECTLY resolved the service user's
+# uid, right up until an image is built with a different first user, or the
+# uid allocation shifts upstream. So this checks AGREEMENT with the real
+# account, not just that some number is present.
+if [ -f "${USB_RULE}" ]; then
+	FIRST_USER="$(awk -F: '$3>=1000 && $3<65534{print $1; exit}' /etc/passwd)"
+	if [ -n "${FIRST_USER}" ]; then
+		EXPECT_UID="$(id -u "${FIRST_USER}" 2>/dev/null || true)"
+		EXPECT_GID="$(id -g "${FIRST_USER}" 2>/dev/null || true)"
+		if [ -n "${EXPECT_UID}" ] && grep -q "uid=${EXPECT_UID}\b" "${USB_RULE}"; then
+			ok "the USB automount rule's uid= agrees with ${FIRST_USER}'s real uid (${EXPECT_UID})"
+		else
+			bad "the USB automount rule's uid= agrees with ${FIRST_USER}'s real uid (${EXPECT_UID}); rule carries: $(grep -o 'uid=[0-9]*' "${USB_RULE}" || echo NONE)"
+		fi
+		if [ -n "${EXPECT_GID}" ] && grep -q "gid=${EXPECT_GID}\b" "${USB_RULE}"; then
+			ok "the USB automount rule's gid= agrees with ${FIRST_USER}'s real gid (${EXPECT_GID})"
+		else
+			bad "the USB automount rule's gid= agrees with ${FIRST_USER}'s real gid (${EXPECT_GID}); rule carries: $(grep -o 'gid=[0-9]*' "${USB_RULE}" || echo NONE)"
+		fi
+	else
+		unk "no non-system user found in /etc/passwd to compare the rule's uid/gid against"
+	fi
+
+	# The number must have a NAME behind it in the source the rule was
+	# rendered from, not just be a bare literal here -- i.e. this image's
+	# rule is not hand-edited. The rendered rule necessarily contains only
+	# the resolved number (that is the point of the substitution), so the
+	# thing this can check on a live image is that it is NOT the disarmed
+	# template placeholder and NOT the single most common accidental
+	# literal (root, uid=0), either of which would indicate the
+	# substitution never ran.
+	if grep -q '@@SERVICE_UID@@\|@@SERVICE_GID@@' "${USB_RULE}"; then
+		bad "the USB automount rule still carries an unsubstituted @@SERVICE_UID@@/@@SERVICE_GID@@ placeholder"
+	else
+		ok "the USB automount rule has no leftover @@SERVICE_UID@@/@@SERVICE_GID@@ placeholder"
+	fi
+	if grep -q 'uid=0\b' "${USB_RULE}"; then
+		bad "the USB automount rule mounts as uid=0 (root) -- the service user's uid did not resolve"
+	else
+		ok "the USB automount rule does not mount as uid=0"
+	fi
+fi
+
 echo "  ---"
 echo "  ${P} passed, ${F} failed, ${U} unknown"
 if [ "${F}" -eq 0 ]; then

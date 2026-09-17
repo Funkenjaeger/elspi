@@ -35,6 +35,76 @@ and the credentials that could not be typed into Imager.
     left uncommissioned, and it needs no SSH, no CLI and no re-run of
     `provision.sh`.
 
+## USB sticks
+
+The **USB import/export** mentioned above (and the reflex Setup screen's
+Export button, for pulling a commissioning bundle back off the machine) needs
+a plugged-in stick to actually show up as a filesystem before either button
+can see it. `stage-elspi/13-usb-automount` is what makes that happen; nothing
+in the application mounts anything itself.
+
+**Consumer**: `ui/reflex/utils/usb.py`'s `list_removable()` (the reflex
+`integration` branch) reads `/proc/mounts` and treats anything mounted under
+`/media` or `/run/media` as removable media — no udisks, no subprocess, no
+polkit prompt, by that module's own design. `export_bundle()` and
+`find_bundles()` both build on it. This stage mounts under `/media/<name>`,
+one of those two roots, and changes nothing on the reflex side.
+
+**Mechanism**: a udev rule
+(`/etc/udev/rules.d/90-elspi-usb-automount.rules`) matches `ACTION=="add"`
+USB block partitions carrying a filesystem (`ENV{ID_FS_USAGE}=="filesystem"`)
+of type `vfat`, `exfat` or `ntfs`, runs a small sanitizer helper
+(`/usr/local/lib/elspi/elspi-usb-mount-name`) to turn the partition's
+filesystem label into a safe, collision-free directory name, and hands the
+result to **`systemd-mount`** — not `mount(8)` and not udisks2. That is not a
+style preference: `systemd-udevd.service` ships `PrivateMounts=yes`, so a
+`mount` invoked directly from a udev rule's `RUN+=` would only take effect
+inside udevd's own private mount namespace and would never become visible to
+`reflex-ui`. `systemd-mount` instead asks `systemd` (PID 1, unsandboxed) to
+perform the mount over its D-Bus API, which is why it works from here at all.
+`--no-block` is required, not optional, because `RUN+=` programs must be
+short-lived (`udev(7)`).
+
+The mount is owned by the **service user** — `-o uid=,gid=` are the service
+user's real uid/gid, read out of the image's own `/etc/passwd` at build time
+and substituted into the rule (never a hardcoded number), because the vfat
+and exfat kernel drivers accept only a numeric `uid=`/`gid=`, never a
+username. `umask=022,nosuid,nodev,noexec` round out the mount options.
+
+**Filesystems**: `vfat` and `exfat` are kernel drivers on this image's
+Raspberry Pi kernel (`docs/design/runtime-inventory.md` records
+`6.18.34+rpt-rpi-v8`); this was **not independently verified against a built
+image** in this repository — no pi-gen/docker build was run to produce one —
+and is worth confirming on real hardware. `ntfs` here means **ntfs-3g**
+(FUSE), already installed by `stage2/01-sys-tweaks/00-packages` for its own
+reasons; that package is what provides the `mount.ntfs` helper `-t ntfs`
+dispatches to. It is **not** the newer in-kernel `ntfs3` driver. No package
+was added by this stage: `systemd-mount`, `blkid`/`mount` and the two kernel
+drivers above are all already part of the base image or the RPi kernel, and
+`ntfs-3g` is already installed for reasons of its own
+(`stage2/01-sys-tweaks/00-packages`, which also installs `udisks2` — unused
+by this design; see below).
+
+**Removal**: the rule passes **`--bind-device`** to `systemd-mount`, which
+binds the automount unit to the backing device's lifetime — `systemd-mount(1)`
+is explicit that *without* it, "the automount unit stays around, and
+subsequent accesses will block until backing device is replugged" after a
+stick is pulled. `--bind-device` is what makes removal actually unmount
+cleanly; `--collect` on top unloads the resulting stopped/failed transient
+units instead of leaving them as clutter in `systemctl list-units`. There is
+deliberately no separate `ACTION=="remove"` rule calling `systemd-mount
+--umount` — by the time a remove event fires, the device node it would need
+to resolve is already gone, and `--bind-device` has already torn the mount
+down.
+
+**Why not udisks2**: `stage2/01-sys-tweaks/00-packages` already installs
+`udisks2`, for reasons unrelated to this stage, but this design does not use
+it. udisks2 authorizes mounts over polkit against a logind session, and the
+service user runs `reflex-ui` with none — the same failure shape
+`stage-elspi/05-service-user` already worked around for NetworkManager (see
+its polkit rule). A udev rule plus `systemd-mount` sidesteps that
+requirement entirely.
+
 ## Image identity: `/etc/elspi-release` and `IMAGE_RELEASE`
 
 Every image declares what it is in `/etc/elspi-image.json`
