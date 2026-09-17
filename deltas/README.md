@@ -18,6 +18,10 @@ detail that does not belong in it.
 | `02-restore.sh` | **refuses to invent data**; hard-fails when the backup is absent | yes, but never silently |
 | `03-interactive.sh` | blocks on a human; asks, never assumes | yes; skips what is already set |
 
+`02-restore.sh` (and `provision.sh` above it) also accepts `--fresh` in place
+of `--config-backup`, for first commissioning — see "What is NOT here yet"
+below for what it does and does not do.
+
 `docs/design/seam.md` is explicit that the differing failure contracts are the
 point, and that collapsing them loses it:
 
@@ -116,10 +120,22 @@ Nothing edits the app's unit file.
 
 ## What is NOT here yet
 
-- **First commissioning.** `provision.sh` requires `--config-backup` and a
-  brand-new machine has none. The refusal is correct; the missing path is a real
-  gap, and a `--fresh` flag is not the fix. See the warning at the top of
-  `docs/provisioning.md`.
+- **First commissioning, from this tooling's point of view, is `--fresh`.**
+  `provision.sh` and `02-restore.sh` accept `--fresh` in place of
+  `--config-backup`: it is mutually exclusive with `--config-backup`, it skips
+  the restore phase entirely (nothing is written into `CONFIG_DIR`, nothing is
+  generated — the application's own defaults apply), and it refuses if
+  `CONFIG_DIR` already holds anything, so a fresh provision can never mask
+  existing commissioned data. It prints an UNCOMMISSIONED banner at the start
+  of phase 2 and again in its final summary: axis geometry, servo polarity,
+  backlash calibration and Z scale counts/mm are commissioned machine data
+  that nothing here can generate, and every one of them must still be measured
+  off the physical lathe before the machine is trusted. With neither flag,
+  provisioning refuses exactly as it always has — `--fresh` is a deliberate
+  choice, never a default. See `docs/provisioning.md` for the operator-facing
+  version, including where to point a first-commissioning user who *does* have
+  commissioned values to bring onto the machine (the USB import on the reflex
+  Setup screen, not this flag).
 - **Monitoring enrolment.** Phase 3 used to have a fifth step that installed a
   purpose-scoped forced-command SSH key for one estate's collector. It named a
   particular network, so it is a **site hook** now (see above) and lives

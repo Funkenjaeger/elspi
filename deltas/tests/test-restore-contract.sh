@@ -100,5 +100,98 @@ else
 fi
 
 echo
+echo "== --fresh: first commissioning, named on purpose =="
+
+# 1. no flags at all -- still refuses, same as before --fresh existed. This
+#    pins the kept hard fail: --fresh must be a deliberate opt-in, and its
+#    absence must not change behaviour by one byte.
+refuses "no flags at all (kept hard fail, unchanged)"
+
+# 2. --fresh with --config-backup -- mutually exclusive, refused BEFORE
+#    either is acted on, naming both so the operator knows which one to drop.
+OUT="$("${RESTORE}" --fresh --config-backup "${WORK}/good" 2>&1)"; RC=$?
+if [ "${RC}" -eq 0 ]; then
+	printf '  FAIL  --fresh with --config-backup\n        it EXITED 0 -- both were accepted\n'
+	FAIL=$((FAIL+1))
+elif ! printf '%s' "${OUT}" | grep -qi 'mutually exclusive'; then
+	printf '  FAIL  --fresh with --config-backup\n        refused, but did not name both as mutually exclusive:\n%s\n' \
+		"$(printf '%s' "${OUT}" | sed 's/^/          /')"
+	FAIL=$((FAIL+1))
+else
+	printf '  ok    --fresh with --config-backup refused, naming both\n'
+	PASS=$((PASS+1))
+fi
+
+# 3. --fresh alone, CONFIG_DIR empty or absent -- true of any machine that is
+#    not a provisioned elspi Pi, which is exactly this sandbox (confirmed:
+#    resolve_paths falls back to /var/lib/reflex-config, which does not exist
+#    here). The restore phase must be skipped entirely -- no root needed,
+#    nothing written -- and the UNCOMMISSIONED banner must appear twice: once
+#    up front, once in the final summary.
+OUT="$("${RESTORE}" --fresh 2>&1)"; RC=$?
+BANNERS="$(printf '%s' "${OUT}" | grep -c 'UNCOMMISSIONED')"
+if [ "${RC}" -ne 0 ]; then
+	printf '  FAIL  --fresh on an empty CONFIG_DIR\n        exited %d, expected 0:\n%s\n' \
+		"${RC}" "$(printf '%s' "${OUT}" | sed 's/^/          /')"
+	FAIL=$((FAIL+1))
+elif [ "${BANNERS}" -lt 2 ]; then
+	printf '  FAIL  --fresh on an empty CONFIG_DIR\n        UNCOMMISSIONED banner appeared %s time(s), expected 2:\n%s\n' \
+		"${BANNERS}" "$(printf '%s' "${OUT}" | sed 's/^/          /')"
+	FAIL=$((FAIL+1))
+else
+	printf '  ok    --fresh on an empty CONFIG_DIR: restore skipped, banner printed twice\n'
+	PASS=$((PASS+1))
+fi
+
+# 4. --fresh must refuse if CONFIG_DIR already holds a file. CONFIG_DIR is not
+#    an argument the caller controls -- it is resolved by lib.sh from
+#    /etc/elspi-image.json or a hardcoded default, and pointing that at a
+#    fixture would mean editing lib.sh, which this change does not touch. An
+#    unprivileged mount namespace gets a fixture CONFIG_DIR without editing
+#    lib.sh, touching the real filesystem, or needing real root: a tmpfs over
+#    /var/lib exists only inside the subprocess and is gone when it exits.
+#    Where user namespaces are unavailable, this case is SKIPPED rather than
+#    faked -- it must not report ok for something it did not check.
+if command -v unshare >/dev/null 2>&1 && unshare --mount --map-root-user true 2>/dev/null; then
+	NS_OUT="$(unshare --mount --map-root-user bash -c '
+		set -u
+		mount -t tmpfs tmpfs /var/lib || exit 90
+		mkdir -p /var/lib/reflex-config || exit 91
+		echo "pre-existing" > /var/lib/reflex-config/pre-existing || exit 92
+		BEFORE="$(md5sum /var/lib/reflex-config/pre-existing)"
+		SCRIPT_OUT="$('"${RESTORE}"' --fresh 2>&1)"; SCRIPT_RC=$?
+		AFTER="$(md5sum /var/lib/reflex-config/pre-existing 2>&1)"
+		printf "RC=%s\n" "${SCRIPT_RC}"
+		printf "%s\n" "${SCRIPT_OUT}"
+		printf "BEFORE=%s\n" "${BEFORE}"
+		printf "AFTER=%s\n" "${AFTER}"
+	' 2>&1)"; NS_RC=$?
+	SCRIPT_RC="$(printf '%s' "${NS_OUT}" | sed -n 's/^RC=//p')"
+	BEFORE_HASH="$(printf '%s' "${NS_OUT}" | sed -n 's/^BEFORE=//p')"
+	AFTER_HASH="$(printf '%s' "${NS_OUT}" | sed -n 's/^AFTER=//p')"
+	if [ "${NS_RC}" -ge 90 ]; then
+		printf '  FAIL  --fresh with a non-empty CONFIG_DIR\n        could not set up the namespace fixture (exit %d):\n%s\n' \
+			"${NS_RC}" "$(printf '%s' "${NS_OUT}" | sed 's/^/          /')"
+		FAIL=$((FAIL+1))
+	elif [ "${SCRIPT_RC}" = "0" ]; then
+		printf '  FAIL  --fresh with a non-empty CONFIG_DIR\n        it EXITED 0 -- the directory was not refused\n'
+		FAIL=$((FAIL+1))
+	elif ! printf '%s' "${NS_OUT}" | grep -qi 'already holds a file'; then
+		printf '  FAIL  --fresh with a non-empty CONFIG_DIR\n        refused, but not for holding a file:\n%s\n' \
+			"$(printf '%s' "${NS_OUT}" | sed 's/^/          /')"
+		FAIL=$((FAIL+1))
+	elif [ "${BEFORE_HASH}" != "${AFTER_HASH}" ]; then
+		printf '  FAIL  --fresh with a non-empty CONFIG_DIR\n        refused correctly, but the directory changed:\n        before: %s\n        after:  %s\n' \
+			"${BEFORE_HASH}" "${AFTER_HASH}"
+		FAIL=$((FAIL+1))
+	else
+		printf '  ok    --fresh with a non-empty CONFIG_DIR: refused, directory untouched (hash matched)\n'
+		PASS=$((PASS+1))
+	fi
+else
+	printf '  skip  --fresh with a non-empty CONFIG_DIR (needs unprivileged user namespaces; unavailable here)\n'
+fi
+
+echo
 echo "== result: ${PASS} ok, ${FAIL} failed =="
 [ "${FAIL}" -eq 0 ] || exit 1

@@ -2,12 +2,25 @@
 # PHASE 2 -- RESTORE. Refuses to invent data.
 #
 #   02-restore.sh --config-backup <dir|tarball> [--firmware <flashed.json>] [--dry-run]
+#   02-restore.sh --fresh [--firmware <flashed.json>] [--dry-run]
 #
 # Checklist item 14, and the one contract docs/design/seam.md says must not be softened:
 #
 #   "Provisioning must RESTORE the commissioned config from backup, never
 #    generate it -- and must fail loudly rather than silently coming up with
 #    defaults if no backup is available."
+#
+# --- --fresh: first commissioning, named on purpose ------------------------
+# A brand-new machine has no backup. --fresh says so as a deliberate, loud
+# choice rather than a guess: it is mutually exclusive with --config-backup,
+# it skips everything below -- no files are written into CONFIG_DIR, nothing
+# is generated, the application's own defaults apply -- and it refuses if
+# CONFIG_DIR already holds anything, because a fresh provision must never
+# mask existing commissioned data. It prints the UNCOMMISSIONED banner at the
+# start of this phase and again in its final summary. First-commissioning
+# users who DO have commissioned values to bring onto the machine should use
+# the USB import on the reflex Setup screen, not this flag -- see
+# docs/provisioning.md.
 #
 # WHAT IS AT STAKE. /var/lib/reflex-config is not configuration-as-code. It is
 # COMMISSIONED MACHINE DATA measured off the physical lathe -- axis geometry,
@@ -35,29 +48,75 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${HERE}/lib.sh"
 
 BACKUP=""
+FRESH=0
 FIRMWARE=""
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--config-backup) BACKUP="${2:-}"; shift 2 ;;
+		--fresh)         FRESH=1; shift ;;
 		--firmware)      FIRMWARE="${2:-}"; shift 2 ;;
 		--dry-run)       DRY_RUN=1; shift ;;
 		*) die "unknown argument: $1" ;;
 	esac
 done
 
+# say/ok/warn/die all print to the terminal; this one is loud on purpose and
+# reused verbatim at the end of the fresh path, so both prints agree exactly.
+uncommissioned_banner() {
+	printf '\n'
+	printf '  %s*** THIS MACHINE IS UNCOMMISSIONED ***%s\n' "${_c_red}" "${_c_off}"
+	say "No commissioned config was restored. Axis geometry, servo polarity,"
+	say "backlash calibration and Z scale counts/mm are the application's own"
+	say "defaults, not this lathe's measured values, and MUST BE MEASURED before"
+	say "this machine is trusted to cut anything."
+	printf '\n'
+}
+
+if [ "${FRESH}" = "1" ] && [ -n "${BACKUP}" ]; then
+	die "--fresh and --config-backup are mutually exclusive.
+
+  --fresh names first commissioning: no backup exists yet, and none should be
+  applied. --config-backup names recovery: a capture exists and should be
+  restored. Naming both does not say which one you mean."
+fi
+
 phase "Phase 2: RESTORE the commissioned config"
 
-need_root
-resolve_service_user
+# CONFIG_DIR is needed by both paths below and resolving it needs neither root
+# nor a service user to exist yet, so it happens unconditionally, up front.
 resolve_paths
 
-# --- THE CONTRACT -----------------------------------------------------------
-# Absent backup is a HARD FAIL. Not a warning, not "continuing with defaults",
-# not an empty directory created for later. The message says what to do,
-# because the person reading it is standing at a lathe.
-if [ -z "${BACKUP}" ]; then
-	printf '\n'
-	die "--config-backup was not given.
+if [ "${FRESH}" = "1" ]; then
+	# --- FRESH: first commissioning, no restore attempted ---------------------
+	# Nothing below writes anything, so nothing below needs root -- root is
+	# required only where this script actually mutates something (the
+	# recovery path, and the firmware manifest below).
+	uncommissioned_banner
+
+	# A fresh provision must never mask existing commissioned data -- from a
+	# previous restore, a previous --fresh, or a hand-edit. Gate on the
+	# content (any file at all), not on whether the path itself exists, the
+	# same principle the recovery path below uses.
+	if [ -d "${CONFIG_DIR}" ] && [ -n "$(ls -A "${CONFIG_DIR}" 2>/dev/null)" ]; then
+		die "--fresh refused: ${CONFIG_DIR} already holds a file.
+
+  A fresh provision must never mask existing commissioned data. If this is a
+  recovery, use --config-backup instead. If this directory is stale, move it
+  aside by hand and re-run --fresh."
+	fi
+
+	ok "${CONFIG_DIR} does not exist or is empty -- nothing restored, nothing written"
+else
+	need_root
+	resolve_service_user
+
+	# --- THE CONTRACT ---------------------------------------------------------
+	# Absent backup is a HARD FAIL. Not a warning, not "continuing with defaults",
+	# not an empty directory created for later. The message says what to do,
+	# because the person reading it is standing at a lathe.
+	if [ -z "${BACKUP}" ]; then
+		printf '\n'
+		die "--config-backup was not given.
 
   REFUSING TO PROVISION. ${CONFIG_DIR} holds commissioned machine data
   measured off the physical lathe -- backlash, axis geometry, calibration.
@@ -69,96 +128,102 @@ if [ -z "${BACKUP}" ]; then
   On the backup host these live under ~/backups/elspi/ . CHECK THE DATE -- a
   stale capture restores stale geometry, which is the failure this text exists
   for."
-fi
-
-[ -e "${BACKUP}" ] || die "--config-backup ${BACKUP} does not exist"
-
-# Accept a directory or a tarball; normalise to a directory.
-SRC=""
-TMP=""
-cleanup() { [ -n "${TMP}" ] && rm -rf "${TMP}"; }
-trap cleanup EXIT INT TERM
-
-if [ -d "${BACKUP}" ]; then
-	SRC="${BACKUP}"
-	say "source: directory ${SRC}"
-else
-	TMP="$(mktemp -d)"
-	tar -C "${TMP}" -xf "${BACKUP}" || die "could not unpack ${BACKUP}"
-	# A tarball may or may not have a single top-level directory.
-	if [ "$(find "${TMP}" -mindepth 1 -maxdepth 1 -type d | wc -l)" = "1" ] \
-	   && [ "$(find "${TMP}" -mindepth 1 -maxdepth 1 | wc -l)" = "1" ]; then
-		SRC="$(find "${TMP}" -mindepth 1 -maxdepth 1 -type d)"
-	else
-		SRC="${TMP}"
 	fi
-	say "source: tarball ${BACKUP} -> ${SRC}"
-fi
 
-# --- GATE ON THE CONTENT, NOT THE PATH --------------------------------------
-# An empty or wrong directory that restored "successfully" is the failure mode
-# this whole phase exists to prevent, and it is indistinguishable from success
-# unless something looks inside.
-[ -s "${SRC}/Els-0.yaml" ] \
-	|| die "no non-empty Els-0.yaml in ${SRC} -- that is the commissioned ELS
+	[ -e "${BACKUP}" ] || die "--config-backup ${BACKUP} does not exist"
+
+	# Accept a directory or a tarball; normalise to a directory.
+	SRC=""
+	TMP=""
+	cleanup() { [ -n "${TMP}" ] && rm -rf "${TMP}"; }
+	trap cleanup EXIT INT TERM
+
+	if [ -d "${BACKUP}" ]; then
+		SRC="${BACKUP}"
+		say "source: directory ${SRC}"
+	else
+		TMP="$(mktemp -d)"
+		tar -C "${TMP}" -xf "${BACKUP}" || die "could not unpack ${BACKUP}"
+		# A tarball may or may not have a single top-level directory.
+		if [ "$(find "${TMP}" -mindepth 1 -maxdepth 1 -type d | wc -l)" = "1" ] \
+		   && [ "$(find "${TMP}" -mindepth 1 -maxdepth 1 | wc -l)" = "1" ]; then
+			SRC="$(find "${TMP}" -mindepth 1 -maxdepth 1 -type d)"
+		else
+			SRC="${TMP}"
+		fi
+		say "source: tarball ${BACKUP} -> ${SRC}"
+	fi
+
+	# --- GATE ON THE CONTENT, NOT THE PATH ------------------------------------
+	# An empty or wrong directory that restored "successfully" is the failure mode
+	# this whole phase exists to prevent, and it is indistinguishable from success
+	# unless something looks inside.
+	[ -s "${SRC}/Els-0.yaml" ] \
+		|| die "no non-empty Els-0.yaml in ${SRC} -- that is the commissioned ELS
   geometry, and a capture without it is not a restore point. REFUSING."
 
-NYAML="$(find "${SRC}" -maxdepth 1 -name '*.yaml' | wc -l)"
-[ "${NYAML}" -ge 15 ] \
-	|| die "only ${NYAML} yaml file(s) in ${SRC}; the live machine carried 19 at
+	NYAML="$(find "${SRC}" -maxdepth 1 -name '*.yaml' | wc -l)"
+	[ "${NYAML}" -ge 15 ] \
+		|| die "only ${NYAML} yaml file(s) in ${SRC}; the live machine carried 19 at
   last count. This looks like a partial capture. REFUSING rather than
   restoring a subset over a machine that needs all of it."
-ok "${NYAML} yaml files, Els-0.yaml present and non-empty"
+	ok "${NYAML} yaml files, Els-0.yaml present and non-empty"
 
-# --- SHOW THE HUMAN WHAT IS ABOUT TO LAND -----------------------------------
-# The checkable claim is "these files were copied". The claim that MATTERS is
-# "these are the right numbers", and only a human who knows the machine can
-# make it. So print the values rather than assert on them.
-printf '\n  the commissioned values in this capture:\n'
-if [ -r "${SRC}/Els-0.yaml" ]; then
-	grep -E '^(els_backlash_steps|els_cal_last_measured_steps|els_cal_ceiling_steps|els_cal_drift_notice_steps):' \
-		"${SRC}/Els-0.yaml" 2>/dev/null | sed 's/^/      /'
-fi
-if [ -d "${SRC}/diag" ]; then
-	say "  diag/ present ($(find "${SRC}/diag" -type f | wc -l) file(s))"
-fi
-printf '\n'
+	# --- SHOW THE HUMAN WHAT IS ABOUT TO LAND ---------------------------------
+	# The checkable claim is "these files were copied". The claim that MATTERS is
+	# "these are the right numbers", and only a human who knows the machine can
+	# make it. So print the values rather than assert on them.
+	printf '\n  the commissioned values in this capture:\n'
+	if [ -r "${SRC}/Els-0.yaml" ]; then
+		grep -E '^(els_backlash_steps|els_cal_last_measured_steps|els_cal_ceiling_steps|els_cal_drift_notice_steps):' \
+			"${SRC}/Els-0.yaml" 2>/dev/null | sed 's/^/      /'
+	fi
+	if [ -d "${SRC}/diag" ]; then
+		say "  diag/ present ($(find "${SRC}/diag" -type f | wc -l) file(s))"
+	fi
+	printf '\n'
 
-# --- restore ----------------------------------------------------------------
-# Existing config is MOVED ASIDE, never overwritten in place. If this run is
-# wrong, the previous state is still on the disk.
-if [ -d "${CONFIG_DIR}" ] && [ -n "$(ls -A "${CONFIG_DIR}" 2>/dev/null)" ]; then
-	ASIDE="${CONFIG_DIR}.pre-restore-$(date +%Y%m%d-%H%M%S)"
-	warn "${CONFIG_DIR} is not empty -- moving it to ${ASIDE}"
-	run mv "${CONFIG_DIR}" "${ASIDE}"
-fi
+	# --- restore ---------------------------------------------------------------
+	# Existing config is MOVED ASIDE, never overwritten in place. If this run is
+	# wrong, the previous state is still on the disk.
+	if [ -d "${CONFIG_DIR}" ] && [ -n "$(ls -A "${CONFIG_DIR}" 2>/dev/null)" ]; then
+		ASIDE="${CONFIG_DIR}.pre-restore-$(date +%Y%m%d-%H%M%S)"
+		warn "${CONFIG_DIR} is not empty -- moving it to ${ASIDE}"
+		run mv "${CONFIG_DIR}" "${ASIDE}"
+	fi
 
-run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0755 "${CONFIG_DIR}"
-run cp -a "${SRC}/." "${CONFIG_DIR}/"
-run chown -R "${SERVICE_USER}:${SERVICE_USER}" "${CONFIG_DIR}"
+	run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0755 "${CONFIG_DIR}"
+	run cp -a "${SRC}/." "${CONFIG_DIR}/"
+	run chown -R "${SERVICE_USER}:${SERVICE_USER}" "${CONFIG_DIR}"
 
-# --- POST-WRITE CHECKS ------------------------------------------------------
-assert "${CONFIG_DIR}/Els-0.yaml restored and non-empty" test -s "${CONFIG_DIR}/Els-0.yaml"
-assert "${CONFIG_DIR} owned by ${SERVICE_USER}" \
-	bash -c "[ \"\$(stat -c %U '${CONFIG_DIR}')\" = '${SERVICE_USER}' ]"
+	# --- POST-WRITE CHECKS ------------------------------------------------------
+	assert "${CONFIG_DIR}/Els-0.yaml restored and non-empty" test -s "${CONFIG_DIR}/Els-0.yaml"
+	assert "${CONFIG_DIR} owned by ${SERVICE_USER}" \
+		bash -c "[ \"\$(stat -c %U '${CONFIG_DIR}')\" = '${SERVICE_USER}' ]"
 
-# The app WRITES here at runtime (current_mode, calibration). Read-only would
-# look fine until the first write.
-assert "${CONFIG_DIR} is writable by ${SERVICE_USER}" \
-	sudo -u "${SERVICE_USER}" test -w "${CONFIG_DIR}"
+	# The app WRITES here at runtime (current_mode, calibration). Read-only would
+	# look fine until the first write.
+	assert "${CONFIG_DIR} is writable by ${SERVICE_USER}" \
+		sudo -u "${SERVICE_USER}" test -w "${CONFIG_DIR}"
 
-if [ "${DRY_RUN}" != "1" ]; then
-	RESTORED="$(find "${CONFIG_DIR}" -maxdepth 1 -name '*.yaml' | wc -l)"
-	[ "${RESTORED}" -eq "${NYAML}" ] \
-		|| die "restored ${RESTORED} yaml files but the source had ${NYAML}"
-	ok "${RESTORED} yaml files restored, count matches the source"
+	if [ "${DRY_RUN}" != "1" ]; then
+		RESTORED="$(find "${CONFIG_DIR}" -maxdepth 1 -name '*.yaml' | wc -l)"
+		[ "${RESTORED}" -eq "${NYAML}" ] \
+			|| die "restored ${RESTORED} yaml files but the source had ${NYAML}"
+		ok "${RESTORED} yaml files restored, count matches the source"
+	fi
 fi
 
 # --- firmware manifest: SOFT, and says so -----------------------------------
 # docs/design/seam.md: "~/firmware/flashed.json if available (soft -- its loss costs
 # knowledge, not function)".
+# need_root/resolve_service_user are called again here (harmless if already
+# done above) because --fresh with no firmware never calls them at all, and
+# this is the one place that writes regardless of which path was taken.
 if [ -n "${FIRMWARE}" ]; then
 	if [ -s "${FIRMWARE}" ]; then
+		need_root
+		resolve_service_user
 		HOME_DIR="$(getent passwd "${SERVICE_USER}" | cut -d: -f6)"
 		run install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0755 "${HOME_DIR}/firmware"
 		run install -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0644 \
@@ -173,6 +238,10 @@ else
 fi
 
 printf '\n'
-ok "restore complete -- from ${SRC}"
-say "the values printed above are what this machine will use. If they are not"
-say "what you expect, stop now: nothing else in provisioning will notice."
+if [ "${FRESH}" = "1" ]; then
+	uncommissioned_banner
+else
+	ok "restore complete -- from ${SRC}"
+	say "the values printed above are what this machine will use. If they are not"
+	say "what you expect, stop now: nothing else in provisioning will notice."
+fi

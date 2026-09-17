@@ -1,9 +1,9 @@
 #!/bin/bash
 # Run the three delta phases in order.
 #
-#   provision.sh --app <checkout> --config-backup <dir|tarball> [--firmware F]
-#                [--drm-mode MODE] [--site-hooks DIR] [--dry-run]
-#                [--skip-interactive]
+#   provision.sh --app <checkout> (--config-backup <dir|tarball> | --fresh)
+#                [--firmware F] [--drm-mode MODE] [--site-hooks DIR]
+#                [--dry-run] [--skip-interactive]
 #
 # This is a CONVENIENCE, not a merge. The phases keep their own contracts and
 # their own exit codes, and a failure stops everything after it -- the ordering
@@ -19,6 +19,25 @@
 #
 # The app is NOT started by any of this. Starting it is a deliberate act after
 # a human has looked at the restored values -- see the end of phase 2.
+#
+# --- FIRST COMMISSIONING: --fresh -------------------------------------------
+# A brand-new machine has no backup to restore. --fresh names that on
+# purpose, as a deliberate, loud choice rather than a guess:
+#
+#   * mutually exclusive with --config-backup -- naming both dies naming both;
+#   * skips phase 2's restore entirely: no files are written into CONFIG_DIR,
+#     nothing is generated, the application's own defaults apply;
+#   * refuses if CONFIG_DIR already holds anything, so a fresh provision can
+#     never mask existing commissioned data -- use --config-backup, or move
+#     the directory aside first;
+#   * says so LOUDLY: an UNCOMMISSIONED banner at the start of phase 2 and
+#     again in its final summary, because axis geometry, servo polarity,
+#     backlash calibration and Z scale counts/mm are commissioned machine
+#     data that nothing here can generate, and every one of them must be
+#     measured off the physical lathe before this machine is trusted.
+#
+# With NEITHER flag, provisioning refuses exactly as it always has -- see
+# 02-restore.sh's contract. --fresh is a deliberate choice, never a default.
 #
 # --- SITE HOOKS -------------------------------------------------------------
 # --site-hooks DIR is the seam for everything that is true of ONE estate and
@@ -45,13 +64,14 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 . "${HERE}/lib.sh"
 
-APP="" ; BACKUP="" ; FIRMWARE="" ; DRM_MODE="first-opener"
+APP="" ; BACKUP="" ; FRESH=0 ; FIRMWARE="" ; DRM_MODE="first-opener"
 SKIP_INTERACTIVE=0 ; PASS_DRY="" ; SITE_HOOKS=""
 
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--app)              APP="${2:-}"; shift 2 ;;
 		--config-backup)    BACKUP="${2:-}"; shift 2 ;;
+		--fresh)            FRESH=1; shift ;;
 		--firmware)         FIRMWARE="${2:-}"; shift 2 ;;
 		--drm-mode)         DRM_MODE="${2:-}"; shift 2 ;;
 		# Checked HERE rather than at the hook phase, which is the last thing
@@ -63,7 +83,7 @@ while [ $# -gt 0 ]; do
 		                    shift 2 ;;
 		--skip-interactive) SKIP_INTERACTIVE=1; shift ;;
 		--dry-run)          DRY_RUN=1; PASS_DRY="--dry-run"; shift ;;
-		-h|--help)          sed -n '2,41p' "$0"; exit 0 ;;
+		-h|--help)          sed -n '2,60p' "$0"; exit 0 ;;
 		*) die "unknown argument: $1" ;;
 	esac
 done
@@ -77,21 +97,45 @@ printf '\n\033[1melspi delta provisioning\033[0m\n'
 # then refuses. A run that converges and then cannot restore leaves a machine
 # with an enabled unit and no commissioned data, which is the state most likely
 # to get started by accident.
-[ -n "${APP}" ]    || die "--app is required"
-[ -n "${BACKUP}" ] || die "--config-backup is required.
+[ -n "${APP}" ] || die "--app is required"
+
+# --fresh and --config-backup name mutually exclusive choices -- first
+# commissioning versus recovery -- and naming both at once does not resolve
+# which one is meant. Checked here, before phase 1, for the same reason the
+# missing-argument check below is: a machine with an enabled unit and no
+# commissioned config, and now also no clear intent, is not a state to leave
+# phase 1 to discover.
+if [ "${FRESH}" = "1" ] && [ -n "${BACKUP}" ]; then
+	die "--fresh and --config-backup are mutually exclusive.
+
+  --fresh names first commissioning: no backup exists yet, and none should be
+  applied. --config-backup names recovery: a capture exists and should be
+  restored. Naming both does not say which one you mean."
+fi
+
+if [ "${FRESH}" != "1" ]; then
+	[ -n "${BACKUP}" ] || die "--config-backup is required (or pass --fresh for a brand-new machine).
 
   Checked up front on purpose: without it phase 2 would refuse anyway, but only
   AFTER phase 1 had enabled the service. A machine with an enabled unit and no
   commissioned config is the one most likely to get started by mistake."
-[ -e "${BACKUP}" ] || die "--config-backup ${BACKUP} does not exist"
+	[ -e "${BACKUP}" ] || die "--config-backup ${BACKUP} does not exist"
+fi
 
 "${HERE}/01-converge.sh" --app "${APP}" --drm-mode "${DRM_MODE}" ${PASS_DRY} \
 	|| die "phase 1 (converge) failed -- stopping. Nothing was restored."
 
-"${HERE}/02-restore.sh" --config-backup "${BACKUP}" \
-	${FIRMWARE:+--firmware "${FIRMWARE}"} ${PASS_DRY} \
-	|| die "phase 2 (restore) failed -- stopping. The service is enabled but has
+if [ "${FRESH}" = "1" ]; then
+	"${HERE}/02-restore.sh" --fresh \
+		${FIRMWARE:+--firmware "${FIRMWARE}"} ${PASS_DRY} \
+		|| die "phase 2 (fresh commissioning) failed -- stopping. The service is
+  enabled but has no commissioned config. DO NOT START IT until this is resolved."
+else
+	"${HERE}/02-restore.sh" --config-backup "${BACKUP}" \
+		${FIRMWARE:+--firmware "${FIRMWARE}"} ${PASS_DRY} \
+		|| die "phase 2 (restore) failed -- stopping. The service is enabled but has
   no commissioned config. DO NOT START IT until this is resolved."
+fi
 
 if [ "${SKIP_INTERACTIVE}" = "1" ]; then
 	warn "phase 3 skipped by request. The account may still be LOCKED, and"
@@ -159,6 +203,11 @@ else
 fi
 
 phase "Provisioning finished"
+if [ "${FRESH}" = "1" ]; then
+	warn "UNCOMMISSIONED: no config was restored. See phase 2's banner above --"
+	warn "  axis geometry, servo polarity, backlash and Z scale must be measured"
+	warn "  before this machine is trusted."
+fi
 say "The application is NOT running. Before starting it:"
 say "  1. re-read the commissioned values phase 2 printed"
 say "  2. systemctl start reflex-ui"

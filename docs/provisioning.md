@@ -7,19 +7,33 @@ Everything the image deliberately does **not** contain. The image is
 page is the other side of it: the application, the commissioned machine data,
 and the credentials that could not be typed into Imager.
 
-!!! warning "Read this before you start: the one gap that will stop you"
-    `provision.sh` **requires** `--config-backup`, and it refuses to run without
-    one. That is correct for the machine this repository was built to recover —
-    but it means **a brand-new lathe, never commissioned, cannot be provisioned
-    by this tooling today.** `/var/lib/reflex-config` holds axis geometry, servo
-    polarity, backlash calibration and Z scale counts/mm, all measured off a
-    physical lathe; nothing can generate it, and coming up with defaults would
-    produce a machine that runs and is silently wrong.
+!!! warning "First commissioning: `--fresh`, then measure everything before use"
+    `provision.sh` **requires** either `--config-backup` or `--fresh` — never
+    both, and never neither. That is correct for the machine this repository
+    was built to recover, and it is also how a **brand-new lathe, never
+    commissioned,** gets provisioned: pass `--fresh` in place of
+    `--config-backup`.
 
-    So the refusal is deliberate, and the missing path is a real gap rather than
-    a flag somebody forgot. There is no `--fresh`, and inventing one is not the
-    fix — first commissioning needs a procedure of its own, and it does not
-    exist yet. If this is a first commissioning, stop here.
+    `--fresh` is a deliberate, loud choice that first commissioning is
+    happening, not a guess and not a default. It skips the restore phase
+    entirely — nothing is written into `/var/lib/reflex-config`, nothing is
+    generated, the application's own defaults apply — and it refuses outright
+    if that directory already holds anything, so a fresh provision can never
+    mask existing commissioned data. It prints an UNCOMMISSIONED banner at the
+    start of phase 2 and again in its final summary, because axis geometry,
+    servo polarity, backlash calibration and Z scale counts/mm are
+    commissioned machine data that nothing here can generate — every one of
+    them must still be measured off the physical lathe before this machine is
+    trusted to cut anything.
+
+    If you already have commissioned values to bring onto this machine — a
+    capture from the machine's own history, or from another Pi — that is
+    `--config-backup`, not `--fresh`, and it belongs on this command line. If
+    instead you want to bring them on **after** the machine is up and running
+    on `--fresh` defaults, that is the **USB import on the reflex Setup
+    screen** — the user-facing route onto a machine this tooling deliberately
+    left uncommissioned, and it needs no SSH, no CLI and no re-run of
+    `provision.sh`.
 
 ## Image identity: `/etc/elspi-release` and `IMAGE_RELEASE`
 
