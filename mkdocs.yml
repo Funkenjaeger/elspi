@@ -84,6 +84,7 @@ nav:
   - Using a card:
       - Flashing a card: flashing.md
       - Provisioning: provisioning.md
+      - First load (SWD): swd-first-load.md
   - Design notes:
       - Where the image ends: design/seam.md
       - This is not pi-gen: design/fork.md

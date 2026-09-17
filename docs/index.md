@@ -46,6 +46,8 @@ from pi-gen `stage0`–`stage2` plus this fork's `stage-elspi/`:
   blank SD card.
 * **[Provisioning](provisioning.md)** — the delta layer: the application, the
   commissioned config, and starting the UI.
+* **[First load (SWD)](swd-first-load.md)** — putting the first firmware on a
+  brand-new controller board, before RS-485 updates are possible.
 * **[This is not pi-gen](design/fork.md)** — the fork contract, how upstream is
   merged, and the merge surface.
 * **[Runtime inventory](design/runtime-inventory.md)** — what the live machine

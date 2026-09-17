@@ -318,6 +318,11 @@ documented in the application repository:
 
 **→ [Installing Reflex — firmware](https://github.com/Funkenjaeger/reflex/blob/main/docs/setup/installing.md)**
 
+For the software steps as this image actually bakes them — the toolchain
+that is already installed and where the checkout the delta layer expects
+lives — see **[First load (SWD)](swd-first-load.md)**. Wiring the
+programmer itself is still a bench procedure and is only a placeholder there.
+
 Once a board has firmware on it, subsequent updates are built and flashed from
 the Pi with the toolchain this image already carries. Note that this board
 requires a **power cycle** after flashing before the new firmware executes.
