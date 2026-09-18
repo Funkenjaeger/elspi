@@ -172,6 +172,19 @@ mutate "service user dropped from the 'dialout' group (Modbus)" \
 mutate "a DRM mode fragment reverts to User=root" \
 	"sed -i 's|^User=default|User=root|' usr/share/elspi/drm-modes/first-opener.conf"
 
+# The venv must be the service user's all the way down (Open Loops 6aac9465):
+# reflex's updater `uv sync`s into it as that user, after flashing. Making an
+# entry owned by SOMEONE ELSE needs chown, i.e. root -- so without root this
+# mutation is reported as not run rather than registered as a pass it did not
+# earn. (The fixture's service user is the invoking uid, so 54321 is "not
+# the service user" whether this runs as root or not.)
+if [ "$(id -u)" -eq 0 ]; then
+	mutate "a package dir in the venv not owned by the service user (the root-built venv, 2026-09-17)" \
+		"chown 54321 opt/reflex-venv/lib/python3.13/site-packages/kivy"
+else
+	echo "  UNKN  venv-ownership mutation needs root (chown); NOT RUN"
+fi
+
 # THE POLKIT RULE -- the other half of the non-root decision, and the half
 # that image addcb2e shipped without. Every check in the group above was green
 # on that image while the appliance UI could not turn the radio on.

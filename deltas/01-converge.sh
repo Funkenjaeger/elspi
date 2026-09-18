@@ -107,6 +107,14 @@ command -v git >/dev/null 2>&1 || die "git is not installed. The app half is a g
 run chown -h "${SERVICE_USER}:${SERVICE_USER}" "${UI_DIR}/.venv"
 run env UV_PROJECT_ENVIRONMENT="${VENV}" UV_PYTHON_DOWNLOADS=never \
 	sh -c "cd '${UI_DIR}' && uv sync --no-dev --frozen"
+# This script runs as root, so the sync above leaves what it installed
+# root-owned -- and the in-app updater, running as the service user, has to
+# `uv sync` into this same venv later (after flashing the firmware). Hand the
+# whole venv back. -h: re-own symlinks themselves; bin/python points at the
+# system interpreter. Found 2026-09-17, Open Loops 6aac9465.
+run chown -R -h "${SERVICE_USER}:${SERVICE_USER}" "${VENV}"
+assert "every directory in ${VENV} writable by ${SERVICE_USER}" \
+	sudo -u "${SERVICE_USER}" sh -c "test -z \"\$(find '${VENV}' -type d ! -writable -print -quit)\""
 assert "reflex importable from the venv" \
 	sudo -u "${SERVICE_USER}" env KIVY_HOME=/tmp/.kivy-converge "${VENV}/bin/python" -c 'import reflex'
 run rm -rf /tmp/.kivy-converge

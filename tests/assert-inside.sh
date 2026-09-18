@@ -235,6 +235,32 @@ fi
 # the obligation rather than discovering it.
 echo "  NOTE  reflex-ui.service is a DELTA artifact and is absent by design."
 
+# --- the venv belongs to the service user (Open Loops 6aac9465) -----------
+# The in-app updater runs `uv sync` into /opt/reflex-venv as the service user,
+# AFTER flashing the firmware; a root-owned venv (the state elspi shipped in
+# until 2026-09-17) fails that sync. Every entry, symlinks included, must be
+# the service user's -- and the system interpreter bin/python points at must
+# still be root's, or a chown followed the link.
+VENV_DIR=/opt/reflex-venv
+VENV_USER="$(awk -F: '$3>=1000 && $3<65534{print $1; exit}' /etc/passwd)"
+if [ -z "${VENV_USER}" ]; then
+	unk "no non-system user in /etc/passwd to check ${VENV_DIR}'s owner against"
+elif [ ! -d "${VENV_DIR}" ]; then
+	bad "${VENV_DIR} is owned by ${VENV_USER} (directory missing)"
+else
+	NOT_OURS="$(find "${VENV_DIR}" ! -user "${VENV_USER}" -print -quit 2>/dev/null)"
+	if [ -z "${NOT_OURS}" ]; then
+		ok "${VENV_DIR} is wholly owned by ${VENV_USER}"
+	else
+		bad "${VENV_DIR} is wholly owned by ${VENV_USER} (first entry that is not: ${NOT_OURS} [$(stat -c %U "${NOT_OURS}")])"
+	fi
+fi
+if [ "$(stat -L -c %u /usr/bin/python3 2>/dev/null)" = "0" ]; then
+	ok "/usr/bin/python3 is still root-owned"
+else
+	bad "/usr/bin/python3 is still root-owned (a venv chown followed a symlink)"
+fi
+
 # --- USB automount (stage-elspi/13-usb-automount, order 2026-09-16#6) ------
 # Reads unit files and installed files off disk, exactly like the checks
 # above -- answerable booted or chrooted, no mount actually needs to happen

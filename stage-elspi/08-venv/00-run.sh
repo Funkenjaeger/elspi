@@ -143,6 +143,44 @@ if [ -z "${KIVY_SO}" ]; then
 fi
 echo "  kivy ok: $(basename "${KIVY_DIST}"), compiled extensions present"
 
+# --- THE VENV BELONGS TO THE SERVICE USER -----------------------------------
+# reflex-ui runs as ${FIRST_USER_NAME}, and so does its in-app updater, which
+# runs `uv sync --frozen` into this venv to install a release's packages. A
+# venv left root:root (as the uv sync above leaves it) makes that sync fail
+# with EACCES -- and the updater runs it AFTER flashing the firmware. Found
+# 2026-09-17 when a new dependency (segno) could only be installed by hand
+# with sudo; Open Loops 6aac9465. reflex's updater now also refuses an
+# unwritable venv before flashing, but the right state is simply this one.
+#
+# -h: re-own the venv's symlinks THEMSELVES. bin/python is an absolute link to
+# /usr/bin/python3; following it would hand the system interpreter to the
+# service user.
+SERVICE_USER="${FIRST_USER_NAME}"
+on_chroot << EOF
+set -e
+id ${SERVICE_USER} >/dev/null
+chown -R -h ${SERVICE_USER}:${SERVICE_USER} ${VENV}
+EOF
+
+# GATE, host-side against the rootfs's OWN passwd (same reason as
+# 13-usb-automount: the build host's uids are an accident of who ran it).
+# find -P (the default) examines symlinks themselves, matching the -h above.
+SVC_UID="$(awk -F: -v u="${SERVICE_USER}" '$1==u{print $3}' "${ROOTFS_DIR}/etc/passwd")"
+[ -n "${SVC_UID}" ] || { echo "FATAL: no uid for '${SERVICE_USER}' in ${ROOTFS_DIR}/etc/passwd"; exit 1; }
+NOT_OURS="$(find "${ROOTFS_DIR}${VENV}" ! -uid "${SVC_UID}" -print -quit)"
+if [ -n "${NOT_OURS}" ]; then
+	echo "FATAL: ${VENV} is not wholly owned by ${SERVICE_USER} (uid ${SVC_UID}) after chown;"
+	echo "       first offender: ${NOT_OURS#"${ROOTFS_DIR}"}"
+	exit 1
+fi
+# /usr/bin/python3 -> python3.13 is a RELATIVE link, so -L resolves it
+# correctly from the host too.
+if [ "$(stat -L -c %u "${ROOTFS_DIR}/usr/bin/python3")" != "0" ]; then
+	echo "FATAL: /usr/bin/python3 is no longer root-owned -- the venv chown followed a symlink"
+	exit 1
+fi
+echo "  venv owned by ${SERVICE_USER} (uid ${SVC_UID}); system python3 still root's"
+
 # Record what was actually built, for the manifest and the harness.
 install -d -m 0755 "${ROOTFS_DIR}/etc/elspi"
 printf '%s\n' "${REFLEX_COMMIT}" > "${ROOTFS_DIR}/etc/elspi/reflex-lock-commit"

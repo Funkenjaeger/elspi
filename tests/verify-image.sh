@@ -415,6 +415,17 @@ else
 	unknown "pillow ABSENT -- img_pil unavailable. docs/design/seam.md ratified promoting it to a runtime dep in the reflex repo; that has not landed."
 fi
 
+# The service user owns the WHOLE venv (Open Loops 6aac9465). reflex's in-app
+# updater runs `uv sync` into it as that user, after flashing the firmware;
+# the root:root venv elspi shipped until 2026-09-17 fails that sync. find -P
+# (the default) judges symlinks themselves, matching 08-venv's `chown -R -h`.
+venv_owned_by_service_user() {
+	[ -n "${SU_UID}" ] && [ -d "${ROOTFS}${VENV}" ] \
+		&& [ -z "$(find "${ROOTFS}${VENV}" ! -uid "${SU_UID}" -print -quit)" ]
+}
+check "${VENV} is wholly owned by ${SERVICE_USER} (the updater syncs into it as that user)" \
+	venv_owned_by_service_user
+
 # ---------------------------------------------------------------------------
 section "Boot configuration (TEXTUAL ONLY -- see blind spots)"
 
