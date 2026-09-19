@@ -57,7 +57,7 @@ export UV_PYTHON_DOWNLOADS=never
 
 # KEEP KIVY'S BUILD OUT OF /root.
 #
-# Kivy's own setup.py does `import kivy` (2.3.1 setup.py:397, plus
+# Kivy's own setup.py does 'import kivy' (2.3.1 setup.py:397, plus
 # kivy.tools.packaging imports at 401 and 427). kivy/__init__.py then runs, at
 # lines 351-369:
 #
