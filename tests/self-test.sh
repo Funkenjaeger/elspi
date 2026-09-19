@@ -406,6 +406,35 @@ mutate_usb_automount "the sanitizer helper not executable" \
 mutate_usb_automount "'noexec' dropped from the systemd-mount options" \
 	"sed -i 's/,noexec//' etc/udev/rules.d/90-elspi-usb-automount.rules"
 
+# --- render-release.sh without python3 (order 2026-09-18#1) ----------------
+#
+# WIRED IN HERE rather than added to .github/workflows/tier1.yml, because
+# tier1.yml names every tests/*.sh runner it invokes one at a time (only
+# deltas/tests/*.sh is globbed), and the workflow is outside this order's
+# bound. self-test.sh is already a tier1 step, so hanging the new runner off
+# it is what makes it actually RUN in CI rather than sit in tests/ being
+# nobody's job -- which is how tests/test-swd-doc.sh and
+# tests/test-usb-automount-name.sh are currently not collected anywhere.
+#
+# Kept as its OWN script rather than inlined: it needs a restricted PATH, an
+# `env -i` and a golden byte-for-byte comparison, none of which fit the
+# mutate_*/expect_* shape above, and it has to stay runnable on its own when
+# somebody is debugging the extraction.
+echo
+echo "== render-release.sh with no python3 on PATH (order 2026-09-18#1) =="
+echo "   The 2026-09-17 image build died three hours in because jget() shelled"
+echo "   out to python3 on the BUILD HOST, which has none. Delegated to"
+echo "   tests/test-render-release-no-python3.sh -- see its header."
+if bash "${HERE}/test-render-release-no-python3.sh" >"${WORK}/out.txt" 2>&1; then
+	echo "  OK    render-release.sh renders byte-identically with no python3"
+	PASSED=$((PASSED+1))
+else
+	echo "  FAIL  render-release.sh needs python3, or its output moved."
+	echo "        tests/test-render-release-no-python3.sh said:"
+	sed 's/^/           /' "${WORK}/out.txt"
+	FAILED=$((FAILED+1))
+fi
+
 echo
 echo "== result =="
 echo "  ${PASSED} ok, ${FAILED} problems"
