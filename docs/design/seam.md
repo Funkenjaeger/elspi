@@ -97,6 +97,75 @@ Two consequences to accept honestly:
   and recovery should be pinned to a known-good image/app pair anyway. But it means
   images want tagging against app versions rather than floating.
 
+#### AMENDMENT 2026-09-21 — the image carries the latest FULL RELEASE of the app
+
+**Ratified by Evan 2026-09-21.** Call 1's *criterion* is unchanged and is what
+this amendment rests on: recovery must not depend on the outside world for the
+expensive part. What is withdrawn is the second clause — "but not `reflex-ui`
+itself".
+
+**The image now ships the app, pinned to the latest FULL release.** Not a
+development `rc.*`, not a floating branch: the tag `.github/workflows/
+release.yml` published — the same one-version-both-halves object the in-app
+updater installs.
+
+**Evan's reasoning, recorded because it is what makes this safe.** Full
+releases are infrequent, so the thing going into the image is not the
+fast-moving thing; and in-app updating is now good enough that closing the gap
+between the baked release and the current one is low-friction. The image
+therefore only has to be *a* good starting point, not *the current* one — a
+much weaker obligation than the one call 1 was written against.
+
+**What it buys.** A freshly flashed card boots into the UI with no converge
+step and no SSH — task 6aa73b01 item 1, which was unbuildable under the
+original call. Order 2026-09-20#5 is what surfaced this: its builder refused
+to amend a ratified call and shipped the trigger scaffold only.
+
+**What it costs, honestly.** Image and app were already a version pair; they
+are now a tighter one. An app release that adds a dependency still needs the
+network at update time, because the image's venv was built against the baked
+release's lockfile. Recovery stays hermetic; *updating* does not. That was
+already true for the development case before this amendment.
+
+##### The start is GATED. This is the safety half, and it is not optional.
+
+Call 1's converge → restore → start ordering is what kept a UI off the screen
+until its commissioned geometry existed. Baking the app in does not remove
+that protection; **auto-starting it on first boot would**, and the mechanism is
+specific: `reflex.dispatchers.saving_dispatcher.read_settings()` returns
+`None` for an absent file — no error, no refusal — so the dispatcher keeps its
+in-code defaults, and `write_settings` treats a new file as "the commissioning
+event for that dispatcher". A started UI on an unrestored card therefore looks
+configured, on a lathe, on numbers nobody measured, and then records them as
+the commissioning baseline.
+
+So, ratified with it: **the app starts on first boot only when commissioned
+config is present.** With `/var/lib/reflex-config` empty the UI comes up in an
+EXPLICIT uncommissioned state, named on screen, and no dispatcher may write a
+commissioning event until a restore has happened. Silent defaults are the one
+outcome this amendment forbids.
+
+##### Three things the stage must do
+
+Each because `ui/reflex/utils/updater.py` already behaves this way, and would
+otherwise refuse every update on a freshly flashed card:
+
+1. **Bake the app as a real git checkout carrying tag history**, at a path
+   writable by the service user. The updater reads the target UI's protocol
+   version with `git show <tag>:ui/reflex/utils/els_stop_map.py` and then
+   checks the tag out; a source tarball, or a root-owned tree, cannot be
+   updated in place.
+2. **`/opt/reflex-venv` must be writable by the service user.** The updater
+   refuses an unwritable venv *before* flashing the firmware half (reflex
+   `d92497eb`), so a read-only venv turns every update into a preflight
+   refusal rather than a late failure.
+3. **Ship `/etc/elspi-release`** carrying the image's release number. The
+   updater's `check_image_release` (order 2026-09-14#6) compares it against
+   each release's declared floor; absent or unparseable reads as release 0,
+   which exists only as the permissive default for images built before that
+   order.
+
+
 ### 2. No password anywhere in this repo — it is going public
 
 **RATIFIED 2026-08-22.** Build the user locked; no credential enters this repo.
