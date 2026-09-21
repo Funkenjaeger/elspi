@@ -379,6 +379,55 @@ mutate "the manifest is not valid JSON" \
 mutate "the manifest is missing entirely" \
 	"rm -f etc/elspi-image.json"
 
+# The first-boot UI hook (stage-elspi/14-first-boot-ui, task 6aa73b01)
+#
+# THIS IS A SCAFFOLD, NOT THE FEATURE -- see stage-elspi/14-first-boot-ui/
+# README.md. The mutations below prove the TRIGGER is actually enforced:
+# that it exists, is enabled, and is ordered correctly. They do not and
+# cannot prove anything STARTS, because nothing does yet on any image built
+# by this repo.
+mutate "the first-boot-ui script missing" \
+	"rm -f usr/local/sbin/elspi-first-boot-ui"
+mutate "the first-boot-ui script is not executable" \
+	"chmod 0644 usr/local/sbin/elspi-first-boot-ui"
+mutate "the first-boot-ui unit missing" \
+	"rm -f etc/systemd/system/elspi-first-boot-ui.service"
+mutate "the first-boot-ui unit is installed but NOT enabled" \
+	"rm -f etc/systemd/system/cloud-init.target.wants/elspi-first-boot-ui.service"
+# A dangling enablement symlink looks enabled to `ls` and is silently ignored
+# by systemd -- the same trap the seed's own mutation above proves.
+mutate "the first-boot-ui enablement symlink dangles" \
+	"ln -sf ../elspi-first-boot-ui-TYPO.service etc/systemd/system/cloud-init.target.wants/elspi-first-boot-ui.service"
+mutate "the first-boot-ui unit loses its WantedBy, so the wants symlink is invented" \
+	"sed -i '/^WantedBy=cloud-init.target\$/d' etc/systemd/system/elspi-first-boot-ui.service"
+# THE SAME 2026-09-13 ORDERING CYCLE, reconstructed for this unit too: its
+# After= chain reaches cloud-final.service via elspi-first-boot-seed.service,
+# so enabling it in multi-user.target.wants as well recreates the cycle that
+# made systemd delete the seed's job.
+mutate "the first-boot-ui unit ALSO enabled in multi-user.target.wants (the 2026-09-13 ordering cycle, again)" \
+	"mkdir -p etc/systemd/system/multi-user.target.wants && ln -sf ../elspi-first-boot-ui.service etc/systemd/system/multi-user.target.wants/elspi-first-boot-ui.service"
+mutate "the first-boot-ui unit declares WantedBy=multi-user.target too ('systemctl reenable' restores the cycle)" \
+	"printf 'WantedBy=multi-user.target\\n' >> etc/systemd/system/elspi-first-boot-ui.service"
+# Without the '-' prefix a failing hook fails the boot of a machine with no
+# terminal -- same reasoning as the seed unit above.
+mutate "the first-boot-ui unit's ExecStart loses its '-' prefix (can fail the boot)" \
+	"sed -i 's|^ExecStart=-|ExecStart=|' etc/systemd/system/elspi-first-boot-ui.service"
+# LOAD-BEARING ORDERING -- what this order's tests: field specifically asked
+# for. Plymouth's DRM renderer is a master until it quits; anything downstream
+# that might one day open card0 must not race it.
+mutate "the first-boot-ui unit loses its After=plymouth-quit-wait.service ordering" \
+	"sed -i '/^After=plymouth-quit-wait.service\$/d' etc/systemd/system/elspi-first-boot-ui.service"
+mutate "the first-boot-ui unit loses its After=elspi-first-boot-seed.service ordering" \
+	"sed -i '/^After=elspi-first-boot-seed.service\$/d' etc/systemd/system/elspi-first-boot-ui.service"
+# NO INTERACTIVE STEP, EVER -- the literal ask in this order's tests: field.
+mutate "the first-boot-ui script grows an interactive 'read'" \
+	"printf '\\nread -r ANSWER\\n' >> usr/local/sbin/elspi-first-boot-ui"
+# The manifest declaration of the hook itself, and the blind spot it adds.
+mutate "the manifest does not declare the first-boot-ui hook" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d.pop('first_boot_ui',None);json.dump(d,open(p,'w'))\""
+mutate "the manifest drops the first-boot-ui blind spot from cannot_be_verified_without_hardware" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d['cannot_be_verified_without_hardware']=[i for i in d['cannot_be_verified_without_hardware'] if 'first-boot-ui' not in i];json.dump(d,open(p,'w'))\""
+
 echo
 echo "== /etc/elspi-release (order 2026-09-14#5) =="
 echo "   Checked via render-release.sh validate, not verify-image.sh -- see the"

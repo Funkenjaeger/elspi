@@ -144,6 +144,13 @@ cat > "${MANIFEST}" <<- JSON
 	    "verified_on_hardware": true
 	  },
 
+	  "first_boot_ui": {
+	    "unit": "/etc/systemd/system/elspi-first-boot-ui.service",
+	    "script": "/usr/local/sbin/elspi-first-boot-ui",
+	    "status": "scaffold only -- enabled and correctly ordered against elspi-first-boot-seed.service and plymouth-quit-wait.service, but its converge/start branch is UNIMPLEMENTED because no image has ever baked in a reflex checkout (docs/design/seam.md keeps the app deltas-owned). See task 6aa73b01 item 1 and stage-elspi/14-first-boot-ui/README.md.",
+	    "verified_on_hardware": false
+	  },
+
 	  "delta_layer_owns": [
 	    "reflex monorepo checkout at /home/default/projects/reflex",
 	    "reflex-ui.service",
@@ -161,7 +168,8 @@ cat > "${MANIFEST}" <<- JSON
 	    "SPI, I2C and the UART link to the STM32",
 	    "anything config.txt or a dtoverlay actually DOES (firmware level)",
 	    "usb_max_current_enable=1 brownout mitigation",
-	    "audio output on card 0"
+	    "audio output on card 0",
+	    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui): enabled and ordered correctly, but it has never executed end-to-end because no image has ever had a checkout for it to find -- task 6aa73b01 item 1 is the seam decision that would change that"
 	  ]
 	}
 JSON
@@ -175,7 +183,7 @@ if command -v python3 >/dev/null 2>&1; then
 fi
 
 for key in log_dir config_dir venv app_parent default_mode reflex_lock_commit \
-           first_boot_seed unit script image_build_sha image_release \
+           first_boot_seed first_boot_ui unit script image_build_sha image_release \
            runtime_versions; do
 	grep -q "\"${key}\"" "${MANIFEST}" || {
 		echo "FATAL: manifest is missing required key '${key}'"

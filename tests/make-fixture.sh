@@ -81,6 +81,12 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
     "leaves_intact": ["/boot/firmware/meta-data"],
     "verified_on_hardware": true
   },
+  "first_boot_ui": {
+    "unit": "/etc/systemd/system/elspi-first-boot-ui.service",
+    "script": "/usr/local/sbin/elspi-first-boot-ui",
+    "status": "scaffold only, see stage-elspi/14-first-boot-ui/README.md",
+    "verified_on_hardware": false
+  },
   "reflex_lock_commit": "0000000000000000000000000000000000000000",
   "image_build_sha": "fixture0000000000000000000000000000000000",
   "image_release": 1,
@@ -92,7 +98,8 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
   "cannot_be_verified_without_hardware": [
     "DRM master acquisition (no GPU in the harness)",
     "the touchscreen",
-    "SPI, I2C and the UART link to the STM32"
+    "SPI, I2C and the UART link to the STM32",
+    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui) has never executed end-to-end -- see task 6aa73b01 item 1"
   ]
 }
 JSON
@@ -281,6 +288,36 @@ UNIT
 mkdir -p "${DEST}/etc/systemd/system/cloud-init.target.wants"
 ln -sf ../elspi-first-boot-seed.service \
 	"${DEST}/etc/systemd/system/cloud-init.target.wants/elspi-first-boot-seed.service"
+
+# --- the first-boot UI hook (stage-elspi/14-first-boot-ui) ------------------
+# A scaffold, not a feature -- see stage-elspi/14-first-boot-ui/README.md.
+# The fixture models a NOOP run (no baked-in checkout, which is every real
+# image today): the stub just exits 0, same as the seed's stub above.
+printf '#!/bin/bash\n# fixture stub: elspi first-boot ui (noop -- no baked-in checkout)\nexit 0\n' \
+	> "${DEST}/usr/local/sbin/elspi-first-boot-ui"
+chmod 0755 "${DEST}/usr/local/sbin/elspi-first-boot-ui"
+
+cat > "${DEST}/etc/systemd/system/elspi-first-boot-ui.service" <<'UNIT'
+[Unit]
+Description=elspi first-boot UI hook (converge+start reflex-ui once a checkout is baked in -- a NOOP today, see README)
+After=elspi-first-boot-seed.service
+After=plymouth-quit-wait.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=-/usr/local/sbin/elspi-first-boot-ui
+
+[Install]
+WantedBy=cloud-init.target
+UNIT
+
+# Same anchor as the seed, same reason: cloud-init.target.wants, never
+# multi-user.target.wants (this unit is After=elspi-first-boot-seed.service,
+# which is After=cloud-final.service -- multi-user.target.wants would be the
+# 2026-09-13 ordering cycle again).
+ln -sf ../elspi-first-boot-ui.service \
+	"${DEST}/etc/systemd/system/cloud-init.target.wants/elspi-first-boot-ui.service"
 
 # --- USB automount (stage-elspi/13-usb-automount, order 2026-09-16#6) ------
 # Written by hand, for the reason stated at the top of this file: mirrors

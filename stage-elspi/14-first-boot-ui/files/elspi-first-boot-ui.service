@@ -1,0 +1,41 @@
+[Unit]
+Description=elspi first-boot UI hook (converge+start reflex-ui once a checkout is baked in -- a NOOP today, see README)
+Documentation=file:///usr/local/sbin/elspi-first-boot-ui
+
+# ORDERING, and why each edge is here.
+#
+# elspi-first-boot-seed.service: the radio, the regulatory domain and the
+# password step must already be done -- this hook is downstream of "first
+# boot has been seeded", never a substitute for it.
+#
+# plymouth-quit-wait.service: LOAD-BEARING, not cosmetic, for the exact
+# reason stage-elspi/06-seat's DRM-mode fragments carry the same line.
+# Plymouth's DRM renderer IS a master; anything that might one day start
+# reflex-ui from this hook must not race Plymouth for card0.
+After=elspi-first-boot-seed.service
+After=plymouth-quit-wait.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# THE LEADING '-' IS LOAD-BEARING, same reason as elspi-first-boot-seed: a
+# unit that can fail the boot is a unit that can cost a lathe power cycle on a
+# machine with no terminal. stage-elspi/14-first-boot-ui/00-run.sh and
+# tests/verify-image.sh both gate on this prefix being present.
+ExecStart=-/usr/local/sbin/elspi-first-boot-ui
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# cloud-init.target, NOT multi-user.target -- the exact ordering-cycle trap
+# stage-elspi/12-first-boot-seed/README.md documents in full. This unit is
+# After=elspi-first-boot-seed.service, which is itself After=cloud-final.service;
+# WantedBy=multi-user.target here would recreate the same cycle
+# (multi-user.target -> us -> first-boot-seed -> cloud-final -> multi-user.target)
+# and systemd would delete this job exactly as it deleted the seed's on
+# 2026-09-13. Anchoring on cloud-init.target instead adds no ordering edge of
+# its own (being WANTED is a pull, not an edge) and our real ordering edges
+# already point the direction cloud-init.target points.
+WantedBy=cloud-init.target

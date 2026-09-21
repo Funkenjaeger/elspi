@@ -172,9 +172,13 @@ DRM_MODES="$(python3 -c "import json,sys; print(' '.join(json.load(open(sys.argv
 # that its author can copy a path.
 FBS_UNIT="$(jget "['first_boot_seed']['unit']")"
 FBS_SCRIPT="$(jget "['first_boot_seed']['script']")"
+# The first-boot UI hook (stage-elspi/14-first-boot-ui) -- same arrangement as
+# the seed above. It is a SCAFFOLD, not a feature: see its own README.md.
+FBUI_UNIT="$(jget "['first_boot_ui']['unit']")"
+FBUI_SCRIPT="$(jget "['first_boot_ui']['script']")"
 
 for v in SERVICE_USER VENV APP_PARENT APP_ROOT CONFIG_DIR LOG_DIR DRM_DEFAULT DRM_SWITCHER \
-         DRM_MODES FBS_UNIT FBS_SCRIPT; do
+         DRM_MODES FBS_UNIT FBS_SCRIPT FBUI_UNIT FBUI_SCRIPT; do
 	if [ -z "${!v}" ]; then bad "manifest declares ${v}"; else ok "manifest declares ${v}=${!v}"; fi
 done
 
@@ -650,6 +654,105 @@ check "seed unit orders After=cloud-final.service" \
 
 # What none of the above can see.
 unknown "The first-boot seed has NEVER RUN -- image_2026-09-13-elspi booted on the real Pi and systemd deleted the unit's job to break an ordering cycle, so not one step executed. The checks above would have been green on that image except for the two ordering-cycle assertions added afterwards. Whether the radio comes on, whether the regulatory domain takes, whether cloud-init applies the Imager password, and whether the seed is actually erased from the FAT partition are all still Tier 3 items needing a real card in the real Pi."
+
+# ---------------------------------------------------------------------------
+section "First-boot UI hook (stage-elspi/14-first-boot-ui -- task 6aa73b01)"
+
+# THIS IS A SCAFFOLD, NOT THE FEATURE. Task 6aa73b01 item 1 asks for a fresh
+# card to boot into the UI with a checkout baked into the image and converge
+# run automatically. That would move the application across
+# docs/design/seam.md's ratified line (11-manifest's delta_layer_owns still
+# names the reflex checkout and reflex-ui.service as deltas-owned), which this
+# order was told not to re-litigate. So this section asserts only the TRIGGER:
+# a unit that exists, is enabled, and is ordered correctly -- not that it
+# starts anything, because today it never does. See
+# stage-elspi/14-first-boot-ui/README.md.
+
+FBUI_UNIT_FILE="${ROOTFS}${FBUI_UNIT}"
+FBUI_SCRIPT_FILE="${ROOTFS}${FBUI_SCRIPT}"
+
+check "first-boot-ui unit installed: ${FBUI_UNIT}"     test -f "${FBUI_UNIT_FILE}"
+check "first-boot-ui script installed: ${FBUI_SCRIPT}" test -f "${FBUI_SCRIPT_FILE}"
+check "first-boot-ui script is executable"             test -x "${FBUI_SCRIPT_FILE}"
+
+# --- enabled, and enabled in a way systemd will actually honour -------------
+# Same two-part check as the seed above, for the same reason: `-L` alone
+# passes a DANGLING symlink, which looks enabled to `ls` and is silently
+# ignored by systemd.
+FBUI_WANTS="${ROOTFS}/etc/systemd/system/cloud-init.target.wants/$(basename "${FBUI_UNIT}")"
+if [ ! -L "${FBUI_WANTS}" ]; then
+	bad "first-boot-ui unit is enabled (no symlink in cloud-init.target.wants)"
+elif [ ! -e "${FBUI_WANTS}" ]; then
+	bad "first-boot-ui unit's enablement symlink RESOLVES (it dangles: -> $(readlink "${FBUI_WANTS}"))"
+else
+	ok "first-boot-ui unit is enabled in cloud-init.target and the symlink resolves"
+fi
+
+check "first-boot-ui unit declares WantedBy=cloud-init.target" \
+	grep -qxF "WantedBy=cloud-init.target" "${FBUI_UNIT_FILE}"
+
+# THE SAME ORDERING-CYCLE CHECK the seed section runs, for the same reason:
+# this unit's After= chain reaches cloud-final.service (via
+# elspi-first-boot-seed.service), and cloud-final.service is itself
+# After=multi-user.target. Being wanted by multi-user.target as well would be
+# the 2026-09-13 cycle again.
+FBUI_WANTS_MU="${ROOTFS}/etc/systemd/system/multi-user.target.wants/$(basename "${FBUI_UNIT}")"
+if [ -L "${FBUI_WANTS_MU}" ] || [ -e "${FBUI_WANTS_MU}" ]; then
+	bad "first-boot-ui unit is NOT wanted by multi-user.target (it is: ordering cycle via elspi-first-boot-seed.service -> cloud-final.service -> multi-user.target)"
+else
+	ok "first-boot-ui unit is not wanted by multi-user.target (no ordering cycle)"
+fi
+
+if grep -qxF "WantedBy=multi-user.target" "${FBUI_UNIT_FILE}" 2>/dev/null; then
+	bad "first-boot-ui unit declares NO WantedBy=multi-user.target (it does -- 'systemctl reenable' would restore the ordering cycle)"
+else
+	ok "first-boot-ui unit declares no WantedBy=multi-user.target"
+fi
+
+# ORDERING -- what this order's tests: field specifically asked for. Plymouth
+# holds DRM master until it quits; this unit orders after it even though the
+# shipped script never opens card0 today, so whoever writes the real
+# converge/start branch inherits correct ordering rather than rediscovering
+# the hazard stage-elspi/06-seat's DRM-mode fragments already exist for.
+check "first-boot-ui unit orders After=plymouth-quit-wait.service" \
+	grep -qxF "After=plymouth-quit-wait.service" "${FBUI_UNIT_FILE}"
+
+check "first-boot-ui unit orders After=elspi-first-boot-seed.service" \
+	grep -qxF "After=elspi-first-boot-seed.service" "${FBUI_UNIT_FILE}"
+
+check "first-boot-ui unit's ExecStart is '-' prefixed (cannot fail the boot)" \
+	grep -qE '^ExecStart=-' "${FBUI_UNIT_FILE}"
+
+# NO INTERACTIVE STEP, EVER -- the literal ask in this order's tests: field
+# ("the UI reaches its start path with no interactive step"). A `read` in the
+# installed script would be exactly that.
+if grep -qE '^\s*read\b' "${FBUI_SCRIPT_FILE}" 2>/dev/null; then
+	bad "first-boot-ui script has no interactive 'read' step"
+else
+	ok "first-boot-ui script has no interactive 'read' step"
+fi
+
+# THE BLIND SPOT THIS STAGE ADDS. Read out of the manifest, not retyped here
+# as a fixed string -- membership, not equality, because the exact wording is
+# free to evolve and this check only needs to know the topic was not quietly
+# dropped. tests/self-test.sh proves this goes red if it is.
+if python3 - "${MANIFEST}" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+items = d.get("cannot_be_verified_without_hardware", [])
+sys.exit(0 if any("first-boot-ui" in i for i in items) else 1)
+PY
+then
+	ok "cannot_be_verified_without_hardware declares the first-boot-ui blind spot"
+else
+	bad "cannot_be_verified_without_hardware declares the first-boot-ui blind spot"
+fi
+
+# THE THING THIS SCAFFOLD CANNOT PROVE, STATED OUT LOUD RATHER THAN LEFT
+# IMPLICIT. Not a hardware limit like the others in this section -- a
+# SEAM limit: there is nothing to run this against until task 6aa73b01 item 1
+# is decided.
+unknown "The first-boot-ui hook's converge/start branch has NEVER RUN, on any image, because no image has ever had a checkout at .paths.app_root for it to find. The checks above prove the trigger is wired correctly; they cannot and do not prove anything starts, because nothing does yet."
 
 # ---------------------------------------------------------------------------
 section "Artifact integrity"

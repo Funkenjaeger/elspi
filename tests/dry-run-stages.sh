@@ -78,6 +78,13 @@ run_stage 11-manifest
 # exactly why it can be exercised here instead of only inside a build.
 run_stage 12-first-boot-seed
 
+# 14-first-boot-ui is the same shape as 12-first-boot-seed and chroot-free for
+# the same reason. It is a SCAFFOLD (stage-elspi/14-first-boot-ui/README.md),
+# not the feature task 6aa73b01 asks for -- it ships the trigger, not a
+# converge/start branch, because the payload would move the application
+# checkout across docs/design/seam.md's ratified line.
+run_stage 14-first-boot-ui
+
 # WHERE THE SUBSTAGE ENABLES THE UNIT, checked here rather than only in
 # verify-image.sh, because this is the one harness that runs the REAL substage
 # against a real tree -- verify-image.sh reads a hand-authored fixture, so the
@@ -104,6 +111,27 @@ if [ -L "${FBS_MU_WANTS}" ] || [ -e "${FBS_MU_WANTS}" ]; then
 	FAIL=$((FAIL+1))
 else
 	echo "  ok: seed unit is not enabled in multi-user.target.wants (no ordering cycle)"
+	PASS=$((PASS+1))
+fi
+
+# Same two checks, same reason, for 14-first-boot-ui's unit.
+FBUI_UNIT_NAME=elspi-first-boot-ui.service
+FBUI_CI_WANTS="${ROOTFS_DIR}/etc/systemd/system/cloud-init.target.wants/${FBUI_UNIT_NAME}"
+FBUI_MU_WANTS="${ROOTFS_DIR}/etc/systemd/system/multi-user.target.wants/${FBUI_UNIT_NAME}"
+if [ -e "${FBUI_CI_WANTS}" ]; then
+	echo "  ok: first-boot-ui unit enabled in cloud-init.target.wants and the symlink resolves"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: first-boot-ui unit is not enabled in cloud-init.target.wants (or the symlink dangles)"
+	FAIL=$((FAIL+1))
+fi
+if [ -L "${FBUI_MU_WANTS}" ] || [ -e "${FBUI_MU_WANTS}" ]; then
+	echo "  FAIL: first-boot-ui unit is enabled in multi-user.target.wants -- that is"
+	echo "        the same ordering cycle with cloud-final.service, via"
+	echo "        elspi-first-boot-seed.service"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: first-boot-ui unit is not enabled in multi-user.target.wants (no ordering cycle)"
 	PASS=$((PASS+1))
 fi
 
@@ -149,6 +177,23 @@ if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ./00-run.sh >/dev/null 2>&1 
 	fi
 else
 	echo "  FAIL: 12-first-boot-seed is not re-runnable"
+	FAIL=$((FAIL+1))
+fi
+
+# 14-first-boot-ui's install+enable is `install` and `ln -sf`, both naturally
+# idempotent -- but "naturally idempotent" is exactly the kind of claim this
+# repo does not ship untested. A second pass must still pass its own
+# post-write checks (00-run.sh) and leave the enablement symlink in place.
+if ( cd "${REPO}/stage-elspi/14-first-boot-ui" && ./00-run.sh >/dev/null 2>&1 ); then
+	if [ -e "${FBUI_CI_WANTS}" ]; then
+		echo "  ok: 14-first-boot-ui is re-runnable and stays enabled after two passes"
+		PASS=$((PASS+1))
+	else
+		echo "  FAIL: 14-first-boot-ui ran twice but the enablement symlink is gone"
+		FAIL=$((FAIL+1))
+	fi
+else
+	echo "  FAIL: 14-first-boot-ui is not re-runnable"
 	FAIL=$((FAIL+1))
 fi
 
