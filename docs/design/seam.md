@@ -145,25 +145,34 @@ EXPLICIT uncommissioned state, named on screen, and no dispatcher may write a
 commissioning event until a restore has happened. Silent defaults are the one
 outcome this amendment forbids.
 
-##### Three things the stage must do
+##### Three things the stage must do — two already hold
 
-Each because `ui/reflex/utils/updater.py` already behaves this way, and would
-otherwise refuse every update on a freshly flashed card:
+Each is a property `ui/reflex/utils/updater.py` already depends on, and any
+one of them missing makes the updater refuse every update on a freshly
+flashed card. Status measured on the stage at elspi `8f21fd5`, 2026-09-21:
 
 1. **Bake the app as a real git checkout carrying tag history**, at a path
    writable by the service user. The updater reads the target UI's protocol
    version with `git show <tag>:ui/reflex/utils/els_stop_map.py` and then
    checks the tag out; a source tarball, or a root-owned tree, cannot be
-   updated in place.
+   updated in place. **THIS IS THE NEW WORK** — the destination already
+   exists and is already correct (`stage-elspi/05-service-user/00-run.sh`
+   installs `/home/<service user>/projects` owned by the service user, mode
+   0755, corrected 2026-09-07 away from an invented `/opt/reflex` to the
+   monorepo path the app's own unit hardcodes). Today the delta layer drops
+   the checkout there; the image must do it instead, at a release tag.
 2. **`/opt/reflex-venv` must be writable by the service user.** The updater
    refuses an unwritable venv *before* flashing the firmware half (reflex
    `d92497eb`), so a read-only venv turns every update into a preflight
-   refusal rather than a late failure.
+   refusal rather than a late failure. **ALREADY HOLDS** —
+   `stage-elspi/08-venv` runs `chown -R -h` to the service user and then
+   FATALs if the venv is not wholly owned by that uid afterwards.
 3. **Ship `/etc/elspi-release`** carrying the image's release number. The
    updater's `check_image_release` (order 2026-09-14#6) compares it against
    each release's declared floor; absent or unparseable reads as release 0,
    which exists only as the permissive default for images built before that
-   order.
+   order. **ALREADY HOLDS** —
+   `stage-elspi/11-manifest/files/render-release.sh` writes it.
 
 
 ### 2. No password anywhere in this repo — it is going public
