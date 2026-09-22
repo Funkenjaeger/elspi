@@ -153,11 +153,21 @@ ok "manifest is valid JSON"
 
 SERVICE_USER="$(jget "['service_user']")"
 VENV="$(jget "['paths']['venv']")"
-# app_parent is what the IMAGE creates; app_root is where the DELTA puts the
-# checkout and does NOT exist in a freshly built image. Checking app_root here
-# would fail on every correct image -- the distinction is the seam.
+# app_parent is what stage-elspi/05-service-user creates; app_root is where the
+# checkout lives.
+#
+# THAT SECOND CLAUSE CHANGED 2026-09-21. It used to read "app_root is where the
+# DELTA puts the checkout and does NOT exist in a freshly built image. Checking
+# app_root here would fail on every correct image -- the distinction is the
+# seam." docs/design/seam.md's ratified amendment moves the checkout into the
+# image, so the opposite is now true: an image with nothing at app_root is a
+# build that lost its application, and the section below is what says so.
 APP_PARENT="$(jget "['paths']['app_parent']")"
 APP_ROOT="$(jget "['paths']['app_root']")"
+# The baked release (seam.md amendment 2026-09-21), read out of the image's own
+# declaration like everything else in this section.
+APP_RELEASE="$(jget "['baked_app']['release']")"
+APP_COMMIT="$(jget "['baked_app']['commit']")"
 CONFIG_DIR="$(jget "['paths']['config_dir']")"
 LOG_DIR="$(jget "['paths']['log_dir']")"
 DRM_DEFAULT="$(jget "['drm']['default_mode']")"
@@ -178,7 +188,7 @@ FBUI_UNIT="$(jget "['first_boot_ui']['unit']")"
 FBUI_SCRIPT="$(jget "['first_boot_ui']['script']")"
 
 for v in SERVICE_USER VENV APP_PARENT APP_ROOT CONFIG_DIR LOG_DIR DRM_DEFAULT DRM_SWITCHER \
-         DRM_MODES FBS_UNIT FBS_SCRIPT FBUI_UNIT FBUI_SCRIPT; do
+         DRM_MODES FBS_UNIT FBS_SCRIPT FBUI_UNIT FBUI_SCRIPT APP_RELEASE APP_COMMIT; do
 	if [ -z "${!v}" ]; then bad "manifest declares ${v}"; else ok "manifest declares ${v}=${!v}"; fi
 done
 
@@ -429,6 +439,170 @@ venv_owned_by_service_user() {
 }
 check "${VENV} is wholly owned by ${SERVICE_USER} (the updater syncs into it as that user)" \
 	venv_owned_by_service_user
+
+# ---------------------------------------------------------------------------
+section "The baked application (seam.md amendment 2026-09-21)"
+
+# RATIFIED 2026-09-21: "The image now ships the app, pinned to the latest FULL
+# release. Not a development rc.*, not a floating branch." Everything in this
+# section is a property ui/reflex/utils/updater.py already depends on -- any
+# one of them missing makes the updater refuse every update on a freshly
+# flashed card, which is the assumption the amendment rests on.
+
+APP_DIR="${ROOTFS}${APP_ROOT}"
+SELECT_RELEASE="$(cd "$(dirname "$0")/.." && pwd)/stage-elspi/10a-app-checkout/files/select-release.sh"
+
+# --- (A) present, and the service user's ------------------------------------
+if [ -d "${APP_DIR}" ]; then
+	ok "a checkout exists at ${APP_ROOT}"
+else
+	bad "a checkout exists at ${APP_ROOT} -- the image has no application"
+fi
+
+# The updater runs `git fetch`, `git checkout` and `uv sync` AS THE SERVICE
+# USER. Same reasoning as the venv's ownership check above (Open Loops
+# 6aac9465), plus one git-specific edge: git refuses a repository whose owner
+# is not the caller ("detected dubious ownership"), which in a log looks
+# nothing like a permissions problem. find -P judges symlinks themselves.
+app_owned_by_service_user() {
+	[ -n "${SU_UID}" ] && [ -d "${APP_DIR}" ] \
+		&& [ -z "$(find "${APP_DIR}" ! -uid "${SU_UID}" -print -quit)" ]
+}
+check "${APP_ROOT} is wholly owned by ${SERVICE_USER} (the updater runs git and uv as that user)" \
+	app_owned_by_service_user
+
+# --- (B) a REAL repository, with tag history, that `git show <tag>:` works on-
+# THE DISTINCTION THIS SECTION EXISTS FOR. A source tarball, a `git archive`
+# export or a copied tree all produce a directory at app_root that looks
+# finished. None of them can be updated in place: updater.py's
+# resolve_checkout() refuses them outright, and its protocol-version read is a
+# `git show` against an object store that is not there.
+if [ -d "${APP_DIR}/.git" ] && git -C "${APP_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
+	ok "${APP_ROOT} is a real git repository (not an export or a copied tree)"
+	APP_IS_REPO=1
+else
+	bad "${APP_ROOT} is a real git repository (not an export or a copied tree)"
+	APP_IS_REPO=0
+fi
+
+if [ "${APP_IS_REPO}" -eq 1 ]; then
+	# A shallow clone answers for its tip and lies about everything else.
+	if [ -e "${APP_DIR}/.git/shallow" ]; then
+		bad "${APP_ROOT} is not a shallow clone"
+	else
+		ok "${APP_ROOT} is not a shallow clone"
+	fi
+
+	# TAG HISTORY, which is the literal wording of the amendment's item 1. An
+	# export carries none; a `--depth 1 --single-branch` clone carries one.
+	APP_TAGS="$(git -C "${APP_DIR}" tag 2>/dev/null | wc -l)"
+	if [ "${APP_TAGS}" -ge 2 ]; then
+		ok "${APP_ROOT} carries tag history (${APP_TAGS} tags)"
+	else
+		bad "${APP_ROOT} carries tag history (found ${APP_TAGS} tag(s) -- an export or a depth-1 clone)"
+	fi
+
+	# The declared tag must actually be IN the repository...
+	if git -C "${APP_DIR}" rev-parse --verify --quiet "refs/tags/${APP_RELEASE}^{commit}" >/dev/null 2>&1; then
+		ok "the declared release tag ${APP_RELEASE} resolves inside the checkout"
+	else
+		bad "the declared release tag ${APP_RELEASE} resolves inside the checkout"
+	fi
+
+	# ...and it must be what is CHECKED OUT, compared by commit id rather than
+	# by name. A checkout sitting on a branch that merely contains the tag is a
+	# different tree from the release.
+	APP_HEAD="$(git -C "${APP_DIR}" rev-parse --verify HEAD 2>/dev/null || true)"
+	if [ -n "${APP_HEAD}" ] && [ "${APP_HEAD}" = "${APP_COMMIT}" ]; then
+		ok "HEAD is the declared commit (${APP_COMMIT})"
+	else
+		bad "HEAD is the declared commit: manifest says ${APP_COMMIT}, checkout is at ${APP_HEAD:-NONE}"
+	fi
+
+	# THE UPDATER'S READ MECHANISM, exercised rather than assumed. A path the
+	# release certainly has, so this measures `git show <tag>:<path>` against
+	# this object store and nothing else.
+	if git -C "${APP_DIR}" show "${APP_RELEASE}:ui/pyproject.toml" >/dev/null 2>&1; then
+		ok "git show ${APP_RELEASE}:ui/pyproject.toml works against the checkout"
+	else
+		bad "git show ${APP_RELEASE}:ui/pyproject.toml works against the checkout"
+	fi
+
+	# THE EXACT READ THE AMENDMENT NAMES. Whether els_stop_map.py exists at a
+	# given tag is a property of THE RELEASE, not of this build -- it landed
+	# after v1.1.0 -- so its absence is reported as UNKNOWN, BY NAME, and never
+	# as a pass or a skip. The mechanism itself is already proven by the check
+	# above; what this cannot tell you is whether the BAKED release can read
+	# its own protocol version.
+	if git -C "${APP_DIR}" show "${APP_RELEASE}:ui/reflex/utils/els_stop_map.py" >/dev/null 2>&1; then
+		ok "git show ${APP_RELEASE}:ui/reflex/utils/els_stop_map.py succeeds (the updater's protocol read)"
+	else
+		unknown "ui/reflex/utils/els_stop_map.py is ABSENT at the baked tag ${APP_RELEASE}. That is the file updater.py reads a release's protocol version out of. The MECHANISM is fine (the git show check above passed); the baked release simply predates the in-app updater, so the first update on a fresh card is a manual one."
+	fi
+
+	# resolve_checkout()'s four required paths, named one at a time. The two
+	# fw/scripts entries are RELEASE properties like els_stop_map.py above, so
+	# they are UNKNOWN rather than FAIL; .git and ui/pyproject.toml are checked
+	# as failures because without them nothing about the stage worked.
+	check "${APP_ROOT}/ui/pyproject.toml (resolve_checkout requires it)" \
+		test -f "${APP_DIR}/ui/pyproject.toml"
+	for p in fw/scripts/modbus-flash.py fw/scripts/reflex_image.py; do
+		if [ -f "${APP_DIR}/${p}" ]; then
+			ok "${APP_ROOT}/${p} (resolve_checkout requires it)"
+		else
+			unknown "${APP_ROOT}/${p} is ABSENT at ${APP_RELEASE}. updater.py's resolve_checkout() lists it among the four files it refuses without, so in-app update on this image refuses at preflight until the app is updated by hand. A property of the baked release, not of this build."
+		fi
+	done
+
+	# NO CREDENTIAL SHIPS -- seam call 2, and this repo is public. Checked on
+	# the artifact rather than trusted to the stage that wrote it.
+	if grep -qE '://[^/[:space:]]+:[^@/[:space:]]+@' "${APP_DIR}/.git/config" 2>/dev/null; then
+		bad "${APP_ROOT}/.git/config carries no URL with embedded credentials"
+	else
+		ok "${APP_ROOT}/.git/config carries no URL with embedded credentials"
+	fi
+
+	# The build host's source path must not be what the card fetches from.
+	APP_ORIGIN="$(git -C "${APP_DIR}" remote get-url origin 2>/dev/null || true)"
+	case "${APP_ORIGIN}" in
+		https://*|http://*)
+			ok "origin is a fetchable URL (${APP_ORIGIN}), not the build host's path" ;;
+		"")
+			bad "origin is a fetchable URL, not the build host's path (no origin at all)" ;;
+		*)
+			bad "origin is a fetchable URL, not the build host's path (found: ${APP_ORIGIN})" ;;
+	esac
+fi
+
+# --- (C) the baked release is a FULL release --------------------------------
+# THE CHECK THAT MAKES "full release" MEAN SOMETHING. Through the stage's own
+# selection script, never a second regex here: a harness with its own copy of
+# the rule can agree with itself while disagreeing with the thing that shipped.
+if [ -x "${SELECT_RELEASE}" ] || [ -f "${SELECT_RELEASE}" ]; then
+	if bash "${SELECT_RELEASE}" check "${APP_RELEASE}" >/dev/null 2>&1; then
+		ok "the baked release ${APP_RELEASE} is a FULL release (not an rc.*, not a branch)"
+	else
+		bad "the baked release ${APP_RELEASE} is a FULL release -- the selection rule REFUSES it. seam.md 2026-09-21: never a development rc.*"
+	fi
+else
+	unknown "cannot find ${SELECT_RELEASE}, so the baked release '${APP_RELEASE}' was NOT checked against the selection rule. This harness is being run from outside the repo."
+fi
+
+# --- (D) the manifest and the on-disk record agree --------------------------
+# Two files, written from one measurement by two different stages. Worth
+# checking precisely because they could disagree -- and a disagreement means
+# the manifest is describing an image that is not this one.
+APP_RELEASE_FILE="${ROOTFS}/etc/elspi/reflex-app-release"
+if [ -f "${APP_RELEASE_FILE}" ]; then
+	APP_RELEASE_ONDISK="$(tr -d '[:space:]' < "${APP_RELEASE_FILE}")"
+	if [ "${APP_RELEASE_ONDISK}" = "${APP_RELEASE}" ]; then
+		ok "/etc/elspi/reflex-app-release agrees with the manifest (${APP_RELEASE})"
+	else
+		bad "/etc/elspi/reflex-app-release ('${APP_RELEASE_ONDISK}') disagrees with the manifest's baked_app.release ('${APP_RELEASE}')"
+	fi
+else
+	bad "/etc/elspi/reflex-app-release exists (10a-app-checkout writes it; 11-manifest reads it)"
+fi
 
 # ---------------------------------------------------------------------------
 section "Boot configuration (TEXTUAL ONLY -- see blind spots)"

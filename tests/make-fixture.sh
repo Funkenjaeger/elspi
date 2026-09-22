@@ -87,6 +87,16 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
     "status": "scaffold only, see stage-elspi/14-first-boot-ui/README.md",
     "verified_on_hardware": false
   },
+  "baked_app": {
+    "release": "v1.0.0",
+    "commit": "@@APP_COMMIT@@",
+    "root": "/home/default/projects/reflex",
+    "source_form": "git-checkout-with-tag-history",
+    "selected_by": "stage-elspi/10a-app-checkout/files/select-release.sh",
+    "updater_ready": true,
+    "protocol_version_readable": true,
+    "started_on_first_boot": false
+  },
   "reflex_lock_commit": "0000000000000000000000000000000000000000",
   "image_build_sha": "fixture0000000000000000000000000000000000",
   "image_release": 1,
@@ -346,6 +356,82 @@ mkdir -p "${DEST}/usr/local/lib/elspi"
 printf '#!/bin/bash\n# fixture stub: elspi-usb-mount-name\nprintf "%%s\\n" "${1:-fallback}"\n' \
 	> "${DEST}/usr/local/lib/elspi/elspi-usb-mount-name"
 chmod 0755 "${DEST}/usr/local/lib/elspi/elspi-usb-mount-name"
+
+# --- the baked application checkout (stage-elspi/10a-app-checkout) ---------
+# docs/design/seam.md amendment 2026-09-21: the image ships the app as a REAL
+# GIT CHECKOUT at a full release tag, carrying tag history, owned by the
+# service user.
+#
+# A REAL REPOSITORY, not a directory with a `.git` file in it. The properties
+# the harness has to be able to check -- "the tag resolves", "git show
+# <tag>:<path> works", "there is more than one tag" -- are all properties of
+# an object store, and a stub would let every one of them pass while a `git
+# archive` export (the thing this stage exists to NOT ship) failed them all.
+# Built with two tags and HEAD detached at the newer one, which is the shape
+# the real stage leaves behind.
+#
+# Owned by the service user by construction: the fixture's service user IS the
+# invoking uid (see the top of this file), so no chown and no root.
+#
+# IDENTITY IS SET LOCALLY, IN THIS THROWAWAY REPO ONLY. `git commit` refuses
+# without user.email, and CI runners routinely have no global identity -- but
+# `git -c user.email=...` on a command is how a real commit ends up signed as
+# somebody it is not, so this is a `git -C <fixture> config` against a
+# repository that is deleted at the end of the test and never pushed anywhere.
+APP_ROOT_FIX="${DEST}/home/default/projects/reflex"
+mkdir -p "${APP_ROOT_FIX}/ui/reflex/utils" "${APP_ROOT_FIX}/fw/scripts"
+
+cat > "${APP_ROOT_FIX}/ui/pyproject.toml" <<'TOML'
+[project]
+name = "reflex"
+version = "1.0.0"
+TOML
+
+# The file ui/reflex/utils/updater.py reads the TARGET release's protocol
+# version out of, with `git show <tag>:ui/reflex/utils/els_stop_map.py`. Its
+# presence AT A TAG is what makes that read answerable.
+cat > "${APP_ROOT_FIX}/ui/reflex/utils/els_stop_map.py" <<'PY'
+# fixture stub: emitted by tools/genregs.py in the real repo
+PROTOCOL_VERSION = 9
+PY
+
+# resolve_checkout() refuses a tree missing either of these -- "a directory
+# with no fw/" -- so the fixture carries them and self-test.sh can take them
+# away again.
+printf '# fixture stub\n' > "${APP_ROOT_FIX}/fw/scripts/modbus-flash.py"
+printf '# fixture stub\n' > "${APP_ROOT_FIX}/fw/scripts/reflex_image.py"
+
+git -C "${APP_ROOT_FIX}" init -q
+git -C "${APP_ROOT_FIX}" config user.email "fixture@example.invalid"
+git -C "${APP_ROOT_FIX}" config user.name  "elspi fixture"
+git -C "${APP_ROOT_FIX}" config commit.gpgsign false
+git -C "${APP_ROOT_FIX}" add -A
+git -C "${APP_ROOT_FIX}" commit -q -m "fixture: v0.9.0"
+git -C "${APP_ROOT_FIX}" tag v0.9.0
+printf 'PROTOCOL_VERSION = 9\n' >> "${APP_ROOT_FIX}/ui/reflex/utils/els_stop_map.py"
+git -C "${APP_ROOT_FIX}" add -A
+git -C "${APP_ROOT_FIX}" commit -q -m "fixture: v1.0.0"
+git -C "${APP_ROOT_FIX}" tag v1.0.0
+# Detached AT THE TAG, which is where both this stage and the in-app updater
+# leave HEAD. A fixture sitting on a branch would let a harness that checks
+# "HEAD == the declared tag" pass for the wrong reason.
+git -C "${APP_ROOT_FIX}" checkout -q --detach v1.0.0
+# The remote the real image ships: anonymous, public, and NOT the path the
+# build read from.
+git -C "${APP_ROOT_FIX}" remote add origin "https://github.com/Funkenjaeger/reflex.git"
+
+APP_COMMIT_FIX="$(git -C "${APP_ROOT_FIX}" rev-parse --verify HEAD)"
+sed -i "s/@@APP_COMMIT@@/${APP_COMMIT_FIX}/" "${DEST}/etc/elspi-image.json"
+
+# The build-time fact files 10a-app-checkout writes and 11-manifest reads.
+# They ship, so the harness can cross-check the manifest against them -- two
+# files written from one measurement, which is only worth checking because
+# they COULD disagree.
+mkdir -p "${DEST}/etc/elspi"
+printf '%s\n' "v1.0.0"              > "${DEST}/etc/elspi/reflex-app-release"
+printf '%s\n' "${APP_COMMIT_FIX}"   > "${DEST}/etc/elspi/reflex-app-commit"
+printf '%s\n' "yes"                 > "${DEST}/etc/elspi/reflex-app-updater-ready"
+printf '%s\n' "yes"                 > "${DEST}/etc/elspi/reflex-app-protocol-readable"
 
 # --- /etc/elspi-release -------------------------------------------------
 # Generated FROM the manifest above by the same script the real build runs

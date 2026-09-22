@@ -14,9 +14,18 @@
 # to match the code.
 #
 # NOT covered (they need a real chroot with an armhf interpreter):
-#   04-serial        systemctl mask
-#   05-service-user  useradd/chown inside the chroot
-#   08-venv          uv sync, and the Kivy compile that is the whole risk
+#   04-serial         systemctl mask
+#   05-service-user   useradd/chown inside the chroot
+#   08-venv           uv sync, and the Kivy compile that is the whole risk
+#   10a-app-checkout  the chown of the checkout to the service user runs
+#                     through on_chroot, exactly as 08-venv's does, so the
+#                     substage cannot complete here. Its two interesting
+#                     halves ARE covered elsewhere and deliberately:
+#                     the SELECTION by tests/test-release-selection.sh
+#                     (real synthetic repos, no chroot), and the resulting
+#                     checkout by tests/verify-image.sh + tests/self-test.sh
+#                     against the fixture. What no offline test can reach is
+#                     the clone itself; that is a Tier-1 build item.
 # Those are Tier-1/Tier-2 build items. This script does not pretend otherwise.
 
 set -uo pipefail
@@ -71,7 +80,47 @@ fi
 # be exercised without the venv build.
 install -d "${ROOTFS_DIR}/etc/elspi"
 echo "0000000000000000000000000000000000000000" > "${ROOTFS_DIR}/etc/elspi/reflex-lock-commit"
+# 11-manifest also consumes what 10a-app-checkout writes (docs/design/seam.md
+# amendment 2026-09-21: the manifest records which release was baked). Same
+# arrangement, same reason: supply the facts so the manifest logic can be
+# exercised without doing the clone.
+echo "v1.1.0" > "${ROOTFS_DIR}/etc/elspi/reflex-app-release"
+echo "752da5c0aa8c31eed9ec6fc9301638a03d138953" > "${ROOTFS_DIR}/etc/elspi/reflex-app-commit"
+echo "no"  > "${ROOTFS_DIR}/etc/elspi/reflex-app-updater-ready"
+echo "no"  > "${ROOTFS_DIR}/etc/elspi/reflex-app-protocol-readable"
 run_stage 11-manifest
+
+# THE MANIFEST MUST ACTUALLY CARRY THE BAKED RELEASE. Checked here rather than
+# only against the hand-authored fixture, for the reason this whole harness
+# exists: verify-image.sh reads a fixture somebody wrote, so the two could
+# agree with each other and both disagree with 00-run.sh.
+if grep -q '"release": "v1.1.0"' "${ROOTFS_DIR}/etc/elspi-image.json"; then
+	echo "  ok: the manifest records the baked release read from /etc/elspi/reflex-app-release"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: the manifest does not carry baked_app.release=v1.1.0"
+	FAIL=$((FAIL+1))
+fi
+# The yes/no facts must arrive as JSON booleans, not as the strings "no" --
+# "updater_ready": "no" is truthy to every consumer that reads it.
+if grep -q '"updater_ready": false' "${ROOTFS_DIR}/etc/elspi-image.json"; then
+	echo "  ok: updater_ready rendered as a JSON boolean, not the string \"no\""
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: updater_ready is not the JSON literal false"
+	grep -n 'updater_ready' "${ROOTFS_DIR}/etc/elspi-image.json" | sed 's/^/        /'
+	FAIL=$((FAIL+1))
+fi
+# The checkout is no longer the delta layer's, and the manifest must not still
+# claim it is -- one document, one owner per path.
+if grep -q 'reflex monorepo checkout at' "${ROOTFS_DIR}/etc/elspi-image.json"; then
+	echo "  FAIL: delta_layer_owns still claims the reflex checkout, which the"
+	echo "        image now bakes (docs/design/seam.md amendment 2026-09-21)"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: delta_layer_owns no longer claims the baked checkout"
+	PASS=$((PASS+1))
+fi
 
 # 12-first-boot-seed is deliberately chroot-free -- it only rewrites
 # /boot/firmware/meta-data and installs a unit under ${ROOTFS_DIR} -- which is
@@ -271,6 +320,40 @@ if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG5}" ./00-ru
 	FAIL=$((FAIL+1))
 else
 	echo "  ok: seed stage refused the multi-user.target.wants enablement (ordering cycle)"
+	PASS=$((PASS+1))
+fi
+
+# THE MANIFEST'S OWN FULL-RELEASE GATE MUST FIRE. A manifest is what every
+# downstream consumer believes, so "v1.2.0-rc.4 got declared as the baked
+# release" has to be a build failure and not a line in a log nobody reads.
+# Handed the bad state deliberately -- a gate never given it is a gate nobody
+# has seen go red.
+NEG6="${WORK}/neg6"
+mkdir -p "${NEG6}/etc/elspi" "${NEG6}/boot/firmware"
+echo "0000000000000000000000000000000000000000" > "${NEG6}/etc/elspi/reflex-lock-commit"
+echo "v1.2.0-rc.4" > "${NEG6}/etc/elspi/reflex-app-release"
+echo "1dfa05c0000000000000000000000000000000aa" > "${NEG6}/etc/elspi/reflex-app-commit"
+echo "yes" > "${NEG6}/etc/elspi/reflex-app-updater-ready"
+echo "yes" > "${NEG6}/etc/elspi/reflex-app-protocol-readable"
+if ( cd "${REPO}/stage-elspi/11-manifest" && ROOTFS_DIR="${NEG6}" ./00-run.sh >/dev/null 2>&1 ); then
+	echo "  FAIL: 11-manifest declared a PRE-RELEASE (v1.2.0-rc.4) as the baked release"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: 11-manifest refused to declare a pre-release as the baked release"
+	PASS=$((PASS+1))
+fi
+
+# And it must refuse outright when the fact file is absent, rather than
+# inventing a value or omitting the field: an image whose manifest does not say
+# what app it carries is an image nobody can reason about after the fact.
+NEG7="${WORK}/neg7"
+mkdir -p "${NEG7}/etc/elspi" "${NEG7}/boot/firmware"
+echo "0000000000000000000000000000000000000000" > "${NEG7}/etc/elspi/reflex-lock-commit"
+if ( cd "${REPO}/stage-elspi/11-manifest" && ROOTFS_DIR="${NEG7}" ./00-run.sh >/dev/null 2>&1 ); then
+	echo "  FAIL: 11-manifest wrote a manifest with no baked-release record at all"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: 11-manifest refused when 10a-app-checkout had not recorded a release"
 	PASS=$((PASS+1))
 fi
 

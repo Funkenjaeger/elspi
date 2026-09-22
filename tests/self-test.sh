@@ -371,6 +371,72 @@ mutate "the seed unit's ExecStart loses its '-' prefix (can fail the boot)" \
 mutate "the seed unit loses its After=cloud-final ordering" \
 	"sed -i '/^After=cloud-final.service\$/d' etc/systemd/system/elspi-first-boot-seed.service"
 
+# --- THE BAKED APPLICATION (stage-elspi/10a-app-checkout, seam.md amendment
+#     2026-09-21) -----------------------------------------------------------
+#
+# The amendment's item 1 is "bake the app as a REAL GIT CHECKOUT CARRYING TAG
+# HISTORY", and every way of getting that subtly wrong produces a directory at
+# the app root that looks finished. These mutations are the shapes: no
+# checkout, an export with the .git removed, a shallow clone, a depth-1 clone
+# with a single tag, a tree sitting somewhere other than the release. On a
+# freshly flashed card each of them turns every in-app update into a refusal,
+# and none of them is visible in a directory listing.
+mutate "no checkout at the app root at all (the image lost its application)" \
+	"rm -rf home/default/projects/reflex"
+# THE TARBALL. This is the one the amendment argues against by name: "a source
+# tarball, or a detached export, cannot be updated in place".
+mutate "the checkout is an EXPORT -- the .git directory removed" \
+	"rm -rf home/default/projects/reflex/.git"
+mutate "the checkout is SHALLOW (git show against an unfetched tag would lie)" \
+	"touch home/default/projects/reflex/.git/shallow"
+# A --depth 1 --single-branch clone: one tag, which is not tag history.
+mutate "the checkout carries only one tag (a depth-1 clone, not tag history)" \
+	"git -C home/default/projects/reflex tag -d v0.9.0"
+mutate "the declared release tag is not in the checkout" \
+	"git -C home/default/projects/reflex tag -d v1.0.0"
+# Checked out somewhere that merely CONTAINS the tag is a different tree from
+# the release, and looks identical to `ls`.
+mutate "HEAD is not the declared commit (checked out one commit back)" \
+	"git -C home/default/projects/reflex checkout -q --detach v0.9.0"
+mutate "the checkout is not a reflex monorepo tree (no ui/pyproject.toml)" \
+	"rm -f home/default/projects/reflex/ui/pyproject.toml"
+# THE BUILD HOST'S PATH SHIPPED AS origin. The card in the machine shop then
+# fetches from a directory that exists only on whoever built the image.
+mutate "origin is the build host's local mirror path, not a fetchable URL" \
+	"git -C home/default/projects/reflex remote set-url origin /mnt/git/reflex.git"
+# seam call 2: no credential enters this repo, and the image ships none.
+mutate "the shipped .git/config carries a credentialled URL" \
+	"git -C home/default/projects/reflex remote set-url origin https://user:tokenvalue@github.com/Funkenjaeger/reflex.git"
+
+# THE SELECTION, asserted on the ARTIFACT rather than only at build time. A
+# manifest declaring an rc.* is a manifest everything downstream believes.
+mutate "the manifest declares a PRE-RELEASE as the baked release" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d['baked_app']['release']='v1.2.0-rc.4';json.dump(d,open(p,'w'))\""
+mutate "the manifest declares a ui-* half-of-the-pair tag as the baked release" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d['baked_app']['release']='ui-v1.0.0';json.dump(d,open(p,'w'))\""
+mutate "the manifest declares a branch name as the baked release" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d['baked_app']['release']='dev';json.dump(d,open(p,'w'))\""
+mutate "the manifest does not declare baked_app at all" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d.pop('baked_app',None);json.dump(d,open(p,'w'))\""
+# Two files, one measurement. A disagreement means the manifest is describing
+# an image that is not this one.
+mutate "/etc/elspi/reflex-app-release disagrees with the manifest" \
+	"printf 'v0.9.0\\n' > etc/elspi/reflex-app-release"
+mutate "/etc/elspi/reflex-app-release is missing" \
+	"rm -f etc/elspi/reflex-app-release"
+mutate "the manifest's baked_app.commit is not what is checked out" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d['baked_app']['commit']='0'*40;json.dump(d,open(p,'w'))\""
+
+# Ownership, same shape and same reason as the venv's mutation above: making an
+# entry owned by SOMEONE ELSE needs chown, i.e. root. Without it this is
+# reported as not run rather than counted as a pass it did not earn.
+if [ "$(id -u)" -eq 0 ]; then
+	mutate "the app checkout is not owned by the service user (git refuses 'dubious ownership'; uv sync cannot write)" \
+		"chown 54321 home/default/projects/reflex/ui/pyproject.toml"
+else
+	echo "  UNKN  app-checkout-ownership mutation needs root (chown); NOT RUN"
+fi
+
 # The manifest itself
 mutate "the manifest does not declare the first-boot seed" \
 	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d.pop('first_boot_seed',None);json.dump(d,open(p,'w'))\""
@@ -480,6 +546,52 @@ if bash "${HERE}/test-render-release-no-python3.sh" >"${WORK}/out.txt" 2>&1; the
 else
 	echo "  FAIL  render-release.sh needs python3, or its output moved."
 	echo "        tests/test-render-release-no-python3.sh said:"
+	sed 's/^/           /' "${WORK}/out.txt"
+	FAILED=$((FAILED+1))
+fi
+
+# --- the release SELECTION (order 2026-09-21#2) ----------------------------
+#
+# Wired in HERE for the same reason test-render-release-no-python3.sh is: CI's
+# tier1.yml names every tests/*.sh runner it invokes one at a time, and
+# self-test.sh is already one of those steps, so hanging the new runner off it
+# is what makes it RUN rather than sit in tests/ being nobody's job.
+#
+# Its own script because it needs real synthetic git repositories on disk --
+# the selection reads candidates with `git ls-remote`, and a string-table test
+# would exercise the regex while skipping the half that talks to git.
+echo
+echo "== the release selection refuses what it claims to (order 2026-09-21#2) =="
+echo "   docs/design/seam.md 2026-09-21: the image ships the latest FULL release,"
+echo "   'not a development rc.*, not a floating branch'. Delegated to"
+echo "   tests/test-release-selection.sh -- see its header."
+if bash "${HERE}/test-release-selection.sh" >"${WORK}/out.txt" 2>&1; then
+	echo "  OK    the selection picks full releases and refuses everything else"
+	PASSED=$((PASSED+1))
+else
+	echo "  FAIL  the release selection accepted something it must refuse,"
+	echo "        or refused something it must accept."
+	echo "        tests/test-release-selection.sh said:"
+	sed 's/^/           /' "${WORK}/out.txt"
+	FAILED=$((FAILED+1))
+fi
+
+# --- the substage itself, run for real (order 2026-09-21#2) ----------------
+# Collected here for the same reason as the two runners above. Everything else
+# in this file checks the harness against a fixture SOMEBODY WROTE; this one
+# runs stage-elspi/10a-app-checkout against a synthetic source and checks what
+# it actually produced, which is the gap a fixture-only test leaves open.
+echo
+echo "== the app-checkout substage, run for real (order 2026-09-21#2) =="
+echo "   Against a synthetic reflex-shaped source in a temp dir -- no network"
+echo "   and no reflex checkout. Delegated to tests/test-app-checkout-stage.sh."
+if bash "${HERE}/test-app-checkout-stage.sh" >"${WORK}/out.txt" 2>&1; then
+	echo "  OK    the substage bakes the full release and its guards fire"
+	PASSED=$((PASSED+1))
+else
+	echo "  FAIL  stage-elspi/10a-app-checkout did not do what it claims, or a"
+	echo "        guard that must refuse did not."
+	echo "        tests/test-app-checkout-stage.sh said:"
 	sed 's/^/           /' "${WORK}/out.txt"
 	FAILED=$((FAILED+1))
 fi

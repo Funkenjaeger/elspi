@@ -100,6 +100,43 @@ echo "baking:   $(ssh-keygen -lf "${PUBKEY_FILE}" | awk '{print $1, $2, $4}')"
 # --- trap 2: forward it by NAME ---------------------------------------------
 export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS:-} -e ELSPI_PUBKEY"
 
+# --- the app-release parameters, forwarded the same way ---------------------
+# stage-elspi/10a-app-checkout's REFLEX_SOURCE / REFLEX_RELEASE /
+# REFLEX_ORIGIN_URL are parameters of the BUILD (docs/design/seam.md amendment
+# 2026-09-21). They are read inside the container, and build-docker.sh passes
+# only `-e GIT_HASH` of its own accord, so without this they are parameters
+# nobody outside the container can actually set -- which is a knob that cannot
+# turn, not a configuration point.
+#
+# BY NAME ONLY, never name=value: PIGEN_DOCKER_OPTS is expanded unquoted.
+# Only names that are SET are added -- `-e FOO` for an unset FOO passes the
+# host's (absent) value and would override elspi.conf's default with empty.
+for _v in REFLEX_SOURCE REFLEX_RELEASE REFLEX_ORIGIN_URL; do
+	if [ -n "${!_v:-}" ]; then
+		export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS} -e ${_v}"
+		echo "forwarding: ${_v}"
+	fi
+done
+unset _v
+
+# A LOCAL MIRROR PATH IS NOT AUTOMATICALLY VISIBLE INSIDE THE CONTAINER, and
+# this is the one trap this loop does not remove. `REFLEX_SOURCE=/mnt/git/
+# reflex.git` names a path on the HOST; the build runs in Docker, so it also
+# needs bind-mounting:
+#
+#   REFLEX_SOURCE=/mnt/git/reflex.git \
+#   PIGEN_DOCKER_OPTS="-v /mnt/git/reflex.git:/mnt/git/reflex.git:ro" \
+#   ./build-elspi.sh
+#
+# Said here rather than left to be discovered three hours in, which is how
+# long this build takes to reach the stage that would fail.
+case "${REFLEX_SOURCE:-}" in
+	/*)
+		echo "note:     REFLEX_SOURCE=${REFLEX_SOURCE} is a host path -- bind-mount it"
+		echo "          into the container too, or the clone will fail inside it."
+		;;
+esac
+
 # --- trap 4: THE BUILD DESTROYS WHAT THE HARNESS NEEDS ----------------------
 # On success build-docker.sh runs `docker rm -v pigen_work`, and the -v takes
 # the anonymous volume holding work/ with it. The built ROOTFS lives in that

@@ -21,6 +21,54 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REFLEX_COMMIT="$(tr -d '[:space:]' < "${ROOTFS_DIR}/etc/elspi/reflex-lock-commit")"
 [ -n "${REFLEX_COMMIT}" ] || { echo "FATAL: reflex-lock-commit missing or empty"; exit 1; }
 
+# WHICH RELEASE OF THE APP IS BAKED IN (docs/design/seam.md amendment
+# 2026-09-21). READ, not re-derived: stage-elspi/10a-app-checkout measured it
+# when it did the clone and wrote these files, exactly as 08-venv writes
+# reflex-lock-commit above. A second `git describe` here could disagree with
+# the checkout it is describing -- one measurement, not two.
+_read_fact() { # _read_fact <file> <what it is>
+	local f="${ROOTFS_DIR}/etc/elspi/$1" v
+	if [ ! -f "${f}" ]; then
+		echo "FATAL: /etc/elspi/$1 is missing -- $2." >&2
+		echo "       stage-elspi/10a-app-checkout writes it and must run before" >&2
+		echo "       this stage. (tests/dry-run-stages.sh seeds it; a real build" >&2
+		echo "       gets it from the substage.)" >&2
+		exit 1
+	fi
+	v="$(tr -d '[:space:]' < "${f}")"
+	[ -n "${v}" ] || { echo "FATAL: /etc/elspi/$1 is empty -- $2" >&2; exit 1; }
+	printf '%s' "${v}"
+}
+APP_RELEASE="$(_read_fact reflex-app-release "the baked application release tag")"
+APP_COMMIT="$(_read_fact reflex-app-commit "the commit that tag resolves to")"
+APP_UPDATER_READY="$(_read_fact reflex-app-updater-ready "whether the baked release carries the in-app updater's own prerequisites")"
+APP_PROTOCOL_READABLE="$(_read_fact reflex-app-protocol-readable "whether els_stop_map.py is readable at the baked tag")"
+
+# The declared value must be a FULL release, checked HERE as well as at the
+# clone. Not belt-and-braces: this is the field the manifest publishes to the
+# UI and the delta layer, and a manifest that says "v1.2.0-rc.4" is a manifest
+# that has to be believed by everything downstream. Through the same script
+# the selection uses, never a second regex.
+if ! bash "${HERE}/../10a-app-checkout/files/select-release.sh" check "${APP_RELEASE}" >/dev/null; then
+	echo "FATAL: the baked release '${APP_RELEASE}' is not a full release."
+	echo "       docs/design/seam.md's 2026-09-21 amendment: the image ships the"
+	echo "       latest FULL release, never a development rc.*. Refusing to"
+	echo "       declare it in the manifest."
+	exit 1
+fi
+
+# JSON booleans, from the yes/no the substage recorded.
+case "${APP_UPDATER_READY}" in
+	yes) APP_UPDATER_READY_JSON=true ;;
+	no)  APP_UPDATER_READY_JSON=false ;;
+	*)   echo "FATAL: reflex-app-updater-ready is '${APP_UPDATER_READY}', expected yes or no"; exit 1 ;;
+esac
+case "${APP_PROTOCOL_READABLE}" in
+	yes) APP_PROTOCOL_READABLE_JSON=true ;;
+	no)  APP_PROTOCOL_READABLE_JSON=false ;;
+	*)   echo "FATAL: reflex-app-protocol-readable is '${APP_PROTOCOL_READABLE}', expected yes or no"; exit 1 ;;
+esac
+
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # IMAGE_BUILD_SHA -- the git rev of THIS repo (elspi is a soft fork of pi-gen
@@ -97,6 +145,13 @@ else
 	KIVY_VERSION="unmeasured (no venv)"
 fi
 
+# NOTE ON delta_layer_owns BELOW: "reflex monorepo checkout at
+# /home/default/projects/reflex" was its first entry for as long as the seam
+# put the app in the deltas. docs/design/seam.md's ratified 2026-09-21
+# amendment moves the checkout into the image, so it is declared as baked_app
+# above and is NO LONGER in that list. Leaving it would make one document
+# claim the same path for two different owners, and the delta layer reads this
+# file to decide what it still has to do.
 cat > "${MANIFEST}" <<- JSON
 	{
 	  "image": "elspi",
@@ -112,6 +167,17 @@ cat > "${MANIFEST}" <<- JSON
 	    "python": "${PYTHON_VERSION}",
 	    "kivy": "${KIVY_VERSION}",
 	    "uv": "${UV_VERSION}"
+	  },
+
+	  "baked_app": {
+	    "release": "${APP_RELEASE}",
+	    "commit": "${APP_COMMIT}",
+	    "root": "/home/${FIRST_USER_NAME}/projects/reflex",
+	    "source_form": "git-checkout-with-tag-history",
+	    "selected_by": "stage-elspi/10a-app-checkout/files/select-release.sh",
+	    "updater_ready": ${APP_UPDATER_READY_JSON},
+	    "protocol_version_readable": ${APP_PROTOCOL_READABLE_JSON},
+	    "started_on_first_boot": false
 	  },
 
 	  "service_user": "${FIRST_USER_NAME}",
@@ -152,7 +218,6 @@ cat > "${MANIFEST}" <<- JSON
 	  },
 
 	  "delta_layer_owns": [
-	    "reflex monorepo checkout at /home/default/projects/reflex",
 	    "reflex-ui.service",
 	    "start.sh and its KCFG_* environment",
 	    "the single sudoers NOPASSWD rule",
@@ -184,14 +249,14 @@ fi
 
 for key in log_dir config_dir venv app_parent default_mode reflex_lock_commit \
            first_boot_seed first_boot_ui unit script image_build_sha image_release \
-           runtime_versions; do
+           runtime_versions baked_app updater_ready protocol_version_readable; do
 	grep -q "\"${key}\"" "${MANIFEST}" || {
 		echo "FATAL: manifest is missing required key '${key}'"
 		exit 1
 	}
 done
 
-echo "  wrote /etc/elspi-image.json (reflex lock ${REFLEX_COMMIT})"
+echo "  wrote /etc/elspi-image.json (reflex lock ${REFLEX_COMMIT}, baked app ${APP_RELEASE})"
 
 # /etc/elspi-release -- the SAME data, reshaped for the UI and the reflex
 # updater (order 2026-09-14#6). One declaration (above), two renderings: this
