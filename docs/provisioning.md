@@ -260,8 +260,9 @@ an explicit uncommissioned state, never silently on in-code defaults.*
 
 Accepts a directory or a tarball and normalises it. It gates on the *content*,
 not the path: a non-empty `Els-0.yaml` must be present, and there must be at
-least 15 `.yaml` files (the live machine carried 19 at last count). A partial
-capture is refused rather than restored as a subset.
+least 15 `.yaml` files (the live machine carried 17 at last count, 2 files of
+slack above the bar). A partial capture is refused rather than restored as a
+subset.
 
 Then it **prints the commissioned values it is about to install** — the backlash
 steps, the last measured calibration, the ceiling, the drift notice — because

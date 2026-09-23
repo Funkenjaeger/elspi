@@ -164,9 +164,10 @@ else
 
 	NYAML="$(find "${SRC}" -maxdepth 1 -name '*.yaml' | wc -l)"
 	[ "${NYAML}" -ge 15 ] \
-		|| die "only ${NYAML} yaml file(s) in ${SRC}; the live machine carried 19 at
-  last count. This looks like a partial capture. REFUSING rather than
-  restoring a subset over a machine that needs all of it."
+		|| die "only ${NYAML} yaml file(s) in ${SRC}; the live machine carried 17 at
+  last count (2 files of slack above the bar). This looks like a partial
+  capture. REFUSING rather than restoring a subset over a machine that needs
+  all of it."
 	ok "${NYAML} yaml files, Els-0.yaml present and non-empty"
 
 	# --- SHOW THE HUMAN WHAT IS ABOUT TO LAND ---------------------------------
