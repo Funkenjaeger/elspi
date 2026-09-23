@@ -182,16 +182,55 @@ if [ "${CLONE_RC}" -ne 0 ]; then
 	exit 1
 fi
 
+# Defined here, ahead of its first use below, and used by every gate after it.
+fatal() { echo "FATAL: $*"; exit 1; }
+
 # The shipped remote, not the build host's path. Done before the gates so the
 # gates judge what actually ships.
 git -C "${DEST}" remote set-url origin "${REFLEX_ORIGIN_URL}"
+
+# --- What the clone recorded about the BUILD, taken back out ----------------
+# Rewriting origin is not enough. A clone also leaves behind, in .git:
+#
+#   * a REFLOG (.git/logs/) whose first line is "clone: from <REFLEX_SOURCE>",
+#     stamped with the BUILDER's git identity -- a build-host path and a
+#     person, in every image built from a local mirror;
+#   * a REMOTE-TRACKING REF for every branch the source had. A mirror carries
+#     branches that were never published (work-in-progress pushed from a
+#     workstation), and each ref also keeps that branch's commits in the
+#     object store.
+#
+# THE REF RULE: a remote-tracking ref ships only if it is KNOWN to be on the
+# public origin, and the only way this stage knows that without a network is
+# that it was read FROM the public origin -- REFLEX_SOURCE is literally
+# REFLEX_ORIGIN_URL (the default build, and CI). From any other source every
+# remote-tracking ref is deleted. The in-app updater does not need them: it
+# fetches tags anonymously from the public URL and checks a tag out
+# (ui/reflex/utils/updater.py, `git fetch --tags --force GITHUB_FETCH_URL`).
+#
+# Then the reflog is expired and logs/ removed, and a gc drops every object
+# only a deleted ref could reach. Gate 7 below re-checks all of it.
+if [ "${REFLEX_SOURCE}" = "${REFLEX_ORIGIN_URL}" ]; then
+	echo "  remote-tracking refs kept: the source IS the public origin (${REFLEX_ORIGIN_URL})"
+	PUBLIC_REFS_KNOWN=yes
+else
+	PUBLIC_REFS_KNOWN=no
+	N_PRUNED="$(git -C "${DEST}" for-each-ref --format='%(refname)' refs/remotes | wc -l)"
+	git -C "${DEST}" for-each-ref --format='delete %(refname)' refs/remotes \
+		| git -C "${DEST}" update-ref --no-deref --stdin \
+		|| fatal "could not delete the clone's remote-tracking refs"
+	echo "  remote-tracking refs deleted: ${N_PRUNED} (the source is not the public origin, so none is known to be public)"
+fi
+git -C "${DEST}" reflog expire --expire=now --expire-unreachable=now --all \
+	|| fatal "git reflog expire failed in the baked checkout"
+rm -rf "${DEST}/.git/logs"
+git -C "${DEST}" gc --quiet --prune=now \
+	|| fatal "git gc --prune=now failed in the baked checkout"
 
 # --- POST-WRITE GATES -------------------------------------------------------
 # Each of these could come out differently. "A directory exists at the app
 # root" proves nothing; the point of this stage is a REAL REPOSITORY, AT A
 # FULL RELEASE, THAT THE SERVICE USER CAN UPDATE.
-
-fatal() { echo "FATAL: $*"; exit 1; }
 
 [ -d "${DEST}/.git" ] || fatal "${APP_ROOT}/.git is not a directory -- that is not a checkout"
 
@@ -283,6 +322,41 @@ SHIPPED_ORIGIN="$(git -C "${DEST}" remote get-url origin 2>/dev/null || true)"
 [ "${SHIPPED_ORIGIN}" = "${REFLEX_ORIGIN_URL}" ] \
 	|| fatal "origin is '${SHIPPED_ORIGIN}', expected '${REFLEX_ORIGIN_URL}' -- the build host's source path must not ship"
 echo "  origin: ${SHIPPED_ORIGIN} (anonymous; the build source is not shipped)"
+
+# 7b. NOTHING ABOUT THE BUILD SHIPS -- not its source path, not its builder,
+#     not a branch the public origin does not have. Each check reads the
+#     checkout as it now stands; the scrub above is not taken on trust.
+[ -e "${DEST}/.git/logs" ] \
+	&& fatal "${APP_ROOT}/.git/logs exists -- the reflog records the build source and the builder's identity"
+[ -z "$(git -C "${DEST}" reflog show --all 2>/dev/null | head -n1)" ] \
+	|| fatal "${APP_ROOT} still has reflog entries -- they record the build source and the builder's identity"
+# Only tags ship, plus origin's remote-tracking refs when they were read from
+# the public origin itself. Anything else -- a mirror's branch, a local
+# branch, a stash, a note -- is refused BY NAME.
+if [ "${PUBLIC_REFS_KNOWN}" = yes ]; then REFS_OK='^refs/(tags|remotes/origin)/'; else REFS_OK='^refs/tags/'; fi
+STRAY_REF="$(git -C "${DEST}" for-each-ref --format='%(refname)' | grep -Ev "${REFS_OK}" | head -n1 || true)"
+[ -z "${STRAY_REF}" ] \
+	|| fatal "${APP_ROOT} carries ${STRAY_REF}, which is not known to be on the public origin (${REFLEX_ORIGIN_URL})"
+# The build source's own path or URL, anywhere in .git outside the object
+# store. Skipped only when the source IS the shipped origin, where finding it
+# is the point.
+if [ "${REFLEX_SOURCE}" != "${REFLEX_ORIGIN_URL}" ]; then
+	LEAKED="$(grep -rIlF --exclude-dir=objects -- "${REFLEX_SOURCE}" "${DEST}/.git" 2>/dev/null | head -n1 || true)"
+	[ -z "${LEAKED}" ] || fatal "${LEAKED#"${ROOTFS_DIR}"} names the build source ${REFLEX_SOURCE}"
+fi
+# The identity this build's git runs as, when git can say.
+BUILDER_IDENT="$(git var GIT_COMMITTER_IDENT 2>/dev/null | sed -E 's/ [0-9]+ [-+][0-9]{4}$//' || true)"
+if [ -n "${BUILDER_IDENT}" ]; then
+	LEAKED="$(grep -rIlF --exclude-dir=objects -- "${BUILDER_IDENT}" "${DEST}/.git" 2>/dev/null | head -n1 || true)"
+	[ -z "${LEAKED}" ] || fatal "${LEAKED#"${ROOTFS_DIR}"} records the builder's git identity"
+fi
+# No object that only a deleted ref could reach: every object in the store
+# must be reachable from what ships.
+N_ALL="$(git -C "${DEST}" cat-file --batch-all-objects --batch-check='%(objectname)' | wc -l)"
+N_REACH="$(git -C "${DEST}" rev-list --objects --all | wc -l)"
+[ "${N_ALL}" -eq "${N_REACH}" ] \
+	|| fatal "${APP_ROOT}'s object store holds ${N_ALL} objects but only ${N_REACH} are reachable -- a pruned branch's commits would ship"
+echo "  scrubbed: no reflog, no logs/, refs = tags$( [ "${PUBLIC_REFS_KNOWN}" = yes ] && echo ' + origin/*'), ${N_ALL} objects all reachable"
 
 # --- Ownership --------------------------------------------------------------
 # The in-app updater runs `git fetch`, `git checkout` and `uv sync` AS THE

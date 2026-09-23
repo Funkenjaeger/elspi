@@ -68,8 +68,20 @@ mksource() { # mksource <name> <tag>...
 		git -C "${d}" commit -q -m "${t}"
 		git -C "${d}" tag "${t}"
 	done
+	# A MIRROR's shape: a work-in-progress branch that was never published,
+	# with a commit nothing else reaches. Its ref and that commit must not
+	# survive into an image built from this source.
+	git -C "${d}" checkout -q -b wip/desktop/feat-unpublished
+	printf 'wip-only\n' > "${d}/WIP_ONLY"
+	git -C "${d}" add -A
+	git -C "${d}" commit -q -m "wip-only"
+	git -C "${d}" checkout -q -
 	printf '%s' "${d}"
 }
+
+# The identity the stage's git runs as, set to a marker so the test can look
+# for it in what ships. Passed to run_stage as environment assignments.
+BUILDER_ENV=(GIT_COMMITTER_NAME=elspi-builder-marker GIT_COMMITTER_EMAIL=builder-marker@example.invalid)
 
 # --- a scratch rootfs, in the state 05-service-user leaves behind -----------
 mkrootfs() { # mkrootfs <name> [--no-parent]
@@ -119,9 +131,11 @@ run_stage() { # run_stage <rootfs> <source> [env assignments...] ; output in ${W
 
 SRC="$(mksource good v0.9.0 v1.0.0 v1.1.0-rc.1)"
 
+WIP_SHA="$(git -C "${SRC}" rev-parse wip/desktop/feat-unpublished)"
+
 echo "== the happy path: the newest FULL release is cloned in =="
 R1="$(mkrootfs happy)"
-if run_stage "${R1}" "${SRC}"; then
+if run_stage "${R1}" "${SRC}" "${BUILDER_ENV[@]}"; then
 	pass "the stage ran"
 else
 	fail "the stage FAILED on a good source:"
@@ -170,6 +184,40 @@ case "${ORIGIN}" in
 	*)         fail "origin is '${ORIGIN}' -- the build source path shipped" ;;
 esac
 
+# NOTHING ABOUT THE BUILD SHIPS (audit #5). ${SRC} stands in for a local
+# mirror: not the public origin, so no remote-tracking ref is known public.
+# Each check reads the result directly; none trusts the stage's own gate.
+if [ -z "$(git -C "${APP}" for-each-ref refs/remotes 2>/dev/null)" ]; then
+	pass "no remote-tracking ref ships from a non-public source"
+else
+	fail "remote-tracking refs shipped: $(git -C "${APP}" for-each-ref --format='%(refname)' refs/remotes | tr '\n' ' ')"
+fi
+if [ -n "$(git -C "${APP}" for-each-ref --format='%(refname)' | grep -F wip/ || true)" ]; then
+	fail "a wip/ ref shipped"
+else
+	pass "no wip/ ref of any kind ships"
+fi
+if git -C "${APP}" cat-file -e "${WIP_SHA}" 2>/dev/null; then
+	fail "the unpublished branch's commit ${WIP_SHA} is still in the object store"
+else
+	pass "the unpublished branch's commit is gone from the object store"
+fi
+if [ -e "${APP}/.git/logs" ]; then
+	fail ".git/logs shipped"
+else
+	pass "no .git/logs (the reflog is expired and removed)"
+fi
+if grep -rIlqF --exclude-dir=objects -- "${SRC}" "${APP}/.git" 2>/dev/null; then
+	fail "the build source path is named in: $(grep -rIlF --exclude-dir=objects -- "${SRC}" "${APP}/.git" | head -n1)"
+else
+	pass "the build source path appears nowhere in .git outside the objects"
+fi
+if grep -rIlqF -- "builder-marker" "${APP}/.git" 2>/dev/null; then
+	fail "the builder's identity shipped in: $(grep -rIlF -- builder-marker "${APP}/.git" | head -n1)"
+else
+	pass "the builder's git identity appears nowhere in .git"
+fi
+
 # The ownership command the stage claims to issue. See the header: this is the
 # assertion, the stub's chown is not.
 if grep -q "chown -R -h ${SU}:${SU} /home/${SU}/projects/reflex" "${ONCHROOT_LOG}"; then
@@ -188,6 +236,23 @@ if run_stage "${R1}" "${SRC}"; then
 	fi
 else
 	fail "the stage is not re-runnable:"
+	sed 's/^/          /' "${WORK}/out"
+fi
+
+# THE SOURCE IS THE PUBLIC ORIGIN (the default build, and CI): then its
+# remote-tracking refs ARE the public origin's, and they are kept. The reflog
+# still goes.
+R1B="$(mkrootfs publicsource)"
+if run_stage "${R1B}" "${SRC}" "REFLEX_ORIGIN_URL=${SRC}" "${BUILDER_ENV[@]}"; then
+	APP1B="${R1B}/home/${SU}/projects/reflex"
+	if [ -n "$(git -C "${APP1B}" for-each-ref refs/remotes/origin 2>/dev/null)" ]; then
+		pass "a source that IS the public origin keeps origin's remote-tracking refs"
+	else
+		fail "a source that IS the public origin lost its remote-tracking refs"
+	fi
+	if [ -e "${APP1B}/.git/logs" ]; then fail ".git/logs shipped (public source)"; else pass "no .git/logs (public source)"; fi
+else
+	fail "the stage FAILED when the source is the public origin:"
 	sed 's/^/          /' "${WORK}/out"
 fi
 
