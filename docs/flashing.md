@@ -124,13 +124,19 @@ overwrites the files.
 
 | Field | Value | What it becomes |
 |---|---|---|
-| Hostname | `elspi` | the machine's hostname, matching the image's `TARGET_HOSTNAME`, so `ssh default@elspi` works on a network with mDNS |
+| Hostname | `elspi`, or a name of your own | the machine's hostname. The image's built-in `elspi` (`TARGET_HOSTNAME`) is only a default: whatever you type here replaces it on first boot, and `ssh default@<that name>` then works on a network with mDNS |
+| Time zone / keyboard layout | yours | cloud-init sets both on first boot. An unseeded card keeps the image defaults: `Etc/UTC` and a US layout |
 | Username | **`default` — exactly** | nothing: the account already exists in the image. See below |
 | Password | pick one and write it down | the `default` account's password, and therefore the `sudo` password — and, with password SSH, your SSH login. The account ships **locked**; this is what unlocks it |
 | SSH | **enable**; then allow password authentication, *or* paste a key and optionally choose **“Allow public-key authentication only”** | how `sshd` authenticates on this card. The image sets nothing here itself. See below |
 | Public key | *optional:* your workstation's `id_ed25519.pub` | `~default/.ssh/authorized_keys`, installed by the image's seed unit. The image ships **no key of its own** |
 | Wi-Fi SSID / password | the shop network | a NetworkManager keyfile |
-| Wireless LAN country | **`US`** (or yours) | the regulatory domain. Without it the radio stays off — see below |
+| Wireless LAN country | **yours** (`US`, `GB`, `DE`, …) | the regulatory domain. Without it the radio stays off — see below |
+
+Imager has no field for the system **locale**: its cloud-init output carries
+no `locale:` key, so every card keeps the image's `en_US.UTF-8`. The
+application formats nothing through the locale; it affects only shell tools
+over SSH. A build of your own can set `LOCALE_DEFAULT` (see `elspi.conf`).
 
 **The username must be `default`.** That is the image's service user: the
 account that owns `/var/lib/reflex-config`, `/var/log/reflex` and `~/projects`,

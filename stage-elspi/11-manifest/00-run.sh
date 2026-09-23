@@ -71,6 +71,19 @@ esac
 
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# THE DEFAULTS AN UNSEEDED CARD KEEPS. build.sh exports all four (with its own
+# defaults when the config sets none), so an empty one here means this is not
+# the build it claims to be. Declared so tests/verify-image.sh can check the
+# rootfs against what the build was ASKED for -- elspi.conf's defaults, or a
+# site build config's -- rather than against a zone typed into the harness.
+# Imager's customisation page replaces hostname, timezone and keymap per card
+# (cloud-init user-data); it has no locale field, so locale is what every
+# card keeps. See elspi.conf's "Locale, keyboard, time" block.
+for _v in TARGET_HOSTNAME TIMEZONE_DEFAULT LOCALE_DEFAULT KEYBOARD_KEYMAP; do
+	[ -n "${!_v:-}" ] || { echo "FATAL: ${_v} is empty -- build.sh always exports it"; exit 1; }
+done
+unset _v
+
 # IMAGE_BUILD_SHA -- the git rev of THIS repo (elspi is a soft fork of pi-gen
 # itself; there is no separate "elspi repo" checkout) at build time.
 # build-docker.sh:67 already computes this on the host and forwards it into
@@ -183,6 +196,14 @@ cat > "${MANIFEST}" <<- JSON
 	  "service_user": "${FIRST_USER_NAME}",
 	  "runs_as_root": false,
 
+	  "build_defaults": {
+	    "hostname": "${TARGET_HOSTNAME}",
+	    "timezone": "${TIMEZONE_DEFAULT}",
+	    "locale": "${LOCALE_DEFAULT}",
+	    "keymap": "${KEYBOARD_KEYMAP}",
+	    "replaced_per_card_by_imager": ["hostname", "timezone", "keymap"]
+	  },
+
 	  "paths": {
 	    "venv": "/opt/reflex-venv",
 	    "app_parent": "/home/${FIRST_USER_NAME}/projects",
@@ -259,7 +280,7 @@ fi
 for key in log_dir config_dir venv app_parent default_mode reflex_lock_commit \
            first_boot_seed first_boot_ui unit script image_build_sha image_release \
            runtime_versions baked_app updater_ready protocol_version_readable \
-           ssh key_source; do
+           ssh key_source build_defaults; do
 	grep -q "\"${key}\"" "${MANIFEST}" || {
 		echo "FATAL: manifest is missing required key '${key}'"
 		exit 1

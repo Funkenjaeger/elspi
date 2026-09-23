@@ -37,6 +37,17 @@ trap 'rm -rf "${WORK}"' EXIT
 export ROOTFS_DIR="${WORK}/rootfs"
 export FIRST_USER_NAME=default
 
+# THE BUILD CONFIG'S VALUES, as build.sh would export them to the stages.
+# elspi.conf is sourced in a child shell with NO site config, so what is
+# checked below is the PUBLIC image's defaults; the child prints `export`
+# lines for exactly the names the stages read.
+BUILD_VARS="TARGET_HOSTNAME TIMEZONE_DEFAULT LOCALE_DEFAULT KEYBOARD_KEYMAP"
+BUILD_EXPORTS="$(cd "${REPO}" && env -u ELSPI_SITE_CONF BUILD_VARS="${BUILD_VARS}" bash -c '
+	. ./elspi.conf >/dev/null 2>&1 || exit 1
+	for v in ${BUILD_VARS}; do printf "export %s=%q\n" "${v}" "${!v}"; done
+')" || { echo "FAIL: could not source elspi.conf"; exit 1; }
+eval "${BUILD_EXPORTS}"
+
 mkdir -p "${ROOTFS_DIR}"/boot/firmware "${ROOTFS_DIR}"/etc "${ROOTFS_DIR}"/usr/local/bin
 
 # Seed with the REAL upstream templates. If upstream moves these, the anchor
@@ -121,6 +132,35 @@ else
 	echo "  ok: delta_layer_owns no longer claims the baked checkout"
 	PASS=$((PASS+1))
 fi
+# THE BUILD DEFAULTS, declared as the build config set them (a harness that
+# checks /etc/localtime reads this declaration), and the public image's
+# time zone pinned: Etc/UTC, nobody's in particular. An operator's own zone
+# comes from Imager's customisation page.
+if python3 - "${ROOTFS_DIR}/etc/elspi-image.json" <<'PY'
+import json, os, sys
+b = json.load(open(sys.argv[1])).get("build_defaults", {})
+want = {"hostname": os.environ["TARGET_HOSTNAME"], "timezone": os.environ["TIMEZONE_DEFAULT"],
+        "locale": os.environ["LOCALE_DEFAULT"], "keymap": os.environ["KEYBOARD_KEYMAP"]}
+bad = [k for k, v in want.items() if b.get(k) != v]
+if bad:
+    print("        mismatched:", ", ".join("%s=%r (build config: %r)" % (k, b.get(k), want[k]) for k in bad))
+sys.exit(1 if bad else 0)
+PY
+then
+	echo "  ok: the manifest declares the build defaults exactly as elspi.conf set them"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: the manifest's build_defaults do not match elspi.conf"
+	FAIL=$((FAIL+1))
+fi
+if [ "${TIMEZONE_DEFAULT}" = "Etc/UTC" ]; then
+	echo "  ok: the public image's default time zone is Etc/UTC"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: the public image's default time zone is '${TIMEZONE_DEFAULT}', not Etc/UTC"
+	FAIL=$((FAIL+1))
+fi
+
 # The REAL manifest must declare the keyless SSH policy (2026-09-23) --
 # checked here as well as against the fixture, for the reason above.
 if python3 - "${ROOTFS_DIR}/etc/elspi-image.json" <<'PY'

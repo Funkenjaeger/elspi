@@ -290,8 +290,12 @@ mutate "asound.conf back on card 1 (the live defect)" \
 	"printf 'defaults.pcm.card 1\\ndefaults.ctl.card 1\\n' > etc/asound.conf"
 
 # Timezone
-mutate "timezone reverted off America/New_York" \
+mutate "timezone is not the declared build default" \
 	"ln -sf ../usr/share/zoneinfo/Europe/London etc/localtime"
+mutate "the manifest declares a different build-default timezone than the rootfs has" \
+	"sed -i 's|\"timezone\": \"Etc/UTC\"|\"timezone\": \"Europe/London\"|' etc/elspi-image.json"
+mutate "the manifest declares no build defaults at all" \
+	"python3 -c 'import json; p=\"etc/elspi-image.json\"; d=json.load(open(p)); d.pop(\"build_defaults\"); json.dump(d, open(p, \"w\"))'"
 
 # DRM plumbing
 mutate "a tty1 autologin shipped ACTIVE in the image" \

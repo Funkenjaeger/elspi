@@ -658,12 +658,20 @@ fi
 # ---------------------------------------------------------------------------
 section "Timezone"
 
-if [ -L "${ROOTFS}/etc/localtime" ]; then
+# The zone an UNSEEDED card keeps -- Imager's customisation page replaces it
+# per card through cloud-init. Checked against what the build DECLARED
+# (build_defaults.timezone: elspi.conf's Etc/UTC, or a site build config's),
+# not against a zone typed into this harness, so a site build is verified by
+# the same line as a public one.
+TZ_DECLARED="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["build_defaults"]["timezone"])' "${MANIFEST}" 2>/dev/null || true)"
+if [ -z "${TZ_DECLARED}" ]; then
+	bad "the manifest declares build_defaults.timezone"
+elif [ -L "${ROOTFS}/etc/localtime" ]; then
 	TZ_TARGET="$(readlink "${ROOTFS}/etc/localtime")"
-	if [[ "${TZ_TARGET}" == *"America/New_York"* ]]; then
-		ok "timezone is America/New_York (the -0500 bug fixed at source)"
+	if [[ "${TZ_TARGET}" == */zoneinfo/"${TZ_DECLARED}" ]]; then
+		ok "timezone is the declared build default ${TZ_DECLARED}"
 	else
-		bad "timezone is America/New_York (found: ${TZ_TARGET})"
+		bad "timezone is the declared build default ${TZ_DECLARED} (found: ${TZ_TARGET})"
 	fi
 else
 	bad "/etc/localtime is a symlink"
@@ -1167,13 +1175,15 @@ else
 		#
 		# nspawn defaults both to "auto", which writes the HOST's timezone and
 		# resolv.conf INTO the container rootfs. Measured 2026-09-07: a boot
-		# attempt repointed the image's /etc/localtime from America/New_York to
-		# Etc/UTC, and replaced /etc/resolv.conf with Docker's.
+		# attempt repointed the image's /etc/localtime to the host's Etc/UTC,
+		# and replaced /etc/resolv.conf with Docker's.
 		#
 		# Both are fields this image deliberately controls -- the timezone is
-		# the -0500 bug fixed at source -- so the harness was silently undoing
-		# the thing it then went on to check. A later run duly reported
-		# "timezone is America/New_York (found: Etc/UTC)" as an image defect.
+		# the declared build default -- so the harness was silently undoing
+		# the thing it then went on to check, and a later run duly reported
+		# the host's zone as an image defect. (The public default is now
+		# Etc/UTC itself, which would make the same clobbering INVISIBLE on a
+		# UTC host: all the more reason it stays off.)
 		timeout 300 systemd-nspawn -D "${ROOTFS}" \
 			--boot --register=no --keep-unit --quiet \
 			--timezone=off --resolv-conf=off \

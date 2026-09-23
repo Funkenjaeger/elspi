@@ -89,6 +89,13 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
     "auth": "imager-choice",
     "image_sets_auth_options": false
   },
+  "build_defaults": {
+    "hostname": "elspi",
+    "timezone": "Etc/UTC",
+    "locale": "en_US.UTF-8",
+    "keymap": "us",
+    "replaced_per_card_by_imager": ["hostname", "timezone", "keymap"]
+  },
   "first_boot_ui": {
     "unit": "/etc/systemd/system/elspi-first-boot-ui.service",
     "script": "/usr/local/sbin/elspi-first-boot-ui",
@@ -237,9 +244,9 @@ ln -sf /dev/null "${DEST}/etc/systemd/system/serial-getty@ttyAMA0.service"
 printf 'defaults.pcm.card 0\ndefaults.ctl.card 0\n' > "${DEST}/etc/asound.conf"
 
 # --- timezone ---------------------------------------------------------------
-mkdir -p "${DEST}/usr/share/zoneinfo/America"
-: > "${DEST}/usr/share/zoneinfo/America/New_York"
-ln -sf ../usr/share/zoneinfo/America/New_York "${DEST}/etc/localtime"
+mkdir -p "${DEST}/usr/share/zoneinfo/Etc"
+: > "${DEST}/usr/share/zoneinfo/Etc/UTC"
+ln -sf ../usr/share/zoneinfo/Etc/UTC "${DEST}/etc/localtime"
 
 # --- drm plumbing -----------------------------------------------------------
 # TWO fragments, not three. `logind-seat` -- and the tty1 autologin fragment
