@@ -15,9 +15,10 @@ rebuild.
 * **The firmware toolchain is baked** (`gcc-arm-none-eabi`, `cmake`, `openocd`):
   STM32 firmware is flashed *from* the lathe.
 * **First boot is seeded from Raspberry Pi Imager's customisation page** —
-  hostname, the account password, your SSH public key, Wi-Fi. Nothing is
-  committed here and nothing is baked; a oneshot unit applies what cloud-init
-  cannot and then takes the credentials off the card.
+  hostname, the account password and/or your SSH public key (at least one of
+  the two, or the card has no SSH way in), Wi-Fi. Nothing is committed here and
+  nothing is baked — not even a public key; a oneshot unit applies what
+  cloud-init cannot and then takes the credentials off the card.
 * **The app runs as a non-root service user** (`default`), with no seat and no
   session machinery.
 
@@ -57,7 +58,9 @@ becomes on the machine: **[docs/flashing.md](docs/flashing.md)**.
 `README.pi-gen.md` is upstream pi-gen's README, unmodified — it documents
 `build.sh` and the stage mechanism this fork still uses.
 
-Building the image: `./build-elspi.sh <ssh-pubkey>`; tests are in `tests/`.
+Building the image: `./build-elspi.sh` (no arguments -- the image is keyless;
+your SSH key and/or password go on Imager's customisation page at flash time);
+tests are in `tests/`.
 
 ## License
 

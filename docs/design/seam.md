@@ -194,7 +194,8 @@ time.*
 
 **Raspberry Pi Imager 2.x's OS-customisation page is now the supported
 first-boot seed.** The operator types the hostname, the `default` account's
-password, the desktop public key and the Wi-Fi SSID/PSK into Imager; Imager
+password, a public key (optional since 2026-09-23 — see below) and the Wi-Fi
+SSID/PSK into Imager; Imager
 writes them to the FAT partition as cloud-init NoCloud files; cloud-init
 consumes them on first boot; and `stage-elspi/12-first-boot-seed`'s oneshot unit
 then **overwrites them on the card**, so they do not persist in cleartext on an
@@ -238,8 +239,38 @@ why this needed shipped code rather than only a documentation change:
    halves. `stage-elspi/12-first-boot-seed/README.md` carries the line-by-line
    derivation.
 
+#### AMENDMENT 2026-09-23 — the image is keyless, and SSH auth is the operator's choice
+
+**Decided by Evan.** Until now every build baked a public key into
+`~default/.ssh/authorized_keys` (`ELSPI_PUBKEY`, a repository variable in CI),
+and set `PUBKEY_ONLY_SSH=1`. Both are gone:
+
+- **No SSH key is ever baked in.** The repo is public and so are its release
+  images; nobody's personal key belongs in one. Keys arrive in the Imager seed
+  like the password, and the seed unit installs them itself, each exactly once,
+  before it wipes the seed. A build that finds any `authorized_keys` in the
+  rootfs fails (`stage-elspi/12-first-boot-seed/00-run.sh`).
+- **The image sets no SSH authentication policy.** `PUBKEY_ONLY_SSH=0` leaves
+  RPi OS's default (password authentication allowed). Imager's page decides per
+  card: its *public-key only* choice becomes `PasswordAuthentication no` in
+  cloud-init's `sshd_config.d/50-cloud-init.conf`, its password option `yes`.
+  Many operators — especially on Windows — cannot easily make or use SSH keys,
+  and a password typed into Imager has to work for them. Nothing of the image's
+  may set an authentication option that could override that choice; the build
+  and `tests/verify-image.sh` both refuse one.
+
+**What the operator must supply: a password, an SSH key, or both.** The key is
+optional. With neither, the card has no SSH way in and is reachable only from
+the touchscreen, and the seed unit logs that loudly. Imager's “Use custom” local
+file route never shows the customisation page at all, so it always produces such
+a card. `docs/flashing.md` carries the procedure.
+
+The image's manifest records it: `ssh.key_source` is `imager-seed`, `ssh.auth`
+is `imager-choice`.
+
 So call 2's answer is now: *the repo carries no credential, the image carries no
-credential, and the card carries one only for the length of the first boot.*
+credential — not even a public key — and the card carries one only for the
+length of the first boot.*
 
 ### 3. The firmware toolchain is a real choice, not an oversight
 
