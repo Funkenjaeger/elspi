@@ -370,6 +370,40 @@ mutate "the seed unit's ExecStart loses its '-' prefix (can fail the boot)" \
 # script neutralises credentials nobody has read yet.
 mutate "the seed unit loses its After=cloud-final ordering" \
 	"sed -i '/^After=cloud-final.service\$/d' etc/systemd/system/elspi-first-boot-seed.service"
+# The unit this image shipped until 2026-09-23. With /home hidden, the seed
+# script cannot install a single Imager key -- and the image is keyless.
+mutate "the seed unit hides /home again (ProtectHome=yes: no seeded key could be installed)" \
+	"sed -i 's|^ProtectHome=no\$|ProtectHome=yes|' etc/systemd/system/elspi-first-boot-seed.service"
+
+# --- KEYLESS, and SSH auth is the operator's Imager choice (2026-09-23) -----
+#
+# A public key baked into a public release image is the thing this decision
+# exists to stop. The key below is not a key anyone holds: it is the right
+# SHAPE, which is all the harness may look at.
+mutate "a public key baked into the service user's authorized_keys" \
+	"mkdir -p home/default/.ssh && printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZpeHR1cmUtbm90LWEtcmVhbC1rZXktZml4dHVyZQ baked\\n' > home/default/.ssh/authorized_keys"
+mutate "a public key baked into root's authorized_keys" \
+	"mkdir -p root/.ssh && printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZpeHR1cmUtbm90LWEtcmVhbC1rZXktZml4dHVyZQ baked\\n' > root/.ssh/authorized_keys"
+# The drop-in first specified for the keyless change, and withdrawn before it
+# shipped (2026-09-23). Sorting ahead of cloud-init's 50-cloud-init.conf, it
+# would silently beat an operator who chose password SSH on Imager's page.
+mutate "a key-only sshd drop-in sorting AHEAD of cloud-init's 50-cloud-init.conf" \
+	"printf 'PasswordAuthentication no\\nKbdInteractiveAuthentication no\\n' > etc/ssh/sshd_config.d/10-elspi-keyonly.conf"
+# Sorting after it loses to Imager's choice, but decides whenever Imager made
+# none -- still a policy the image imposed.
+mutate "an sshd drop-in sorting AFTER cloud-init's that still sets an auth option" \
+	"printf 'PasswordAuthentication no\\n' > etc/ssh/sshd_config.d/90-late.conf"
+# What PUBKEY_ONLY_SSH=1 makes upstream stage2/01-sys-tweaks do.
+mutate "sshd_config's body says PasswordAuthentication no (PUBKEY_ONLY_SSH=1 is back)" \
+	"sed -i 's|^#PasswordAuthentication yes\$|PasswordAuthentication no|' etc/ssh/sshd_config"
+mutate "sshd_config no longer Includes sshd_config.d" \
+	"sed -i '/^Include /d' etc/ssh/sshd_config"
+mutate "the manifest declares a build-time key source" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d['ssh']['key_source']='build-time';json.dump(d,open(p,'w'))\""
+mutate "the manifest declares the image's own key-only SSH policy" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d['ssh']['auth']='pubkey-only';json.dump(d,open(p,'w'))\""
+mutate "the manifest does not declare ssh at all" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d.pop('ssh',None);json.dump(d,open(p,'w'))\""
 
 # --- THE BAKED APPLICATION (stage-elspi/10a-app-checkout, seam.md amendment
 #     2026-09-21) -----------------------------------------------------------
@@ -592,6 +626,26 @@ else
 	echo "  FAIL  stage-elspi/10a-app-checkout did not do what it claims, or a"
 	echo "        guard that must refuse did not."
 	echo "        tests/test-app-checkout-stage.sh said:"
+	sed 's/^/           /' "${WORK}/out.txt"
+	FAILED=$((FAILED+1))
+fi
+
+# --- the first-boot seed script itself, run for real (2026-09-23) ----------
+# Collected here for the same reason as the runners above. Everything in the
+# seed section of verify-image.sh checks that the unit is INSTALLED and WIRED;
+# this runs the real script against a synthetic rootfs and Imager-shaped
+# user-data, and checks what it did: keys installed once and only once,
+# passwords applied, and the loud warning when a seed carries neither.
+echo
+echo "== the first-boot seed script, run for real (keyless image, 2026-09-23) =="
+echo "   Against a synthetic rootfs, with throwaway keys generated per run."
+echo "   Delegated to tests/test-first-boot-seed.sh."
+if bash "${HERE}/test-first-boot-seed.sh" >"${WORK}/out.txt" 2>&1; then
+	echo "  OK    the seed installs Imager keys once, applies passwords, warns on neither"
+	PASSED=$((PASSED+1))
+else
+	echo "  FAIL  the first-boot seed script did not do what it claims."
+	echo "        tests/test-first-boot-seed.sh said:"
 	sed 's/^/           /' "${WORK}/out.txt"
 	FAILED=$((FAILED+1))
 fi

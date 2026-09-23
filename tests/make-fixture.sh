@@ -81,6 +81,14 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
     "leaves_intact": ["/boot/firmware/meta-data"],
     "verified_on_hardware": true
   },
+  "ssh": {
+    "enabled": true,
+    "key_source": "imager-seed",
+    "keys_installed_by": "/usr/local/sbin/elspi-first-boot-seed",
+    "baked_authorized_keys": false,
+    "auth": "imager-choice",
+    "image_sets_auth_options": false
+  },
   "first_boot_ui": {
     "unit": "/etc/systemd/system/elspi-first-boot-ui.service",
     "script": "/usr/local/sbin/elspi-first-boot-ui",
@@ -282,6 +290,7 @@ After=NetworkManager.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=-/usr/local/sbin/elspi-first-boot-seed
+ProtectHome=no
 
 [Install]
 WantedBy=cloud-init.target
@@ -298,6 +307,31 @@ UNIT
 mkdir -p "${DEST}/etc/systemd/system/cloud-init.target.wants"
 ln -sf ../elspi-first-boot-seed.service \
 	"${DEST}/etc/systemd/system/cloud-init.target.wants/elspi-first-boot-seed.service"
+
+# --- SSH: keyless, and no authentication policy of the image's own ----------
+# DECIDED 2026-09-23. No authorized_keys anywhere (keys arrive from the Imager
+# seed at flash time), and sshd_config in Debian's stock SHAPE: the drop-in
+# Include at the top, the authentication options present only as comments,
+# and an EMPTY sshd_config.d. That is what makes Imager's per-card choice --
+# cloud-init's 50-cloud-init.conf -- the one sshd reads first.
+#
+# Written by hand, like the rest of this fixture. The seed unit's
+# ProtectHome=no (above) is part of the same contract: the script writes the
+# seeded keys into /home.
+mkdir -p "${DEST}/etc/ssh/sshd_config.d"
+cat > "${DEST}/etc/ssh/sshd_config" <<'SSHD'
+# fixture: Debian trixie's stock sshd_config, abridged
+Include /etc/ssh/sshd_config.d/*.conf
+#PubkeyAuthentication yes
+#PasswordAuthentication yes
+#PermitEmptyPasswords no
+KbdInteractiveAuthentication no
+UsePAM yes
+X11Forwarding yes
+PrintMotd no
+AcceptEnv LANG LC_* COLORTERM NO_COLOR
+Subsystem	sftp	/usr/lib/openssh/sftp-server
+SSHD
 
 # --- the first-boot UI hook (stage-elspi/14-first-boot-ui) ------------------
 # A scaffold, not a feature -- see stage-elspi/14-first-boot-ui/README.md.

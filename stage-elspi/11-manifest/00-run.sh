@@ -210,6 +210,15 @@ cat > "${MANIFEST}" <<- JSON
 	    "verified_on_hardware": true
 	  },
 
+	  "ssh": {
+	    "enabled": true,
+	    "key_source": "imager-seed",
+	    "keys_installed_by": "/usr/local/sbin/elspi-first-boot-seed",
+	    "baked_authorized_keys": false,
+	    "auth": "imager-choice",
+	    "image_sets_auth_options": false
+	  },
+
 	  "first_boot_ui": {
 	    "unit": "/etc/systemd/system/elspi-first-boot-ui.service",
 	    "script": "/usr/local/sbin/elspi-first-boot-ui",
@@ -234,7 +243,8 @@ cat > "${MANIFEST}" <<- JSON
 	    "anything config.txt or a dtoverlay actually DOES (firmware level)",
 	    "usb_max_current_enable=1 brownout mitigation",
 	    "audio output on card 0",
-	    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui): enabled and ordered correctly, but it has never executed end-to-end because no image has ever had a checkout for it to find -- task 6aa73b01 item 1 is the seam decision that would change that"
+	    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui): enabled and ordered correctly, but it has never executed end-to-end because no image has ever had a checkout for it to find -- task 6aa73b01 item 1 is the seam decision that would change that",
+	    "SSH login on a real card with the key or password typed into Imager (the image is keyless since 2026-09-23; the seed unit's key install is verified offline only)"
 	  ]
 	}
 JSON
@@ -249,7 +259,8 @@ fi
 
 for key in log_dir config_dir venv app_parent default_mode reflex_lock_commit \
            first_boot_seed first_boot_ui unit script image_build_sha image_release \
-           runtime_versions baked_app updater_ready protocol_version_readable; do
+           runtime_versions baked_app updater_ready protocol_version_readable \
+           ssh key_source; do
 	grep -q "\"${key}\"" "${MANIFEST}" || {
 		echo "FATAL: manifest is missing required key '${key}'"
 		exit 1

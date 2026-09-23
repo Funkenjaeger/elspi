@@ -184,6 +184,64 @@ grep -qE '^ExecStart=-' "${UNIT_DST}" || {
 	exit 1
 }
 
+# The script installs the seed's SSH keys under /home (the image is keyless,
+# 2026-09-23). ProtectHome=yes/read-only/tmpfs would hide /home from it and
+# every key install would fail -- with the seed then wiped, a card with no SSH
+# way in.
+if grep -qiE '^ProtectHome=(yes|true|on|1|read-only|tmpfs)[[:space:]]*$' "${UNIT_DST}"; then
+	echo "FATAL: ${UNIT_NAME} sets $(grep -iE '^ProtectHome=' "${UNIT_DST}")."
+	echo "       The seed script writes /home/<user>/.ssh/authorized_keys; with"
+	echo "       /home hidden, no Imager key would ever be installed."
+	exit 1
+fi
+
+# ---------------------------------------------------------------------------
+echo "== keyless: no SSH key baked in, no SSH auth policy of our own =="
+#
+# DECIDED 2026-09-23: no public key is ever baked into this image -- it is
+# built from a public repo into public release images. The operator's keys
+# (and password) come from Imager's customisation page and are installed by
+# the unit above. Gated HERE, at the last stage that touches the rootfs, so a
+# key that arrived by any route (PUBKEY_SSH_FIRST_USER set in some config, a
+# stray file) fails the BUILD rather than shipping.
+for ak in "${ROOTFS_DIR}/home/${FIRST_USER_NAME}/.ssh/authorized_keys" \
+          "${ROOTFS_DIR}/root/.ssh/authorized_keys"; do
+	if [ -e "${ak}" ] || [ -L "${ak}" ]; then
+		echo "FATAL: ${ak#"${ROOTFS_DIR}"} exists in the image."
+		echo "       The image is KEYLESS: SSH keys arrive from the Imager seed at"
+		echo "       flash time, never at build time. Is PUBKEY_SSH_FIRST_USER set?"
+		exit 1
+	fi
+done
+echo "  ok: no authorized_keys for ${FIRST_USER_NAME} or root"
+
+# SSH AUTHENTICATION IS IMAGER'S CHOICE, PER CARD. cloud-init writes it to
+# sshd_config.d/50-cloud-init.conf, and sshd takes the FIRST value it reads --
+# so any file of ours setting an authentication option would either beat that
+# choice (sorting ahead of "50-") or stand in for it when Imager made none.
+# The image therefore sets none: not in a drop-in, not in sshd_config's body
+# (which is what PUBKEY_ONLY_SSH=1 would have done).
+SSHD_AUTH_RE='^[[:space:]]*(PasswordAuthentication|AuthenticationMethods|PubkeyAuthentication)[[:space:]]'
+if [ -d "${ROOTFS_DIR}/etc/ssh/sshd_config.d" ]; then
+	for f in "${ROOTFS_DIR}/etc/ssh/sshd_config.d"/*.conf; do
+		[ -f "${f}" ] || continue
+		if grep -qiE "${SSHD_AUTH_RE}" "${f}"; then
+			echo "FATAL: ${f#"${ROOTFS_DIR}"} sets an SSH authentication option:"
+			grep -iE "${SSHD_AUTH_RE}" "${f}" | sed 's/^/         /'
+			echo "       SSH auth is the operator's Imager choice; the image sets none."
+			exit 1
+		fi
+	done
+fi
+if [ -f "${ROOTFS_DIR}/etc/ssh/sshd_config" ] \
+	&& grep -qiE "${SSHD_AUTH_RE}" "${ROOTFS_DIR}/etc/ssh/sshd_config"; then
+	echo "FATAL: /etc/ssh/sshd_config sets an SSH authentication option:"
+	grep -iE "${SSHD_AUTH_RE}" "${ROOTFS_DIR}/etc/ssh/sshd_config" | sed 's/^/         /'
+	echo "       Is PUBKEY_ONLY_SSH=1 set? SSH auth is the operator's Imager choice."
+	exit 1
+fi
+echo "  ok: no SSH authentication option set by the image (sshd_config or sshd_config.d)"
+
 echo "  installed: /usr/local/sbin/elspi-first-boot-seed (0755)"
 echo "  installed: /etc/systemd/system/${UNIT_NAME}"
 echo "  enabled:   ${WANTS_TARGET}.wants/${UNIT_NAME}"

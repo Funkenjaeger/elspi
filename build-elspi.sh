@@ -1,13 +1,18 @@
 #!/bin/bash
 # Build the elspi image. Wraps build-docker.sh and handles the host-side traps.
 #
-#   ./build-elspi.sh                       # bake ~/.ssh/id_ed25519.pub
-#   ./build-elspi.sh path/to/key.pub       # bake a specific public key
+#   ./build-elspi.sh
 #
-# OS_LIST_URL=<https-or-file-url>  (env var, not a flag -- $1 above is already
-#   taken by the pubkey path, and every other knob here, PRESERVE_CONTAINER /
-#   CONTINUE / IMG_NAME / CONTAINER_NAME, is env-var-only, so this follows the
-#   same shape). Passed straight through as `--url` to tools/make-os-list.sh.
+# It takes NO arguments, and in particular no SSH key: the image is KEYLESS
+# (2026-09-23). Keys and the password come from Raspberry Pi Imager's
+# customisation page at flash time -- see elspi.conf's SSH block. Until then
+# $1 was a public key to bake in; passing one now is refused with a message
+# rather than silently ignored.
+#
+# OS_LIST_URL=<https-or-file-url>  (env var, not a flag -- every knob here,
+#   PRESERVE_CONTAINER / CONTINUE / IMG_NAME / CONTAINER_NAME, is
+#   env-var-only, so this follows the same shape). Passed straight through as
+#   `--url` to tools/make-os-list.sh.
 #   Unset by default: the build still succeeds and deploy/os_list.json still
 #   gets written, but with a file:// URL good on THIS machine only, and this
 #   script prints a loud WARNING below saying so. Set it once you know where
@@ -40,12 +45,14 @@
 #    .deb into the user's own tree and expose the static binary under the name
 #    the precheck looks for. `apt-get download` needs no privilege.
 #
-# 2. ONLY GIT_HASH IS FORWARDED INTO THE CONTAINER (build-docker.sh:149). An
-#    ELSPI_PUBKEY exported on the host simply is not there when build.sh runs,
-#    so the build dies INSIDE the container, minutes in, complaining about a
-#    variable you can see set in your own shell. Forwarded here via
-#    PIGEN_DOCKER_OPTS, by NAME -- never name=value, because that variable is
-#    expanded unquoted and every SSH public key contains spaces.
+# 2. ONLY GIT_HASH IS FORWARDED INTO THE CONTAINER (build-docker.sh:149). A
+#    build parameter exported on the host simply is not there when build.sh
+#    runs, so the build misbehaves INSIDE the container, minutes in, over a
+#    variable you can see set in your own shell. The REFLEX_* parameters are
+#    forwarded below via PIGEN_DOCKER_OPTS, by NAME -- never name=value,
+#    because that variable is expanded unquoted and a value with spaces would
+#    be word-split into separate docker arguments. (This trap was first hit
+#    with ELSPI_PUBKEY, the build-time key the image no longer takes.)
 #
 # 3. The base image is i386/debian:trixie on x86_64, not debian:trixie
 #    (build-docker.sh:85-92). Worth knowing before debugging a container that
@@ -55,7 +62,16 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHIM="${HOME}/.local/qemu-shim"
-PUBKEY_FILE="${1:-${HOME}/.ssh/id_ed25519.pub}"
+
+# KEYLESS: refuse the old `./build-elspi.sh path/to/key.pub` form out loud.
+# Ignoring the argument would let someone believe their key went in.
+if [ "$#" -gt 0 ]; then
+	echo "FATAL: build-elspi.sh takes no arguments (got: $*)."
+	echo "  The elspi image is KEYLESS: no SSH key is baked in at build time."
+	echo "  Put your public key (and/or a password) on Raspberry Pi Imager's"
+	echo "  customisation page when you flash -- see docs/flashing.md."
+	exit 1
+fi
 
 cd "${REPO}"
 
@@ -83,24 +99,7 @@ if ! file -L "${RESOLVED}" | grep -Eq "statically linked|static-pie linked"; the
 fi
 echo "qemu-arm: ${RESOLVED} (static)"
 
-# --- the key baked into the image -------------------------------------------
-# A PUBLIC key, not a secret. It is what makes a failed UI recoverable over SSH
-# instead of by power-cycling a lathe: the account ships locked, so password
-# SSH cannot work, and a card with no key in it is reachable only from the
-# touchscreen -- which is the thing under test.
-[ -f "${PUBKEY_FILE}" ] || { echo "FATAL: no public key at ${PUBKEY_FILE}"; exit 1; }
-ELSPI_PUBKEY="$(cat "${PUBKEY_FILE}")"
-export ELSPI_PUBKEY
-case "${ELSPI_PUBKEY}" in
-	ssh-*|ecdsa-*|sk-*) ;;
-	*) echo "FATAL: ${PUBKEY_FILE} does not look like an SSH public key"; exit 1 ;;
-esac
-echo "baking:   $(ssh-keygen -lf "${PUBKEY_FILE}" | awk '{print $1, $2, $4}')"
-
-# --- trap 2: forward it by NAME ---------------------------------------------
-export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS:-} -e ELSPI_PUBKEY"
-
-# --- the app-release parameters, forwarded the same way ---------------------
+# --- trap 2: the app-release parameters, forwarded by NAME ------------------
 # stage-elspi/10a-app-checkout's REFLEX_SOURCE / REFLEX_RELEASE /
 # REFLEX_ORIGIN_URL are parameters of the BUILD (docs/design/seam.md amendment
 # 2026-09-21). They are read inside the container, and build-docker.sh passes
@@ -113,7 +112,7 @@ export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS:-} -e ELSPI_PUBKEY"
 # host's (absent) value and would override elspi.conf's default with empty.
 for _v in REFLEX_SOURCE REFLEX_RELEASE REFLEX_ORIGIN_URL; do
 	if [ -n "${!_v:-}" ]; then
-		export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS} -e ${_v}"
+		export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS:-} -e ${_v}"
 		echo "forwarding: ${_v}"
 	fi
 done

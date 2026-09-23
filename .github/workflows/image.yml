@@ -30,11 +30,14 @@ name: image
 # (updater_ready=no in the image's /etc/elspi-image.json). An image built
 # before reflex v1.2.0 is cut is one to test, not one to hand out.
 #
-# THE SSH KEY IS A REPOSITORY VARIABLE (vars.ELSPI_PUBKEY), NOT A SECRET. It is
-# a PUBLIC key, and ci.conf says why it is deliberately not a secret: what gets
-# baked into the image should be auditable. The account ships locked, so this
-# key is the only way in over SSH that does not depend on the flash-time seed
-# -- the build refuses to run without it.
+# THE IMAGE IS KEYLESS (2026-09-23). No SSH key is baked in and this workflow
+# supplies none: the image is published, and nobody's personal key belongs in
+# a public release. The account ships locked; the operator's password and/or
+# public key are typed into Raspberry Pi Imager's customisation page at flash
+# time, and stage-elspi/12-first-boot-seed's unit installs them on the machine.
+# Whether SSH accepts passwords is likewise chosen there, per card -- the image
+# sets no SSH authentication option of its own. (Until 2026-09-23 this
+# workflow baked vars.ELSPI_PUBKEY in; that variable is no longer read.)
 #
 # PROVING THIS FILE. GitHub lists a workflow_dispatch workflow in the Actions
 # UI (and accepts a dispatch for it) only once the file exists on the
@@ -71,43 +74,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      # FIRST, before anything costs time: no key means a useless image, and
-      # finding that out after freeing disk and 46 minutes of build is the
-      # expensive way. The shape check matches build-elspi.sh:94-97.
-      #
-      # The variable arrives through env:, never as ${{ }} spliced into the
-      # script text -- a repository variable is still input, and pasting it
-      # into shell source would make its contents executable.
-      - name: require vars.ELSPI_PUBKEY
-        env:
-          ELSPI_PUBKEY: ${{ vars.ELSPI_PUBKEY }}
-        run: |
-          if [ -z "${ELSPI_PUBKEY}" ]; then
-            echo "::error title=ELSPI_PUBKEY::repository variable ELSPI_PUBKEY is empty or unset. Set it (Settings > Secrets and variables > Actions > Variables) to the SSH PUBLIC key to bake into the image. Without it the image has no way in: the account is locked and PUBKEY_ONLY_SSH is on."
-            exit 1
-          fi
-          case "${ELSPI_PUBKEY}" in
-            ssh-*|ecdsa-*|sk-*) ;;
-            *) echo "::error title=ELSPI_PUBKEY::repository variable ELSPI_PUBKEY does not look like an SSH public key (expected ssh-*, ecdsa-* or sk-*)"; exit 1 ;;
-          esac
-          echo "ELSPI_PUBKEY is set"
-
       - uses: actions/checkout@v4
-
-      # Printed so the run log records WHICH key went in, the same line
-      # build-elspi.sh:98 prints. Also a real parse: the shape check above
-      # accepts any "ssh-..." string, and a key ssh-keygen cannot read would be
-      # baked in just as uselessly as no key at all.
-      - name: record the baked key's fingerprint
-        env:
-          ELSPI_PUBKEY: ${{ vars.ELSPI_PUBKEY }}
-        run: |
-          set -euo pipefail
-          printf '%s\n' "${ELSPI_PUBKEY}" > "${RUNNER_TEMP}/elspi_pubkey.pub"
-          # Captured first, so a parse failure fails the step (set -e sees a
-          # failed assignment; it would not see one inside an echo).
-          fp="$(ssh-keygen -lf "${RUNNER_TEMP}/elspi_pubkey.pub")"
-          echo "baking: $(printf '%s\n' "${fp}" | awk '{print $1, $2, $4}')"
 
       # ospi's proven shape: the hosted runner is tight on disk and a pi-gen
       # work tree is not small.
@@ -142,7 +109,7 @@ jobs:
           test -x "${SHIM}/root/usr/bin/qemu-arm-static" \
             || { echo "::error::qemu-user-static no longer ships usr/bin/qemu-arm-static"; exit 1; }
           ln -sf "${SHIM}/root/usr/bin/qemu-arm-static" "${SHIM}/bin/qemu-arm"
-          # Same two spellings build-elspi.sh:79 accepts: Ubuntu builds this
+          # Same two spellings build-elspi.sh:95 accepts: Ubuntu builds this
           # as static-PIE, which is still static.
           file -L "${SHIM}/bin/qemu-arm" | grep -Eq "statically linked|static-pie linked" \
             || { echo "::error::${SHIM}/bin/qemu-arm is not static"; file -L "${SHIM}/bin/qemu-arm"; exit 1; }
@@ -154,18 +121,13 @@ jobs:
       - uses: docker/setup-qemu-action@v3
 
       # build-docker.sh DIRECTLY, not build-elspi.sh: the wrapper hardcodes
-      # `-c elspi.conf` (build-elspi.sh:186) and takes the key as a FILE path
-      # in $1, while CI needs ci.conf. ci.conf sources elspi.conf, so the only
-      # differences are ci.conf's own (xz -9).
+      # `-c elspi.conf`, while CI needs ci.conf. ci.conf sources elspi.conf,
+      # so the only differences are ci.conf's own (xz -9).
       #
-      # The key hand-off is ci.conf's stated contract (ci.conf:33-35): the
-      # workflow supplies ELSPI_PUBKEY from the repository variable, and
-      # elspi.conf:85 turns it into PUBKEY_SSH_FIRST_USER when build.sh sources
-      # the config INSIDE the container. It only gets inside because of
-      # PIGEN_DOCKER_OPTS: build-docker.sh forwards nothing but GIT_HASH on its
-      # own (build-docker.sh:149), so this is the elspi.conf:12-13 invocation.
-      # By NAME, never name=value -- PIGEN_DOCKER_OPTS is expanded unquoted at
-      # build-docker.sh:147 and every SSH public key contains spaces.
+      # NO KEY IS PASSED IN, and none is needed: the image is keyless
+      # (elspi.conf's SSH block), so nothing is forwarded into the container
+      # beyond what build-docker.sh forwards itself (GIT_HASH,
+      # build-docker.sh:149).
       #
       # REFLEX_SOURCE/REFLEX_RELEASE/REFLEX_ORIGIN_URL are deliberately NOT
       # forwarded: unset, elspi.conf's defaults apply inside the container
@@ -177,9 +139,6 @@ jobs:
       # dies with the runner here anyway. deploy/ is copied out before the
       # container is removed (build-docker.sh:163 then :172).
       - name: build the image (build-docker.sh -c ci.conf)
-        env:
-          ELSPI_PUBKEY: ${{ vars.ELSPI_PUBKEY }}
-          PIGEN_DOCKER_OPTS: -e ELSPI_PUBKEY
         run: ./build-docker.sh -c ci.conf
 
       # Gate rather than trust the upload's glob: if-no-files-found only

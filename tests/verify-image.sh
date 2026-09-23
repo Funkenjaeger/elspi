@@ -186,9 +186,15 @@ FBS_SCRIPT="$(jget "['first_boot_seed']['script']")"
 # the seed above. It is a SCAFFOLD, not a feature: see its own README.md.
 FBUI_UNIT="$(jget "['first_boot_ui']['unit']")"
 FBUI_SCRIPT="$(jget "['first_boot_ui']['script']")"
+# SSH (keyless since 2026-09-23): where keys come from and who decides the
+# authentication policy. Read here and asserted to be exactly the declared
+# policy in the SSH section below.
+SSH_KEY_SOURCE="$(jget "['ssh']['key_source']")"
+SSH_AUTH="$(jget "['ssh']['auth']")"
 
 for v in SERVICE_USER VENV APP_PARENT APP_ROOT CONFIG_DIR LOG_DIR DRM_DEFAULT DRM_SWITCHER \
-         DRM_MODES FBS_UNIT FBS_SCRIPT FBUI_UNIT FBUI_SCRIPT APP_RELEASE APP_COMMIT; do
+         DRM_MODES FBS_UNIT FBS_SCRIPT FBUI_UNIT FBUI_SCRIPT APP_RELEASE APP_COMMIT \
+         SSH_KEY_SOURCE SSH_AUTH; do
 	if [ -z "${!v}" ]; then bad "manifest declares ${v}"; else ok "manifest declares ${v}=${!v}"; fi
 done
 
@@ -365,7 +371,8 @@ check "/usr/bin/git exists in the rootfs" rootfs_exists /usr/bin/git
 #   find       restore and phase 3
 #   mktemp     converge's validate-before-install of the sudoers files
 #   tar        restore unpacks a tarball backup
-#   ssh-keygen phase 3 prints authorized_keys fingerprints
+#   ssh-keygen phase 3 prints authorized_keys fingerprints, and the first-boot
+#              seed unit validates and fingerprints the Imager seed's keys
 #   passwd     phase 3 sets the service account's password; the account ships
 #              LOCKED, so without this the machine cannot be commissioned
 #   openocd    the firmware toolchain docs/design/seam.md call 3 bakes in unconditionally
@@ -826,8 +833,87 @@ check "seed unit's ExecStart is '-' prefixed (cannot fail the boot)" \
 check "seed unit orders After=cloud-final.service" \
 	grep -qE '^After=.*cloud-final\.service' "${FBS_UNIT_FILE}"
 
+# The script installs the Imager seed's SSH keys into /home (the image is
+# keyless). ProtectHome=yes -- which this unit shipped with until 2026-09-23 --
+# hides /home from the service, and every key install would then fail with the
+# seed wiped afterwards.
+if grep -qiE '^ProtectHome=(yes|true|on|1|read-only|tmpfs)[[:space:]]*$' "${FBS_UNIT_FILE}" 2>/dev/null; then
+	bad "seed unit does NOT hide /home (it sets $(grep -iE '^ProtectHome=' "${FBS_UNIT_FILE}"); the seeded SSH keys could never be installed)"
+else
+	ok "seed unit does not hide /home (ProtectHome is off, so it can install the seeded SSH keys)"
+fi
+
 # What none of the above can see.
-unknown "The first-boot seed has NEVER RUN -- image_2026-09-13-elspi booted on the real Pi and systemd deleted the unit's job to break an ordering cycle, so not one step executed. The checks above would have been green on that image except for the two ordering-cycle assertions added afterwards. Whether the radio comes on, whether the regulatory domain takes, whether cloud-init applies the Imager password, and whether the seed is actually erased from the FAT partition are all still Tier 3 items needing a real card in the real Pi."
+unknown "The first-boot seed has NEVER RUN -- image_2026-09-13-elspi booted on the real Pi and systemd deleted the unit's job to break an ordering cycle, so not one step executed. The checks above would have been green on that image except for the two ordering-cycle assertions added afterwards. Whether the radio comes on, whether the regulatory domain takes, whether cloud-init applies the Imager password, whether the seeded SSH keys land in authorized_keys, and whether the seed is actually erased from the FAT partition are all still Tier 3 items needing a real card in the real Pi. (The key install and password paths ARE exercised offline, against a synthetic rootfs, by tests/test-first-boot-seed.sh.)"
+
+# ---------------------------------------------------------------------------
+section "SSH: keyless image, authentication is the operator's Imager choice"
+
+# DECIDED 2026-09-23. Two properties, both stated in the manifest and both
+# checked against the rootfs here:
+#
+#   1. NO KEY IS BAKED IN. This image is built from a public repo into public
+#      release images; nobody's personal key belongs in one. Keys arrive from
+#      Imager's customisation page and the seed unit installs them.
+#   2. THE IMAGE SETS NO SSH AUTHENTICATION OPTION. Imager decides per card:
+#      "public-key only" becomes PasswordAuthentication no, password SSH
+#      becomes yes, both written by cloud-init to sshd_config.d/50-cloud-init.conf.
+#      sshd takes the FIRST value it reads, so any option the image set -- a
+#      drop-in sorting ahead of "50-", or a line in sshd_config's body -- would
+#      override that choice or stand in for it. Before 2026-09-23 the image set
+#      PasswordAuthentication no (PUBKEY_ONLY_SSH=1), which made the password an
+#      operator typed into Imager useless over SSH.
+if [ "${SSH_KEY_SOURCE}" = "imager-seed" ]; then
+	ok "manifest declares ssh.key_source=imager-seed"
+else
+	bad "manifest declares ssh.key_source=imager-seed (found: '${SSH_KEY_SOURCE}')"
+fi
+if [ "${SSH_AUTH}" = "imager-choice" ]; then
+	ok "manifest declares ssh.auth=imager-choice"
+else
+	bad "manifest declares ssh.auth=imager-choice (found: '${SSH_AUTH}')"
+fi
+
+SU_HOME="$(awk -F: -v u="${SERVICE_USER}" '$1==u {print $6}' "${ROOTFS}/etc/passwd")"
+for ak in "${SU_HOME:-/home/${SERVICE_USER}}/.ssh/authorized_keys" /root/.ssh/authorized_keys; do
+	if [ -e "${ROOTFS}${ak}" ] || [ -L "${ROOTFS}${ak}" ]; then
+		bad "no baked SSH key: ${ak} is ABSENT (it exists -- the image is supposed to be keyless)"
+	else
+		ok "no baked SSH key: ${ak} is absent"
+	fi
+done
+
+SSHD_AUTH_RE='^[[:space:]]*(PasswordAuthentication|AuthenticationMethods|PubkeyAuthentication)[[:space:]]'
+SSHD_CFG="${ROOTFS}/etc/ssh/sshd_config"
+if [ ! -f "${SSHD_CFG}" ]; then
+	bad "/etc/ssh/sshd_config present (ENABLE_SSH=1 -- is openssh-server installed?)"
+else
+	ok "/etc/ssh/sshd_config present"
+	if grep -qiE "${SSHD_AUTH_RE}" "${SSHD_CFG}"; then
+		bad "sshd_config's body sets no SSH authentication option (it does: $(grep -m1 -iE "${SSHD_AUTH_RE}" "${SSHD_CFG}" | tr -s ' \t' ' '))"
+	else
+		ok "sshd_config's body sets no SSH authentication option"
+	fi
+	# cloud-init writes 50-cloud-init.conf only when sshd_config Includes the
+	# drop-in directory; without the Include it edits sshd_config in place,
+	# after any line already there. Either way works, but the Include is what
+	# the rest of this reasoning -- and the seed unit's report -- assumes.
+	check "sshd_config Includes /etc/ssh/sshd_config.d/*.conf" \
+		grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' "${SSHD_CFG}"
+fi
+
+SSHD_OVERRIDES=""
+for f in "${ROOTFS}/etc/ssh/sshd_config.d"/*.conf; do
+	[ -f "${f}" ] || continue
+	if grep -qiE "${SSHD_AUTH_RE}" "${f}"; then
+		SSHD_OVERRIDES="${SSHD_OVERRIDES} ${f#"${ROOTFS}"}"
+	fi
+done
+if [ -n "${SSHD_OVERRIDES}" ]; then
+	bad "no sshd_config.d drop-in sets an SSH authentication option (found:${SSHD_OVERRIDES}) -- it would override the choice made on Imager's page"
+else
+	ok "no sshd_config.d drop-in sets an SSH authentication option (Imager's 50-cloud-init.conf is what sshd reads first)"
+fi
 
 # ---------------------------------------------------------------------------
 section "First-boot UI hook (stage-elspi/14-first-boot-ui -- task 6aa73b01)"

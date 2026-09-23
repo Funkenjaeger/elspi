@@ -121,6 +121,22 @@ else
 	echo "  ok: delta_layer_owns no longer claims the baked checkout"
 	PASS=$((PASS+1))
 fi
+# The REAL manifest must declare the keyless SSH policy (2026-09-23) --
+# checked here as well as against the fixture, for the reason above.
+if python3 - "${ROOTFS_DIR}/etc/elspi-image.json" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1])).get("ssh", {})
+sys.exit(0 if (s.get("key_source") == "imager-seed"
+               and s.get("auth") == "imager-choice"
+               and s.get("baked_authorized_keys") is False) else 1)
+PY
+then
+	echo "  ok: the manifest declares ssh key_source=imager-seed, auth=imager-choice, no baked keys"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: the manifest does not declare the keyless SSH policy"
+	FAIL=$((FAIL+1))
+fi
 
 # 12-first-boot-seed is deliberately chroot-free -- it only rewrites
 # /boot/firmware/meta-data and installs a unit under ${ROOTFS_DIR} -- which is
@@ -320,6 +336,74 @@ if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG5}" ./00-ru
 	FAIL=$((FAIL+1))
 else
 	echo "  ok: seed stage refused the multi-user.target.wants enablement (ordering cycle)"
+	PASS=$((PASS+1))
+fi
+
+# THE KEYLESS GATES MUST FIRE (2026-09-23). The image never carries an SSH key
+# and never sets an SSH authentication option of its own -- keys and the
+# password-vs-key-only choice come from Imager's page, per card. Each gate is
+# handed the bad state it exists to refuse.
+neg_seed_root() { # neg_seed_root <dir> -- a tree the seed substage otherwise accepts
+	mkdir -p "$1/boot/firmware" "$1/etc/ssh/sshd_config.d" "$1/home/${FIRST_USER_NAME}"
+	install -m 644 "${REPO}/stage2/04-cloud-init/files/meta-data" "$1/boot/firmware/"
+	printf 'Include /etc/ssh/sshd_config.d/*.conf\n#PasswordAuthentication yes\nKbdInteractiveAuthentication no\n' \
+		> "$1/etc/ssh/sshd_config"
+}
+NEG_OK="${WORK}/neg-keyless-ok"
+neg_seed_root "${NEG_OK}"
+if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG_OK}" ./00-run.sh >/dev/null 2>&1 ); then
+	echo "  ok: seed stage accepts a keyless tree with stock sshd config (the control)"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: seed stage refused a keyless tree with stock sshd config -- the"
+	echo "        negative controls below would prove nothing"
+	FAIL=$((FAIL+1))
+fi
+
+NEG8="${WORK}/neg8"
+neg_seed_root "${NEG8}"
+mkdir -p "${NEG8}/home/${FIRST_USER_NAME}/.ssh"
+printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZpeHR1cmUtbm90LWEtcmVhbC1rZXktZml4dHVyZQ baked\n' \
+	> "${NEG8}/home/${FIRST_USER_NAME}/.ssh/authorized_keys"
+if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG8}" ./00-run.sh >/dev/null 2>&1 ); then
+	echo "  FAIL: seed stage accepted a rootfs with a BAKED authorized_keys"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: seed stage refused a baked authorized_keys (the image is keyless)"
+	PASS=$((PASS+1))
+fi
+
+NEG9="${WORK}/neg9"
+neg_seed_root "${NEG9}"
+printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
+	> "${NEG9}/etc/ssh/sshd_config.d/10-elspi-keyonly.conf"
+if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG9}" ./00-run.sh >/dev/null 2>&1 ); then
+	echo "  FAIL: seed stage accepted an sshd drop-in that overrides Imager's SSH choice"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: seed stage refused an sshd drop-in setting PasswordAuthentication"
+	PASS=$((PASS+1))
+fi
+
+NEG10="${WORK}/neg10"
+neg_seed_root "${NEG10}"
+sed -i 's|^#PasswordAuthentication yes$|PasswordAuthentication no|' "${NEG10}/etc/ssh/sshd_config"
+if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG10}" ./00-run.sh >/dev/null 2>&1 ); then
+	echo "  FAIL: seed stage accepted sshd_config with PasswordAuthentication no (PUBKEY_ONLY_SSH=1's edit)"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: seed stage refused sshd_config setting PasswordAuthentication (PUBKEY_ONLY_SSH=1's edit)"
+	PASS=$((PASS+1))
+fi
+
+# The REAL unit, as the substage installed it above: it must not hide /home,
+# or the seed script can never install an Imager key.
+if grep -qiE '^ProtectHome=(yes|true|on|1|read-only|tmpfs)[[:space:]]*$' \
+	"${ROOTFS_DIR}/etc/systemd/system/${FBS_SEED_UNIT}"; then
+	echo "  FAIL: the installed seed unit hides /home (ProtectHome) -- no Imager key could be installed"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: the installed seed unit does not hide /home"
 	PASS=$((PASS+1))
 fi
 
