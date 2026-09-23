@@ -96,6 +96,19 @@ machine behind it. A hooks directory that matched no executable `*.sh` is
 reported as a warning rather than passed over — a lost executable bit looks
 exactly like a hook with nothing to do.
 
+**`site.env` — settings, not steps.** Hooks run last, which is too late to
+change how a phase judges its input. So the hooks directory may also hold a
+`site.env`, which `provision.sh` loads *before phase 1* (`lib.sh`
+`load_site_env`). It is **data, never sourced**: every non-blank,
+non-comment line must be `ELSPI_<NAME>=<value>` with the value drawn from
+`[A-Za-z0-9._/-]`; anything else stops provisioning, naming the line, before
+root is asked for anything. Each accepted variable is exported to every phase
+and printed. The one a phase reads today:
+
+| Variable | Read by | Meaning |
+|---|---|---|
+| `ELSPI_RESTORE_MIN_YAML` | `02-restore.sh` | the minimum number of `*.yaml` files a capture must hold. The public minimum is 1 (`Els-0.yaml`, which must also be non-empty); a site may raise it, never lower it — `0` or a non-number is refused |
+
 **This repo ships no hooks and no hooks directory.** That is the point: the
 hooks are where the IP addresses, collector names and backup hosts live, and
 they live somewhere else.

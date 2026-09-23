@@ -259,10 +259,16 @@ an explicit uncommissioned state, never silently on in-code defaults.*
 ### Phase 2 — restore
 
 Accepts a directory or a tarball and normalises it. It gates on the *content*,
-not the path: a non-empty `Els-0.yaml` must be present, and there must be at
-least 15 `.yaml` files (the live machine carried 17 at last count, 2 files of
-slack above the bar). A partial capture is refused rather than restored as a
-subset.
+not the path: a non-empty `Els-0.yaml` must be present — that is the public
+minimum, because it is the one file reflex cannot start *correctly* without.
+Every other settings file the application recreates with its own defaults
+when it is missing, and with no `Axis-*.yaml` it builds four identity axes, so
+a missing `Axis-*.yaml` is named in a warning. **A site that knows how many
+files its machine carries should raise the bar**:
+`ELSPI_RESTORE_MIN_YAML=<n>` in its `site.env` (see [Site hooks](#site-hooks)),
+and a capture with fewer `.yaml` files is then refused as partial rather than
+restored as a subset. A site can raise the bar, never lower it. All of these
+checks only read, so they run before the phase asks for root.
 
 Then it **prints the commissioned values it is about to install** — the backlash
 steps, the last measured calibration, the ceiling, the drift notice — because
@@ -324,6 +330,15 @@ Each hook is run with `DELTAS_DIR`, `SERVICE_USER`, `HOME_DIR`, `APP_DIR`,
 phases use. `DRY_RUN` is passed through, not enforced — a hook is responsible
 for honouring it. **A hook that fails stops provisioning, named**, which is why
 hooks run last.
+
+The same directory may also hold a **`site.env`**: the site's *settings* for
+the phases, as opposed to steps that run after them. It is read before phase 1
+and parsed as data, never sourced — every line is `ELSPI_<NAME>=<value>` (a
+blank line or a `#` comment aside), anything else stops provisioning with its
+line number, and each value is exported to the phases. Today one phase reads
+one: `ELSPI_RESTORE_MIN_YAML` raises phase 2's content bar. Run
+`02-restore.sh` on its own and pass it in the environment instead
+(`sudo ELSPI_RESTORE_MIN_YAML=<n> ./02-restore.sh …`).
 
 `--site-hooks` is optional and this repository ships no hooks. Without it,
 `provision.sh` says `no site hooks (none given)` and carries on. The full

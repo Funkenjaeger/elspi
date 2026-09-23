@@ -57,6 +57,11 @@
 # purpose: a site step that fails must not be able to leave a half-converged
 # machine behind it.
 #
+# DIR/site.env is the other half: SETTINGS the phases read, as opposed to steps
+# that run after them -- ELSPI_<NAME>=<value> lines, parsed as data (never
+# sourced) and exported before phase 1. ELSPI_RESTORE_MIN_YAML there raises
+# phase 2's content bar above the public minimum. See lib.sh load_site_env.
+#
 # The contract is in deltas/README.md. This repo ships no hooks.
 
 set -uo pipefail
@@ -87,6 +92,14 @@ while [ $# -gt 0 ]; do
 		*) die "unknown argument: $1" ;;
 	esac
 done
+
+# A site's SETTINGS (not its hooks): <hooks dir>/site.env, exported before
+# phase 1 so every phase sees them -- ELSPI_RESTORE_MIN_YAML is the one phase
+# 2 reads. Loaded before need_root because it only reads, and so a malformed
+# line is refused before anything is asked of root.
+if [ -n "${SITE_HOOKS}" ]; then
+	load_site_env "${SITE_HOOKS}"
+fi
 
 need_root
 

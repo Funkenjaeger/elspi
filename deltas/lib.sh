@@ -49,6 +49,33 @@ assert() { # assert <description> <command...>
 	fi
 }
 
+# A site's SETTINGS for the phases, as opposed to its hooks: <hooks dir>/site.env,
+# loaded by provision.sh BEFORE phase 1 (hooks run last, which is too late to
+# change how restore judges a capture). DATA, not code: every non-blank,
+# non-comment line must be ELSPI_<NAME>=<value>, the value drawn from
+# [A-Za-z0-9._/-]; anything else is refused by line number, and the file is
+# never sourced. Each accepted name is exported, and named on the terminal.
+# Absent file: nothing to load, said so. (deltas/README.md has the contract.)
+load_site_env() { # load_site_env <site hooks dir>
+	local f="$1/site.env" line n=0 name
+	if [ ! -e "${f}" ]; then
+		say "no site.env in $1 -- the phases use their public defaults"
+		return 0
+	fi
+	[ -f "${f}" ] && [ -r "${f}" ] || die "${f} exists but is not a readable file"
+	while IFS= read -r line || [ -n "${line}" ]; do
+		n=$((n + 1))
+		case "${line}" in ''|'#'*) continue ;; esac
+		if ! printf '%s\n' "${line}" | grep -qE '^ELSPI_[A-Z0-9_]+=[A-Za-z0-9._/-]*$'; then
+			die "${f}:${n} is not an ELSPI_<NAME>=<value> line (value: letters, digits, . _ / - only).
+  site.env is data, never sourced; fix or remove that line."
+		fi
+		name="${line%%=*}"
+		export "${name}=${line#*=}"
+		ok "site.env: ${name}=${line#*=}"
+	done < "${f}"
+}
+
 # The service user. Read from the image's own manifest when present so the
 # delta cannot disagree with the image about who runs the app; falls back to
 # the pi-gen default, and says which it used.
