@@ -187,10 +187,12 @@ enabled in `cloud-init.target`) does the five things cloud-init cannot do here
    soft-blocked, so a perfectly rendered Wi-Fi keyfile would never associate.
 2. **Applies the regulatory domain** you typed as the country.
 3. **Installs the password you typed.** cloud-init ignores Imager's `passwd`
-   key for an account that already exists — and then unlocks the account
-   anyway, leaving a random build-time throwaway live. The unit installs your
-   hash over it. If you left the password blank, it re-locks the account
-   instead.
+   key for an account that already exists, so the unit installs your hash
+   itself. The account ships locked with a bare `!` — no password hash of any
+   kind is in the image — so if you left the password blank it simply stays
+   locked. (Images built before 2026-09-23 locked it differently, and
+   cloud-init unlocked a random build-time throwaway; the unit still revokes
+   that on such a card.)
 4. **Installs your SSH keys**, each exactly once, into
    `~default/.ssh/authorized_keys`, and logs their fingerprints. If the page
    carried neither a password nor a key it logs `NO SSH WAY IN` instead.

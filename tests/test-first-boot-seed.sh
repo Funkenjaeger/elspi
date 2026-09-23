@@ -130,18 +130,25 @@ done
 chmod 0755 "${BIN}"/*
 
 # --- a synthetic rootfs, shaped like the image AFTER cloud-init ran ---------
-make_root() { # make_root <dir>
-	local r="$1"
+# What stage-elspi/05-service-user ships in default's password field: a BARE
+# '!' (usermod -p '!'), not passwd -l's '!<hash>'. Section 0 below checks the
+# stage still says so. The second value is the shape cloud-init leaves behind
+# after it unlocks an image built BEFORE 2026-09-23: the throwaway's hash,
+# live.
+SHIPPED_FIELD='!'
+LEGACY_UNLOCKED='$6$throwaway$BUILDTIME'
+
+make_root() { # make_root <dir> [default's shadow password field]
+	local r="$1" field="${2-${SHIPPED_FIELD}}"
 	rm -rf "${r}"
 	mkdir -p "${r}/boot/firmware" "${r}/etc/ssh/sshd_config.d" \
 		"${r}/var/lib/cloud/instance" "${r}/home/default"
 	: > "${r}/var/lib/cloud/instance/boot-finished"
 	printf 'root:x:0:0:root:/root:/bin/bash\ndefault:x:%s:%s::/home/default:/bin/bash\n' \
 		"${MY_UID}" "${MY_GID}" > "${r}/etc/passwd"
-	# `passwd -l` on the build throwaway: '!' in front of a hash, as
-	# stage-elspi/05-service-user leaves it.
-	printf 'root:*:20000:0:99999:7:::\ndefault:!$6$throwaway$BUILDTIME:20000:0:99999:7:::\n' \
+	printf 'root:*:20000:0:99999:7:::\ndefault:%s:20000:0:99999:7:::\n' "${field}" \
 		> "${r}/etc/shadow"
+	cp "${r}/etc/shadow" "${r}/etc/shadow.start"
 	printf '{"service_user": "default"}\n' > "${r}/etc/elspi-image.json"
 	printf 'dsmode: local\ninstance-id: rpi-imager-1758600000\n' > "${r}/boot/firmware/meta-data"
 	printf 'network: {version: 2}\n' > "${r}/boot/firmware/network-config"
@@ -215,6 +222,34 @@ echo "== seed script: ${SEED#"${REPO}/"} =="
 
 # ---------------------------------------------------------------------------
 echo
+echo "-- 0. the locked field the image ships, as cloud-init will read it --"
+# stage-elspi/05-service-user cannot run here (it needs the chroot), so its
+# CODE FORM is asserted: it must write a bare '!' and must not use passwd -l,
+# whose '!<hash>' is what cloud-init used to unlock. Its own post-write gate
+# FATALs on anything but '^<user>:!:'.
+SVC_STAGE="${REPO}/stage-elspi/05-service-user/00-run.sh"
+chk "[0] 05-service-user locks with usermod -p '!'" grep -qE "^[[:blank:]]*usermod -p '!' " "${SVC_STAGE}"
+nchk "[0] 05-service-user does not run passwd -l" grep -qE '^[[:blank:]]*passwd -l' "${SVC_STAGE}"
+chk "[0] 05-service-user's post-write gate demands a bare '!'" grep -qF ':!:" "${ROOTFS_DIR}/etc/shadow"' "${SVC_STAGE}"
+
+# cloud-init 25.2's own test, distros/__init__.py:139 and :809-841: a user
+# whose line matches one of these has NO existing password, and with
+# lock_passwd:false and no hashed_/plain_text_passwd cloud-init then declines
+# to unlock (:941-953). The patterns are copied verbatim.
+ci_sees_no_password() { # ci_sees_no_password <shadow field>
+	python3 - "$1" <<'PY'
+import re, sys
+line = "default:%s:20000:0:99999:7:::" % sys.argv[1]
+pats = ["^{username}::", "^{username}:!:"]
+rx = "|".join(p.format(username="default") for p in pats)
+sys.exit(0 if re.findall(rx, line, re.MULTILINE) else 1)
+PY
+}
+chk "[0] cloud-init reads the shipped bare '!' as NO password (so it will not unlock)" ci_sees_no_password "${SHIPPED_FIELD}"
+nchk "[0] control: cloud-init reads passwd -l's '!<hash>' as a password (the old unlock hole)" ci_sees_no_password '!$6$throwaway$BUILDTIME'
+
+# ---------------------------------------------------------------------------
+echo
 echo "-- 1. one key, public-key-only SSH (Imager: key, no password) --"
 R1="${WORK}/r1"; make_root "${R1}"
 imager_ud "${R1}/boot/firmware/user-data" no false "${PUB_A}"
@@ -231,7 +266,7 @@ chk "[1] key A's fingerprint is logged" logged "${R1}" "${FP_A}"
 chk "[1] the key-only choice is reported, not changed" logged "${R1}" "Imager chose public-key-only SSH"
 chk "[1] 50-cloud-init.conf left as cloud-init wrote it" test "$(cat "${R1}/etc/ssh/sshd_config.d/50-cloud-init.conf")" = "PasswordAuthentication no"
 nchk "[1] no NO-SSH-WAY-IN warning" logged "${R1}" "NO SSH WAY IN"
-chk "[1] password left locked (no password in the seed)" test "$(shadow_field "${R1}")" = '!$6$throwaway$BUILDTIME'
+chk "[1] password left locked (no password in the seed)" test "$(shadow_field "${R1}")" = "${SHIPPED_FIELD}"
 
 # Idempotence: the same seed again (a re-flash of the same card, or a
 # resumed first boot) must not append the key a second time.
@@ -290,6 +325,7 @@ imager_ud "${R4}/boot/firmware/user-data" yes true
 cloudinit_pwauth "${R4}" yes
 run_seed "${R4}"
 common_asserts "${R4}" 4
+chk "[4] the synthetic rootfs started from the shipped bare '!'" grep -qx "default:${SHIPPED_FIELD}:20000:0:99999:7:::" "${R4}/etc/shadow.start"
 chk "[4] the typed password's hash is now default's shadow field (password SSH can work)" test "$(shadow_field "${R4}")" = "${FAKE_HASH}"
 chk "[4] chpasswd -e was the mechanism" grep -qx "chpasswd -e" "${CALLS}"
 nchk "[4] no authorized_keys created (no key in the seed)" test -e "$(AK_OF "${R4}")"
@@ -319,7 +355,7 @@ common_asserts "${R6}" 6
 chk "[6] the NO-SSH-WAY-IN warning fires" logged "${R6}" "WARNING: NO SSH WAY IN"
 chk "[6] and says the touchscreen is the only way in" logged "${R6}" "reachable ONLY FROM THE TOUCHSCREEN"
 nchk "[6] no authorized_keys created" test -e "$(AK_OF "${R6}")"
-chk "[6] password left locked" test "$(shadow_field "${R6}")" = '!$6$throwaway$BUILDTIME'
+chk "[6] password left locked" test "$(shadow_field "${R6}")" = "${SHIPPED_FIELD}"
 
 # The unseeded card, exactly: upstream's own template, all comments. This is
 # what a "Use custom" flash leaves on the FAT partition.
@@ -366,6 +402,72 @@ run_seed "${R9}"
 chk "[9] exits 0" test "${RC}" -eq 0
 chk "[9] the overriding drop-in is named in a WARNING" logged "${R9}" "10-override.conf sets an SSH authentication option"
 chk "[9] and left alone (reported, never changed)" test "$(cat "${R9}/etc/ssh/sshd_config.d/10-override.conf")" = "PasswordAuthentication no"
+
+# ---------------------------------------------------------------------------
+# 10-12: a seed that asks for an UNLOCKED account without a password this
+# image can apply. Imager never writes this (a password always comes with its
+# own `passwd:`), but cloud-init honours a hand-written one, and what it does
+# depends on the field the image shipped. See item 2 at the top of the script.
+# The calls log is shared by every case (the last check reads all of it), so a
+# case marks where its own calls start instead of truncating it.
+CALLS_MARK=0
+mark_calls() { CALLS_MARK="$(wc -l < "${CALLS}")"; }
+new_calls_match() { tail -n +"$((CALLS_MARK + 1))" "${CALLS}" | grep -qE -- "$1"; }
+
+unlock_ud() { # unlock_ud <file> [extra user-block line]
+	{
+		echo '#cloud-config'
+		echo 'user:'
+		echo '  name: default'
+		echo '  lock_passwd: false'
+		[ -z "${2:-}" ] || echo "  $2"
+		echo "  ssh_authorized_keys:"
+		printf '    - "%s"\n' "${PUB_A}"
+	} > "$1"
+}
+
+echo
+echo "-- 10. lock_passwd:false, no password, on this image's bare '!' --"
+# cloud-init declined to unlock (its empty-locked pattern matches '!'), so
+# the field is still the shipped '!' and there is nothing to revoke.
+R10="${WORK}/r10"; make_root "${R10}"
+unlock_ud "${R10}/boot/firmware/user-data"
+mark_calls
+run_seed "${R10}"
+common_asserts "${R10}" 10
+chk "[10] the declared locked state is recognised" logged "${R10}" "declared locked state holds"
+chk "[10] default's field is still the bare '!'" test "$(shadow_field "${R10}")" = "${SHIPPED_FIELD}"
+nchk "[10] usermod was not called (nothing to revoke)" new_calls_match '^usermod '
+nchk "[10] no revocation warning" logged "${R10}" "Revoking it"
+
+echo
+echo "-- 11. an EMPTY field: cloud-init's passwd -d fallback after passwd -u refused '!' --"
+# The seed carries an EMPTY hashed_passwd with lock_passwd:false. cloud-init
+# calls unlock_passwd(); `passwd -u` refuses a bare '!' (exit 3, accepted), and
+# cloud-init falls back to `passwd -d`: default's field is now EMPTY. That is
+# a blank password, not "no password", and must be re-locked.
+R11="${WORK}/r11"; make_root "${R11}" ''
+unlock_ud "${R11}/boot/firmware/user-data" 'hashed_passwd: ""'
+mark_calls
+run_seed "${R11}"
+common_asserts "${R11}" 11
+chk "[11] the EMPTY field is named in a WARNING" logged "${R11}" "WARNING: the password field of default is EMPTY"
+chk "[11] usermod -p ! was the mechanism" new_calls_match '^usermod -p ! default$'
+chk "[11] default's field is back to the bare '!'" test "$(shadow_field "${R11}")" = "${SHIPPED_FIELD}"
+chk "[11] the revocation is logged" logged "${R11}" "revoked: default now has no usable password"
+nchk "[11] NOT reported as a declared locked state" logged "${R11}" "declared locked state holds"
+
+echo
+echo "-- 12. an image built before 2026-09-23: cloud-init unlocked the throwaway --"
+# passwd -l's '!<hash>' did not match cloud-init's pattern, so it unlocked the
+# field into the throwaway's live hash. Still revoked on such a card.
+R12="${WORK}/r12"; make_root "${R12}" "${LEGACY_UNLOCKED}"
+unlock_ud "${R12}/boot/firmware/user-data"
+mark_calls
+run_seed "${R12}"
+common_asserts "${R12}" 12
+chk "[12] the unlocked throwaway is named in a WARNING" logged "${R12}" "unlocked the BUILD-TIME THROWAWAY"
+chk "[12] default's field is back to the bare '!'" test "$(shadow_field "${R12}")" = "${SHIPPED_FIELD}"
 
 # ---------------------------------------------------------------------------
 echo

@@ -225,8 +225,9 @@ Two things worth recording, because they were *not* obvious and because they are
 why this needed shipped code rather than only a documentation change:
 
 1. **The `default` account still ships locked, and it must.** `05-service-user`
-   still runs `passwd -l`, and its post-write gate still FATALs if the account
-   is unlocked at build time. The account is unlocked *on the machine*, from the
+   locks it — with a bare `!` since 2026-09-23 (`usermod -p '!'`; it ran
+   `passwd -l` before, see item 2) — and its post-write gate FATALs on any
+   other password field. The account is unlocked *on the machine*, from the
    operator's own input, or not at all.
 
 2. **cloud-init would not have done what the customisation page implies.** For
@@ -236,8 +237,10 @@ why this needed shipped code rather than only a documentation change:
    generates purely to satisfy `build.sh:292`. Left alone, design (a) would have
    shipped a lathe whose `default` account had a **live password nobody knows**
    and whose typed password did nothing at all. The seed unit closes both
-   halves. `stage-elspi/12-first-boot-seed/README.md` carries the line-by-line
-   derivation.
+   halves. Since 2026-09-23 the unlock half is also closed at the source: with
+   a bare `!` in the field there is no hash for cloud-init to unlock, and its
+   own empty-locked check makes it decline. `stage-elspi/12-first-boot-seed/README.md`
+   carries the line-by-line derivation.
 
 #### AMENDMENT 2026-09-23 — the image is keyless, and SSH auth is the operator's choice
 

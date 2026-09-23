@@ -165,6 +165,8 @@ mutate "root password unlocked" \
 	"sed -i 's|^root:\\*|root:\$6\$abc\$def|' etc/shadow"
 mutate "service user password left usable (build throwaway ships)" \
 	"sed -i 's|^default:!|default:\$6\$abc\$def|' etc/shadow"
+mutate "service user locked the passwd -l way ('!<hash>': the hash ships, cloud-init unlocks it)" \
+	"sed -i 's|^default:!:|default:!\$6\$abc\$def:|' etc/shadow"
 mutate "service user dropped from the 'video' group" \
 	"sed -i '/^video:/d' etc/group"
 mutate "service user dropped from the 'dialout' group (Modbus)" \

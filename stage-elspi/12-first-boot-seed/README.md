@@ -92,8 +92,9 @@ could have come out differently. The steps:
 logic — against a synthetic rootfs (`ELSPI_SEED_TEST_ROOT` prefixes every path
 it touches) with user-data in the shape Imager 2.x writes: one key, two keys, a
 key cloud-init already installed, password only, password and key, neither,
-upstream's unseeded template, malformed YAML, another account's name, and an
-overriding sshd drop-in. `tests/self-test.sh` collects it.
+upstream's unseeded template, malformed YAML, another account's name, an
+overriding sshd drop-in, and the three outcomes of a `lock_passwd: false` seed
+with no password (below). `tests/self-test.sh` collects it.
 
 ### Why step 5 is needed — the image is keyless
 
@@ -163,26 +164,64 @@ cloud-init 25.2, `distros/__init__.py:894-907`: for a **pre-existing** user the
 (`stage-elspi/05-service-user`), so the password the operator typed is silently
 discarded.
 
-And then the same function **unlocks the account anyway**. `passwd -l` prefixes
-`!` to the *existing* hash and leaves the rest — `shadow(5)`: "The remaining
-characters on the line represent the password field before the password was
-locked" — so `default`'s field is `!<build throwaway hash>`, not `!`.
-cloud-init's empty-locked patterns (`distros/__init__.py:139`) are
-`^{username}::` and `^{username}:!:`, and neither matches. So
-`has_existing_password` is True at line 912, `lock_passwd: false` takes the
-branch at line 927, and line 940 calls `unlock_passwd()` — making the random
-`FIRST_USER_PASS` throwaway from `elspi.conf` a **live password that nobody
-knows**.
+### The unlock hole — closed at the source on 2026-09-23
 
-Step 4 closes both halves, deciding which applies from the seed itself:
+Until 2026-09-23 the same function then **unlocked the account anyway**.
+`05-service-user` locked it with `passwd -l`, which prefixes `!` to the
+*existing* hash and leaves the rest — `shadow(5)`: "The remaining characters
+on the line represent the password field before the password was locked" — so
+`default`'s field was `!<build throwaway hash>`. cloud-init's empty-locked
+patterns (`distros/__init__.py:139`) are `^{username}::` and
+`^{username}:!:`, and neither matched. So `has_existing_password` was True at
+line 912, `lock_passwd: false` took the branch at line 927, and line 940
+called `unlock_passwd()` — making the random `FIRST_USER_PASS` throwaway from
+`elspi.conf` a **live password that nobody knew**. It also meant every public
+image carried the throwaway's SHA-512 hash in `/etc/shadow`.
 
-- `passwd` present → install it with `chpasswd -e` (this also overwrites the
-  throwaway), after checking it is a `crypt(3)` hash and that it differs from
-  what is already there;
+**`05-service-user` now writes a bare `!`** (`usermod -p '!'`), so no hash
+ships at all, and cloud-init's own logic stops the unlock:
+
+- `^default:!:` matches, so `has_existing_password` is **False** (line 912);
+- Imager's `passwd` is ignored for an existing user, so there is no
+  `ud_password_specified` either;
+- `lock_passwd: false` therefore falls through to the
+  `elif pre_existing_user:` branch (lines 941-953), which logs *"Not
+  unlocking blank password for existing user"* and **never calls
+  `unlock_passwd()`**.
+
+Had anything called it, `passwd -u` refuses a bare `!` anyway: shadow 4.17.4
+(Debian trixie's), `src/passwd.c:522-528`, prints *"unlocking the password
+would result in a passwordless account"* and exits `E_FAILURE` (3). That
+refusal is **not** harmless inside cloud-init, though, and it is the one path
+that still reaches it: a hand-written seed with an **empty**
+`hashed_passwd`/`plain_text_passwd` and `lock_passwd: false` *is*
+`ud_password_specified`, so `unlock_passwd()` runs; cloud-init accepts exit 3
+(`rcs=[0, 3]`, line 1055) and, because stderr is not empty, falls back to
+`passwd -d` (lines 1059-1064) — leaving an **empty** password field. Imager
+never writes such a seed, but step 4 handles it.
+
+### What step 4 does
+
+It decides from the seed itself, and from the field cloud-init left behind:
+
+- `passwd` present → install it with `chpasswd -e` over the locked field,
+  after checking it is a `crypt(3)` hash and that it differs from what is
+  already there. **This is the path every Imager password takes**, and it is
+  unaffected by how the field was locked: `chpasswd -e` replaces the whole
+  field;
 - `hashed_passwd`/`plain_text_passwd` present → cloud-init already did it
   (`distros/__init__.py:876-892`); say so and do nothing;
-- neither, but `lock_passwd: false` → revoke the unlocked throwaway with
-  `usermod -p '!'`, restoring the image's declared locked state.
+- neither, but `lock_passwd: false` → check the field:
+  - `!` or `*` → the image's declared state held; nothing to do;
+  - **empty** → cloud-init's `passwd -d` fallback: `WARNING`, then
+    `usermod -p '!'`;
+  - a bare hash → an image built before 2026-09-23 whose throwaway cloud-init
+    unlocked: `WARNING`, then `usermod -p '!'`;
+  - `!<hash>` → still locked; nothing to do.
+
+`tests/test-first-boot-seed.sh` section 0 asserts the stage's code form (bare
+`!`, no `passwd -l`) and replays cloud-init's line-139 patterns against both
+field shapes; cases 10-12 run the three `lock_passwd: false` outcomes.
 
 ### Why the seed is overwritten and not deleted
 

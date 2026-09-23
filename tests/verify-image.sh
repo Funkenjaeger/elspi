@@ -214,9 +214,12 @@ done
 check "root password is locked" \
 	grep -qE '^root:[*!]' "${ROOTFS}/etc/shadow"
 
-# The build-time throwaway from FIRST_USER_PASS must not ship usable.
-check "${SERVICE_USER} password is locked" \
-	grep -qE "^${SERVICE_USER}:!" "${ROOTFS}/etc/shadow"
+# The build-time throwaway from FIRST_USER_PASS must not ship usable -- nor
+# ship at all. EXACTLY '!': passwd -l's '!<hash>' carried the throwaway's hash
+# into a public image, and cloud-init unlocks that shape on first boot
+# (stage-elspi/12-first-boot-seed/README.md, "The unlock hole").
+check "${SERVICE_USER} password field is a bare '!' (locked, no hash shipped)" \
+	grep -qE "^${SERVICE_USER}:!:" "${ROOTFS}/etc/shadow"
 
 # The whole point of the 2026-09-01 decision.
 if grep -qs "User=root" "${ROOTFS}/usr/share/elspi/drm-modes/"*.conf; then

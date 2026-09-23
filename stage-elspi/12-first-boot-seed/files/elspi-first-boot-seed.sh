@@ -33,24 +33,41 @@
 #    PRE-EXISTING user, the `passwd` key in user-data is IGNORED -- only
 #    `plain_text_passwd` and `hashed_passwd` are honoured. Imager writes
 #    `passwd`. The `default` account already exists (stage-elspi/05-service-user
-#    creates it and runs `passwd -l`), so the password the operator typed into
-#    Imager is silently discarded.
+#    creates it and locks it), so the password the operator typed into Imager
+#    is silently discarded. This script applies it instead (step 4).
 #
-#    Worse, the same function then UNLOCKS the account anyway. `passwd -l`
-#    prefixes '!' to the existing hash and leaves the rest -- shadow(5): "The
-#    remaining characters on the line represent the password field before the
-#    password was locked" -- so the field is `!<build throwaway hash>`, not
-#    `!`. cloud-init's empty-locked patterns (distros/__init__.py:139) are
-#    `^{username}::` and `^{username}:!:`, neither of which matches. So
-#    has_existing_password becomes True (line 912), `lock_passwd: false` takes
-#    the branch at line 927, and line 940 calls unlock_passwd() -- making the
-#    random FIRST_USER_PASS throwaway from elspi.conf a LIVE password that
-#    nobody knows.
+#    THE UNLOCK HOLE, AND WHY THE IMAGE NO LONGER HAS IT. Until 2026-09-23
+#    05-service-user locked the account with `passwd -l`, which prefixes '!' to
+#    the existing hash -- shadow(5): "The remaining characters on the line
+#    represent the password field before the password was locked" -- so the
+#    field was `!<build throwaway hash>`. cloud-init's empty-locked patterns
+#    (distros/__init__.py:139) are `^{username}::` and `^{username}:!:`, and
+#    neither matched: has_existing_password became True (line 912),
+#    `lock_passwd: false` took the branch at line 927, and line 940 called
+#    unlock_passwd() -- making the random FIRST_USER_PASS throwaway a LIVE
+#    password that nobody knows.
 #
-#    This script closes both halves: it applies the operator's hash itself, or,
-#    if the seed asked for an unlock without supplying a password this image
-#    can apply, it revokes the throwaway and restores the declared locked
-#    state.
+#    05-service-user now writes a BARE '!' (`usermod -p '!'`). `^default:!:`
+#    matches, has_existing_password is False, and with Imager's ignored
+#    `passwd` there is no ud_password_specified either -- so cloud-init takes
+#    the "Not unlocking blank password for existing user" branch (lines
+#    941-953) and never calls unlock_passwd(). Had it called it, `passwd -u`
+#    would have refused anyway: shadow 4.17.4 src/passwd.c:522-528 exits
+#    E_FAILURE with "unlocking the password would result in a passwordless
+#    account" when the field is exactly '!'.
+#
+#    ONE PATH STILL ENDS IN AN EMPTY FIELD, and it is not Imager's. A
+#    hand-written seed carrying an EMPTY `hashed_passwd`/`plain_text_passwd`
+#    with `lock_passwd: false` is ud_password_specified, so cloud-init DOES call
+#    unlock_passwd(); `passwd -u` refuses the bare '!' with exit 3, which
+#    cloud-init accepts (rcs=[0, 3], line 1055), and because stderr is not
+#    empty it falls back to `passwd -d` (lines 1059-1064) -- a BLANK password.
+#    Step 4 treats an empty field as the hole it is and re-locks it.
+#
+#    This script therefore: applies the operator's hash when the seed carries
+#    one; and otherwise, if the seed asked for an unlock, makes sure the field
+#    is back to the image's declared bare '!' -- whether cloud-init left it
+#    empty, or (on an image built before 2026-09-23) unlocked a throwaway.
 #
 # 3. THE SSH KEYS. The image is KEYLESS (2026-09-23): no public key is baked
 #    in at build time, because this repo and its release images are public and
@@ -470,7 +487,7 @@ PY
 				# GATE: compare, do not assume. chpasswd can exit 0
 				# and change nothing if the account is not writable.
 				if [ "${NEW_FIELD}" = "${SEED_HASH}" ]; then
-					log "installed the seeded password for ${SEED_USER} (hash not logged) and cleared the build-time throwaway"
+					log "installed the seeded password for ${SEED_USER} (hash not logged) over the image's locked field"
 					did passwd-applied
 				else
 					warn "chpasswd exited 0 but ${SHADOW} did not change for ${SEED_USER}."
@@ -490,40 +507,53 @@ PY
 		;;
 	none)
 		if [ "${SEED_LOCK}" = "false" ]; then
-			# THE UNLOCK HOLE. The seed asked for an unlocked account and
-			# supplied no password this image can apply, so cloud-init
-			# unlocked whatever was already there -- the random
-			# FIRST_USER_PASS throwaway from elspi.conf, which nobody
-			# knows and which is now a live credential.
+			# The seed asked for an unlocked account and supplied no
+			# password this image can apply. What cloud-init did with that
+			# depends on what the image shipped (see item 2 at the top):
 			#
-			# GATE: only act if the field is actually unlocked AND
-			# non-empty. If it is already '!' or empty, the image's
-			# declared state holds and there is nothing to revoke.
-			if [ -z "${CUR_FIELD}" ] || [ "${CUR_FIELD}" = "!" ] || [ "${CUR_FIELD}" = "*" ]; then
+			#   '!' or '*'  -- the declared state; cloud-init declined to
+			#                  unlock (this image, since 2026-09-23).
+			#   ''          -- EMPTY: cloud-init's passwd -d fallback after
+			#                  `passwd -u` refused a bare '!'. A blank
+			#                  password is a hole, NOT "no password".
+			#   '!<hash>'   -- still locked.
+			#   '<hash>'    -- an image built before 2026-09-23: cloud-init
+			#                  unlocked the BUILD-TIME THROWAWAY.
+			#
+			# GATE: act only on the two unlocked shapes, and read the field
+			# back afterwards.
+			REVOKE_WHY=""
+			case "${CUR_FIELD}" in
+			'!'|'*')
 				log "${SEED_USER} has no usable password already; declared locked state holds"
 				did passwd-already-revoked
-			else
-				case "${CUR_FIELD}" in
-				'!'*)
-					log "${SEED_USER} is still locked; cloud-init did not unlock it"
-					did passwd-still-locked
-					;;
-				*)
-					warn "seed asked for lock_passwd:false with no applicable password, so cloud-init unlocked the BUILD-TIME THROWAWAY for ${SEED_USER}. Revoking it."
-					if usermod -p '!' "${SEED_USER}" >/dev/null 2>&1; then
-						REV_FIELD="$(awk -F: -v u="${SEED_USER}" '$1==u {print $2}' "${SHADOW}" 2>/dev/null)"
-						if [ "${REV_FIELD}" = "!" ]; then
-							log "revoked: ${SEED_USER} now has no usable password. Set one from the interactive provision phase."
-							did passwd-throwaway-revoked
-						else
-							warn "usermod exited 0 but ${SEED_USER}'s password field is not '!'."
-						fi
+				;;
+			'')
+				REVOKE_WHY="the password field of ${SEED_USER} is EMPTY (cloud-init's passwd -d fallback: the seed asked for lock_passwd:false with a blank password key). A blank password is a way in with no credential. Re-locking it."
+				;;
+			'!'*)
+				log "${SEED_USER} is still locked; cloud-init did not unlock it"
+				did passwd-still-locked
+				;;
+			*)
+				REVOKE_WHY="seed asked for lock_passwd:false with no applicable password, so cloud-init unlocked the BUILD-TIME THROWAWAY for ${SEED_USER} (an image built before 2026-09-23). Revoking it."
+				;;
+			esac
+			if [ -n "${REVOKE_WHY}" ]; then
+				warn "${REVOKE_WHY}"
+				if usermod -p '!' "${SEED_USER}" >/dev/null 2>&1; then
+					REV_FIELD="$(awk -F: -v u="${SEED_USER}" '$1==u {print $2}' "${SHADOW}" 2>/dev/null)"
+					if [ "${REV_FIELD}" = "!" ]; then
+						log "revoked: ${SEED_USER} now has no usable password. Set one from the interactive provision phase."
+						did passwd-revoked
 					else
-						warn "usermod -p '!' failed for ${SEED_USER}; a password nobody knows is still live."
+						warn "usermod exited 0 but ${SEED_USER}'s password field is not '!'."
 					fi
-					;;
-				esac
+				else
+					warn "usermod -p '!' failed for ${SEED_USER}; an unlocked password field is still live."
+				fi
 			fi
+			unset REVOKE_WHY
 		else
 			log "seed supplied no password and did not ask for an unlock; nothing to do"
 		fi
