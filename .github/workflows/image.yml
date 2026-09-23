@@ -1,0 +1,192 @@
+name: image
+
+# Build the elspi Raspberry Pi image on a GitHub-hosted runner and keep it as a
+# workflow artifact. Nothing here tags, releases or publishes anything.
+#
+# DISPATCH-ONLY, BY DESIGN. A clean build is ~46 minutes and a ~1.3 GB
+# .img.xz, and when (or whether) an image gets published is a policy decision
+# that has not been made yet. So this runs only when someone presses the
+# button: no push trigger, no tag trigger, no release step.
+#
+# THE BAKED APP IS WHATEVER THE NEWEST FULL reflex RELEASE IS AT BUILD TIME
+# (stage-elspi/10a-app-checkout; elspi.conf's REFLEX_RELEASE is empty). As of
+# this workflow's writing that is still v1.1.0, which predates the updater
+# (updater_ready=no in the image's /etc/elspi-image.json). An image built
+# before reflex v1.2.0 is cut is a build artifact to test, not one to hand out.
+#
+# THE SSH KEY IS A REPOSITORY VARIABLE (vars.ELSPI_PUBKEY), NOT A SECRET. It is
+# a PUBLIC key, and ci.conf says why it is deliberately not a secret: what gets
+# baked into the image should be auditable. The account ships locked, so this
+# key is the only way in over SSH -- the build refuses to run without it.
+#
+# PROVING THIS FILE NEEDS IT ON THE DEFAULT BRANCH. GitHub lists a
+# workflow_dispatch workflow in the Actions UI (and accepts a dispatch for it)
+# only once the file exists on the repository's default branch, master. A
+# branch holding only this file cannot be run from the UI. The two ways to get
+# a first run are a merge to master, or a temporary push trigger on a branch
+# that is removed again afterwards -- which of those is Evan's call.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    # Pinned rather than ubuntu-latest: the qemu shim step below unpacks a
+    # specific package layout (noble's qemu-user-static ships
+    # /usr/bin/qemu-arm-static), and a 46-minute build should not have its
+    # host OS change underneath it on a day nobody touched this repo. The
+    # shim step gates on that layout, so drift fails loudly either way.
+    runs-on: ubuntu-24.04
+    # ~46 min on dserver; a 4-vCPU hosted runner compiling Kivy under
+    # emulated armhf will be slower. 180 leaves room without letting a hung
+    # build burn the job's 6-hour ceiling.
+    timeout-minutes: 180
+    steps:
+      # FIRST, before anything costs time: no key means a useless image, and
+      # finding that out after freeing disk and 46 minutes of build is the
+      # expensive way. The shape check matches build-elspi.sh:94-97.
+      #
+      # The variable arrives through env:, never as ${{ }} spliced into the
+      # script text -- a repository variable is still input, and pasting it
+      # into shell source would make its contents executable.
+      - name: require vars.ELSPI_PUBKEY
+        env:
+          ELSPI_PUBKEY: ${{ vars.ELSPI_PUBKEY }}
+        run: |
+          if [ -z "${ELSPI_PUBKEY}" ]; then
+            echo "::error title=ELSPI_PUBKEY::repository variable ELSPI_PUBKEY is empty or unset. Set it (Settings > Secrets and variables > Actions > Variables) to the SSH PUBLIC key to bake into the image. Without it the image has no way in: the account is locked and PUBKEY_ONLY_SSH is on."
+            exit 1
+          fi
+          case "${ELSPI_PUBKEY}" in
+            ssh-*|ecdsa-*|sk-*) ;;
+            *) echo "::error title=ELSPI_PUBKEY::repository variable ELSPI_PUBKEY does not look like an SSH public key (expected ssh-*, ecdsa-* or sk-*)"; exit 1 ;;
+          esac
+          echo "ELSPI_PUBKEY is set"
+
+      - uses: actions/checkout@v4
+
+      # Printed so the run log records WHICH key went in, the same line
+      # build-elspi.sh:98 prints. Also a real parse: the shape check above
+      # accepts any "ssh-..." string, and a key ssh-keygen cannot read would be
+      # baked in just as uselessly as no key at all.
+      - name: record the baked key's fingerprint
+        env:
+          ELSPI_PUBKEY: ${{ vars.ELSPI_PUBKEY }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${ELSPI_PUBKEY}" > "${RUNNER_TEMP}/elspi_pubkey.pub"
+          # Captured first, so a parse failure fails the step (set -e sees a
+          # failed assignment; it would not see one inside an echo).
+          fp="$(ssh-keygen -lf "${RUNNER_TEMP}/elspi_pubkey.pub")"
+          echo "baking: $(printf '%s\n' "${fp}" | awk '{print $1, $2, $4}')"
+
+      # ospi's proven shape: the hosted runner is tight on disk and a pi-gen
+      # work tree is not small.
+      - name: free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+
+      # build-elspi.sh's TRAP 1, reproduced here because this workflow calls
+      # build-docker.sh directly (see the build step for why). build-docker.sh
+      # :119 runs `which qemu-arm` UNCONDITIONALLY on x86_64 -- upstream's
+      # guard only skips re-REGISTERING binfmt, not this lookup -- and
+      # setup-qemu-action registers binfmt handlers without putting any
+      # qemu-arm on the host PATH. ospi's release.yml got away without this
+      # only because ospi patched that lookup; our build-docker.sh is
+      # unpatched upstream.
+      #
+      # Unpacked, not installed, exactly as build-elspi.sh does on dserver:
+      # `apt-get download` + dpkg-deb touches no binfmt state and no
+      # conflicting package (qemu-user-binfmt vs qemu-user-static), and it is
+      # the path already proven by a real build. STATIC because a registered
+      # interpreter has to work inside the armhf chroot.
+      - name: stage a static qemu-arm on PATH
+        run: |
+          set -euo pipefail
+          SHIM="${RUNNER_TEMP}/qemu-shim"
+          mkdir -p "${SHIM}/deb" "${SHIM}/root" "${SHIM}/bin"
+          sudo apt-get update -qq
+          ( cd "${SHIM}/deb" && apt-get download qemu-user-static )
+          dpkg-deb -x "${SHIM}"/deb/*.deb "${SHIM}/root"
+          test -x "${SHIM}/root/usr/bin/qemu-arm-static" \
+            || { echo "::error::qemu-user-static no longer ships usr/bin/qemu-arm-static"; exit 1; }
+          ln -sf "${SHIM}/root/usr/bin/qemu-arm-static" "${SHIM}/bin/qemu-arm"
+          # Same two spellings build-elspi.sh:79 accepts: Ubuntu builds this
+          # as static-PIE, which is still static.
+          file -L "${SHIM}/bin/qemu-arm" | grep -Eq "statically linked|static-pie linked" \
+            || { echo "::error::${SHIM}/bin/qemu-arm is not static"; file -L "${SHIM}/bin/qemu-arm"; exit 1; }
+          echo "${SHIM}/bin" >> "${GITHUB_PATH}"
+
+      # ospi's proven shape. Registers binfmt handlers (with the F flag, so
+      # they keep working inside the privileged build container) for the
+      # emulated armhf chroot.
+      - uses: docker/setup-qemu-action@v3
+
+      # build-docker.sh DIRECTLY, not build-elspi.sh: the wrapper hardcodes
+      # `-c elspi.conf` (build-elspi.sh:186) and takes the key as a FILE path
+      # in $1, while CI needs ci.conf. ci.conf sources elspi.conf, so the only
+      # differences are ci.conf's own (xz -9).
+      #
+      # The key hand-off is ci.conf's stated contract (ci.conf:33-35): the
+      # workflow supplies ELSPI_PUBKEY from the repository variable, and
+      # elspi.conf:85 turns it into PUBKEY_SSH_FIRST_USER when build.sh sources
+      # the config INSIDE the container. It only gets inside because of
+      # PIGEN_DOCKER_OPTS: build-docker.sh forwards nothing but GIT_HASH on its
+      # own (build-docker.sh:149), so this is the elspi.conf:12-13 invocation.
+      # By NAME, never name=value -- PIGEN_DOCKER_OPTS is expanded unquoted at
+      # build-docker.sh:147 and every SSH public key contains spaces.
+      #
+      # REFLEX_SOURCE/REFLEX_RELEASE/REFLEX_ORIGIN_URL are deliberately NOT
+      # forwarded: unset, elspi.conf's defaults apply inside the container
+      # (public reflex repo, newest full release), which is what a clean runner
+      # should build.
+      #
+      # PRESERVE_CONTAINER is left at build-docker.sh's default (0): the
+      # preserved rootfs matters for Tier 2 verification on dserver, and it
+      # dies with the runner here anyway. deploy/ is copied out before the
+      # container is removed (build-docker.sh:163 then :172).
+      - name: build the image (build-docker.sh -c ci.conf)
+        env:
+          ELSPI_PUBKEY: ${{ vars.ELSPI_PUBKEY }}
+          PIGEN_DOCKER_OPTS: -e ELSPI_PUBKEY
+        run: ./build-docker.sh -c ci.conf
+
+      # Gate rather than trust the upload's glob: if-no-files-found only
+      # fails when NOTHING matches, so a build that exported no image but left
+      # a .info behind would upload green.
+      - name: exactly one image in deploy/
+        run: |
+          ls -la deploy/
+          n="$(find deploy -maxdepth 1 -name '*.img.xz' | wc -l)"
+          test "${n}" -eq 1 || { echo "::error::expected exactly one deploy/*.img.xz, found ${n}"; exit 1; }
+
+      # The image plus what pi-gen writes beside it: .info (package list),
+      # .bmap and the SBOM when present, and both build logs. The image's own
+      # manifest, /etc/elspi-image.json, is INSIDE the image, not here.
+      #
+      # deploy/os_list.json is deliberately NOT made here. Its "url" field has
+      # to name where the image is served from, which is exactly the
+      # publishing decision this workflow does not make; without OS_LIST_URL
+      # it would be a file:// path on this runner that no other machine can
+      # open (build-elspi.sh:212-225). Generate it next to the downloaded image
+      # with tools/make-os-list.sh, which needs no root and no network.
+      #
+      # compression-level 0: the image is already xz -9, so zipping it again
+      # costs minutes and saves nothing.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elspi-image-${{ github.sha }}
+          path: |
+            deploy/*.img.xz
+            deploy/*.info
+            deploy/*.bmap
+            deploy/*.sbom.xz
+            deploy/*.log
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
