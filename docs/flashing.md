@@ -82,12 +82,12 @@ rpi-imager --repo https://github.com/Funkenjaeger/elspi/releases/latest/download
     a release asset:
 
     ```
-    OS_LIST_URL=https://github.com/Funkenjaeger/elspi/releases/download/<tag>/os_list.json ./build-elspi.sh
+    OS_LIST_URL=https://github.com/Funkenjaeger/elspi/releases/download/<tag>/image_<date>-elspi.img.xz ./build-elspi.sh
     ```
 
-    (Note: that URL is for `os_list.json` itself, matching the `--repo` value
-    used above; `os_list.json`'s own `url` field inside it points at the
-    `image_*.img.xz` asset next to it in the same release.) Leave it unset for
+    (Note: that is the image's own URL -- the one Imager downloads once it
+    reads the `url` field inside `os_list.json` -- not `os_list.json`'s own
+    address, which is what `--repo` above points at.) Leave it unset for
     a local-only build-and-flash — `build-elspi.sh` prints a WARNING naming the
     `file://` URL it wrote and which machine it is only good on, so a build
     headed for a release does not get published by accident with the wrong

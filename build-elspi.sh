@@ -13,8 +13,8 @@
 #   script prints a loud WARNING below saying so. Set it once you know where
 #   the image and its os_list.json will actually be served from -- for a
 #   tagged GitHub release that is:
-#     OS_LIST_URL=https://github.com/<org>/<repo>/releases/download/<tag>/os_list.json
-#   See docs/flashing.md.
+#     OS_LIST_URL=https://github.com/<org>/<repo>/releases/download/<tag>/image_<date>-elspi.img.xz
+#   (the image url Imager downloads from -- see docs/flashing.md).
 #
 # A NEW file, per docs/design/fork.md: build-docker.sh is upstream and stays untouched.
 #
@@ -219,7 +219,7 @@ if [ -z "${OS_LIST_URL:-}" ]; then
 	echo "  a card) cannot open it and fails with something like 'not found: <path>'."
 	echo "  This deploy/os_list.json is fine for testing a --repo flash from THIS"
 	echo "  machine only. Before publishing it anywhere else, re-run with:"
-	echo "      OS_LIST_URL=https://github.com/<org>/<repo>/releases/download/<tag>/os_list.json ./build-elspi.sh"
+	echo "      OS_LIST_URL=https://github.com/<org>/<repo>/releases/download/<tag>/image_<date>-elspi.img.xz ./build-elspi.sh"
 	echo "  (or whatever URL this image will actually be served from). See docs/flashing.md."
 	echo "=================================================================="
 fi
