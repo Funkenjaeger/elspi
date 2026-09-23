@@ -84,8 +84,63 @@ could have come out differently. The steps:
 | 2 | `rfkill unblock wlan`, `nmcli radio wifi on` | blocked-line count before/after; `nmcli radio wifi` before/after; `NetworkManager.state` says `WirelessEnabled=true` |
 | 3 | Set the regulatory domain from the seed | `iw reg get` before/after |
 | 4 | Apply the password cloud-init discarded | the `/etc/shadow` field before/after |
-| 5 | Report Imager's `ssh_pwauth` effect on sshd | `PasswordAuthentication yes` present or not |
-| 6 | Neutralise `user-data` and `network-config` | content read back after writing |
+| 5 | Install the seed's SSH keys, each exactly once; warn loudly if the seed carries neither a password nor a key | each key's blob re-read from `authorized_keys` after the append; `stat` of `~/.ssh` (700) and the file (600) and their owner |
+| 6 | Report — never change — the SSH authentication choice Imager made | `PasswordAuthentication` in `sshd_config.d/50-cloud-init.conf`; any *other* file setting an auth option is a `WARNING` |
+| 7 | Neutralise `user-data` and `network-config` | content read back after writing |
+
+`tests/test-first-boot-seed.sh` runs this script for real — not a copy of its
+logic — against a synthetic rootfs (`ELSPI_SEED_TEST_ROOT` prefixes every path
+it touches) with user-data in the shape Imager 2.x writes: one key, two keys, a
+key cloud-init already installed, password only, password and key, neither,
+upstream's unseeded template, malformed YAML, another account's name, and an
+overriding sshd drop-in. `tests/self-test.sh` collects it.
+
+### Why step 5 is needed — the image is keyless
+
+**Decided 2026-09-23: no SSH public key is ever baked into this image.** It is
+built from a public repository into public release images, and nobody's
+personal key belongs in one. So the keys typed into Imager's customisation page
+are the *only* keys a fresh card has, and this unit installs them itself —
+before step 7 wipes the seed — rather than trusting cloud-init with an account
+that already exists. (cloud-init 25.2 does import `ssh_authorized_keys` for a
+pre-existing user; step 4 is the record of why "cloud-init handles it" is not
+taken on faith for this account.)
+
+- **The shape it reads** is what `rpi-imager`'s
+  `src/customization_generator.cpp` (`generateCloudInitUserData`) writes: a
+  *singular* `user:` mapping whose `ssh_authorized_keys:` is a list of
+  double-quoted keys, one per item. A `users:` list and a top-level
+  `ssh_authorized_keys` are read too, because cloud-init honours both. Parsed
+  with PyYAML, which cloud-init depends on; if it is somehow missing the step
+  says so and installs nothing rather than guessing.
+- **Exactly once, by key material.** A key whose base64 blob is already in
+  `authorized_keys` — written by cloud-init, by an earlier boot, or listed twice
+  in the seed — is not appended again, whatever its comment says. That is the
+  same rule cloud-init's own `ssh_util.update_authorized_keys` uses.
+- **Logged by fingerprint only** (`ssh-keygen -lf`), which doubles as the
+  validator: a line `ssh-keygen` cannot read is skipped.
+- **Keys are optional.** A password alone is a way in. Only a seed carrying
+  **neither** triggers the loud `NO SSH WAY IN` warning — that card is reachable
+  only from the touchscreen. A seed that is already neutralised (every boot after
+  the first) is not "no credential" and does not warn.
+- **The unit runs with `ProtectHome=no`.** It carried `ProtectHome=yes` until
+  2026-09-23, which hides `/home` from the service entirely: every key install
+  would have failed and the seed would then have been wiped. `00-run.sh` and
+  `tests/verify-image.sh` both refuse `ProtectHome` on this unit.
+
+### Why step 6 only reports
+
+**SSH authentication is the operator's choice, per card.** The image enables
+sshd and sets no authentication option of its own (`PUBKEY_ONLY_SSH=0`), so RPi
+OS's default — password authentication allowed — stands until Imager says
+otherwise. Imager's *public-key only* becomes `ssh_pwauth: false`, its password
+option `ssh_pwauth: true`, and cloud-init 25.2 writes either as
+`PasswordAuthentication no|yes` in `/etc/ssh/sshd_config.d/50-cloud-init.conf`.
+sshd takes the **first** value it reads, and Debian's `sshd_config` Includes that
+directory at its top, so cloud-init's file wins over `sshd_config`'s body and
+loses only to a drop-in sorting ahead of `50-`. The image ships none —
+`00-run.sh` and `tests/verify-image.sh` both refuse an auth option in either
+place — and step 6 warns if one ever appears on a running machine.
 
 ### Why steps 2 and 3 are needed at all
 
@@ -160,16 +215,14 @@ file is broken".
 
 ## What this substage does *not* do
 
-- It does not revert `PasswordAuthentication yes` if the operator ticked
-  Imager's password-SSH option. That was an explicit choice on the
-  customisation page; the unit **warns** in the journal and leaves it.
-  `docs/flashing.md` says which box to tick.
-- It does not set the hostname, create users, install keys, or configure
-  Wi-Fi. cloud-init does all of that from the seed. This substage only fixes
-  what cloud-init cannot do on this image and then cleans up.
+- It does not change the SSH authentication choice made on Imager's page, in
+  either direction. It reports it (step 6).
+- It does not set the hostname, create users, or configure Wi-Fi. cloud-init
+  does all of that from the seed. This substage fixes what cloud-init cannot
+  (or cannot be trusted to) do on this image, and then cleans up.
 - It has **never run on real hardware.** A card *has* now booted — 2026-09-13,
   `image_2026-09-13-elspi` — but the unit's job was deleted by systemd before
-  it started, so not one of the six steps has ever executed. Everything above
+  it started, so not one of its steps has ever executed. Everything above
   is still derived from cloud-init 25.2 source and upstream's stage scripts and
   verified only by the offline harness. See `docs/design/verification.md`'s tiers — this
   remains a Tier 3 item until a card boots *and the unit runs*.
@@ -213,7 +266,7 @@ resolution, and systemd's resolution is to **delete a job** — it deleted ours.
   above stands, with the build throwaway live.
 - The **seed was still on the card**: `user-data` still carrying `passwd:` and
   `network-config` still carrying `password:`, on the unencrypted FAT
-  partition. Step 6 is the whole security argument of design (a) and it did not
+  partition. Step 6 (the neutralisation, now step 7) is the whole security argument of design (a) and it did not
   happen.
 
 Every other offline check was green on this image. The unit was installed,
