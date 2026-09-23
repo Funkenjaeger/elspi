@@ -17,7 +17,7 @@ name: image
 #
 # PRE-RELEASE, NOT RELEASE, and on purpose: v2026.09.13 went out as a
 # pre-release and was flipped to a release only after a card flashed from it
-# provisioned clean on the lathe (wiki journal 2026-09-13, elspi evening).
+# provisioned clean on a real machine (2026-09-13).
 # A pre-release is excluded from releases/latest/, so the
 # .../releases/latest/download/os_list.json that README.md and
 # docs/flashing.md point Imager at keeps serving the last VERIFIED image until
@@ -67,7 +67,7 @@ jobs:
     # host OS change underneath it on a day nobody touched this repo. The
     # shim step gates on that layout, so drift fails loudly either way.
     runs-on: ubuntu-24.04
-    # ~46 min on dserver; a 4-vCPU hosted runner compiling Kivy under
+    # ~46 min on a local x86_64 build host; a 4-vCPU hosted runner compiling Kivy under
     # emulated armhf will be slower. 180 leaves room without letting a hung
     # build burn the job's 6-hour ceiling.
     timeout-minutes: 180
@@ -93,7 +93,7 @@ jobs:
       # only because ospi patched that lookup; our build-docker.sh is
       # unpatched upstream.
       #
-      # Unpacked, not installed, exactly as build-elspi.sh does on dserver:
+      # Unpacked, not installed, exactly as build-elspi.sh does on a local build host:
       # `apt-get download` + dpkg-deb touches no binfmt state and no
       # conflicting package (qemu-user-binfmt vs qemu-user-static), and it is
       # the path already proven by a real build. STATIC because a registered
@@ -135,7 +135,7 @@ jobs:
       # should build.
       #
       # PRESERVE_CONTAINER is left at build-docker.sh's default (0): the
-      # preserved rootfs matters for Tier 2 verification on dserver, and it
+      # preserved rootfs matters for Tier 2 verification on a local build host, and it
       # dies with the runner here anyway. deploy/ is copied out before the
       # container is removed (build-docker.sh:163 then :172).
       - name: build the image (build-docker.sh -c ci.conf)

@@ -65,8 +65,8 @@ SELECT="${HERE}/files/select-release.sh"
 # a local mirror, the card in the machine shop fetches from the public repo.
 # Anonymous HTTPS, matching updater.py's own GITHUB_FETCH_URL -- see its note
 # on why the git half stopped using whatever remote the checkout happened to
-# have ("on elspi it is `git@github.com-reflex:...`, an SSH alias ... reflex-ui
-# runs as ROOT, which has no such config").
+# have: a developer's checkout may name an SSH host alias from THAT person's
+# ~/.ssh/config, which the account the service runs as does not have.
 REFLEX_ORIGIN_URL="${REFLEX_ORIGIN_URL:-https://github.com/Funkenjaeger/reflex.git}"
 
 # --- Gate: the source is a parameter, and it is not optional ----------------
@@ -74,7 +74,7 @@ if [ -z "${REFLEX_SOURCE:-}" ]; then
 	echo "FATAL: REFLEX_SOURCE is not set."
 	echo "       The release source is a build parameter so this build stays"
 	echo "       reproducible from a local mirror. Set it in elspi.conf, or:"
-	echo "         REFLEX_SOURCE=/mnt/git/reflex.git ./build-elspi.sh"
+	echo "         REFLEX_SOURCE=/path/to/mirror/reflex.git ./build-elspi.sh"
 	echo "       There is deliberately no default network URL in this stage."
 	exit 1
 fi

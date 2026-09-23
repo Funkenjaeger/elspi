@@ -119,12 +119,12 @@ done
 unset _v
 
 # A LOCAL MIRROR PATH IS NOT AUTOMATICALLY VISIBLE INSIDE THE CONTAINER, and
-# this is the one trap this loop does not remove. `REFLEX_SOURCE=/mnt/git/
-# reflex.git` names a path on the HOST; the build runs in Docker, so it also
-# needs bind-mounting:
+# this is the one trap this loop does not remove. `REFLEX_SOURCE=/path/to/
+# mirror/reflex.git` names a path on the HOST; the build runs in Docker, so it
+# also needs bind-mounting, at the same path:
 #
-#   REFLEX_SOURCE=/mnt/git/reflex.git \
-#   PIGEN_DOCKER_OPTS="-v /mnt/git/reflex.git:/mnt/git/reflex.git:ro" \
+#   REFLEX_SOURCE=/path/to/mirror/reflex.git \
+#   PIGEN_DOCKER_OPTS="-v /path/to/mirror/reflex.git:/path/to/mirror/reflex.git:ro" \
 #   ./build-elspi.sh
 #
 # Said here rather than left to be discovered three hours in, which is how

@@ -123,11 +123,11 @@ else
   Nothing can regenerate it, so coming up with defaults would produce a
   machine that runs and is silently wrong.
 
-  Bring the most recent capture to this Pi and pass it:
-      --config-backup /path/to/elspi-reflex-config-YYYY-MM-DD
-  On the backup host these live under ~/backups/elspi/ . CHECK THE DATE -- a
-  stale capture restores stale geometry, which is the failure this text exists
-  for."
+  Bring the most recent capture of ${CONFIG_DIR} -- from wherever your
+  backups of it are kept -- to this Pi and pass it:
+      --config-backup /path/to/reflex-config-capture
+  CHECK ITS DATE -- a stale capture restores stale geometry, which is the
+  failure this text exists for."
 	fi
 
 	[ -e "${BACKUP}" ] || die "--config-backup ${BACKUP} does not exist"

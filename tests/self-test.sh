@@ -439,7 +439,7 @@ mutate "the checkout is not a reflex monorepo tree (no ui/pyproject.toml)" \
 # THE BUILD HOST'S PATH SHIPPED AS origin. The card in the machine shop then
 # fetches from a directory that exists only on whoever built the image.
 mutate "origin is the build host's local mirror path, not a fetchable URL" \
-	"git -C home/default/projects/reflex remote set-url origin /mnt/git/reflex.git"
+	"git -C home/default/projects/reflex remote set-url origin /path/to/mirror/reflex.git"
 # seam call 2: no credential enters this repo, and the image ships none.
 mutate "the shipped .git/config carries a credentialled URL" \
 	"git -C home/default/projects/reflex remote set-url origin https://user:tokenvalue@github.com/Funkenjaeger/reflex.git"
