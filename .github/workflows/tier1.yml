@@ -6,9 +6,9 @@ name: tier1
 #
 # Every step below was run as a NON-ROOT user against a checkout with no
 # image, no rootfs and no reflex checkout before being put in this file. The
-# tools they reach for beyond bash and git are python3, git, xz and coreutils,
-# all of which the ubuntu-latest runner image already carries -- nothing here
-# apt-installs anything.
+# tools they reach for beyond bash and git are python3, git, xz, ssh-keygen and
+# coreutils, which the ubuntu-latest runner image carries, and PyYAML, which
+# the step below installs rather than assumes.
 
 on:
   push:
@@ -54,6 +54,27 @@ jobs:
       # treat the working-tree mode as authoritative.
       - name: run-scripts are executable in the index
         run: bash tests/test-run-scripts-executable.sh
+
+      # PyYAML, GUARANTEED rather than assumed. self-test.sh collects
+      # tests/test-first-boot-seed.sh, which runs the real seed script -- and
+      # that script parses Imager's user-data with PyYAML, as it does on the
+      # card (cloud-init depends on python3-yaml, so every card has it).
+      # Without it the test exits 2, "could not measure", and self-test counts
+      # that as a FAILURE, so a runner image that stopped shipping PyYAML would
+      # turn this job red with a message about the seed rather than the cause.
+      #
+      # apt's python3-yaml, not pip: it is the same Debian-family package the
+      # card's cloud-init uses, and it installs into the /usr/bin/python3 the
+      # tests call, with no second interpreter or venv in play. The import is
+      # then asserted, so a package that installed and imports nothing fails
+      # HERE, naming PyYAML.
+      - name: PyYAML for the first-boot seed test
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-yaml
+          python3 -c 'import yaml; print("PyYAML", yaml.__version__, "for", __import__("sys").executable)' \
+            || { echo "::error title=PyYAML::python3 cannot import yaml after apt-get install python3-yaml"; exit 1; }
 
       - name: self-test (the harness goes red on every mutation it claims to catch)
         run: bash tests/self-test.sh
