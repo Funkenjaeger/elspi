@@ -1,52 +1,48 @@
-# `14-first-boot-ui` — the hook for task 6aa73b01, not the feature
+# `14-first-boot-ui` — the hook for first-boot-into-the-UI, not the feature
 
-**This substage ships a trigger, not the feature task 6aa73b01 asks for.**
-Read this before changing it, and before assuming it does more than it does.
+**This substage ships a trigger, not the feature.** Read this before changing
+it, and before assuming it does more than it does.
 
-## What task 6aa73b01 actually asks
+## The goal it is a hook for
 
-Title: *"Make a fresh elspi card boot straight into the UI: no SSH, no
-mandatory backup, SWD chapter documented."* Item 1 of that task says:
+*A fresh elspi card boots straight into the UI: no SSH, no mandatory backup.*
+The whole of that needs two things: the reflex checkout baked into the image,
+and something that converges and starts it at first boot, right after the seed
+(`stage-elspi/12-first-boot-seed`), so a fresh card comes up on defaults,
+visibly uncommissioned.
 
-> FIRST BOOT LANDS IN THE UI. The image already vendors reflex's lock at a
-> pinned commit (`stage-elspi/08-venv/files/REFLEX_COMMIT`); bake the reflex
-> checkout at that same commit into the image and run converge as part of
-> first boot, right after the seed (`stage-elspi/12-first-boot-seed`). A fresh
-> card boots into the UI on defaults, visibly uncommissioned, with no SSH
-> needed.
+**The first half exists now.** `docs/design/seam.md`'s amendment of
+2026-09-21 moved the checkout into the image: `stage-elspi/10a-app-checkout`
+bakes the latest full release at `/home/default/projects/reflex`, and
+`11-manifest` declares it as `baked_app` (with
+`"started_on_first_boot": false`). Until then the checkout was deltas-owned
+and no image carried one.
 
-That is a change to **which side of the image-vs-deltas seam the application
-checkout lives on**. Today it is deltas-owned:
-`stage-elspi/11-manifest/00-run.sh` writes
-`"delta_layer_owns": ["reflex monorepo checkout at
-/home/default/projects/reflex", "reflex-ui.service", ...]` into every image's
-own manifest, and `docs/design/seam.md`'s call 1 (ratified 2026-08-22) is
-explicit that the venv goes in the image and the application does not.
-
-The order that produced this substage said, in so many words: *the seam is
-ratified, land on the correct side of it, do not re-litigate it.* Baking the
-checkout in and auto-running converge would be exactly that re-litigation.
-**So this substage does not do it.**
-
-## What this substage does instead
-
-It ships the part of item 1 that is genuinely image-side and does not move
-anything across the seam: a systemd unit, enabled, ordered correctly against
-both the existing first-boot seed and Plymouth's hold on DRM master. Its
-installed script (`files/elspi-first-boot-ui.sh`) looks for a checkout at the
-path the manifest already declares (`.paths.app_root`) and, finding none —
-true of every image this repo has ever built — logs `verdict=NOOP` and exits
-0. Nothing starts. Nothing is visibly different on the console. That is
-correct: `docs/flashing.md` already documents a black screen after Plymouth
-as the expected result of a first boot with no application installed, and
-this substage does not change that.
-
-If a future build DOES bake a checkout in (a decision, not a bug fix), the
-script will log `verdict=UNIMPLEMENTED` rather than silently doing nothing —
-so the day that decision is made, whoever makes it gets a loud pointer back
-to this file instead of a boot that mysteriously still shows a black screen.
-Writing the actual converge-and-start branch is future work, gated on that
+**The second half does not.** Starting the application unattended is a
+separate decision from baking it in: `docs/provisioning.md` makes starting
+reflex-ui a deliberate, human-reviewed step, specifically so a lathe never
+comes up on unreviewed commissioned data. This substage does not make that
 decision.
+
+## What this substage does
+
+It ships the part that is genuinely image-side: a systemd unit, enabled,
+ordered correctly against both the first-boot seed and Plymouth's hold on DRM
+master. Its installed script (`files/elspi-first-boot-ui.sh`) looks for a
+checkout at the path the manifest declares (`.paths.app_root`):
+
+- **found** — true of every image built since 2026-09-21 — it logs
+  `verdict=UNIMPLEMENTED`, naming the unwritten converge/start branch, and
+  exits 0. Nothing starts;
+- **absent** — an image built before 2026-09-21 — it logs `verdict=NOOP` and
+  exits 0.
+
+Either way nothing is visibly different on the console. `docs/flashing.md`
+documents a black screen after Plymouth as the expected result of a first boot
+before provisioning, and this substage does not change that. The loud
+`UNIMPLEMENTED` verdict exists so that whoever writes the start branch gets a
+pointer back to this file rather than a boot that mysteriously still shows a
+black screen.
 
 ## Why the ordering matters even for a unit that (today) does nothing
 
@@ -79,28 +75,23 @@ also enabled in `multi-user.target.wants`, for the same reason
 
 ## What this substage does NOT do, and why that is not a shortcut
 
-- It does not touch `deltas/` or `provision.sh`. Item 2 of task 6aa73b01 (a
-  `--fresh` flag making `--config-backup` optional) is a provisioning-safety
-  change — `docs/provisioning.md` currently makes starting the application a
-  deliberate, human-reviewed step specifically so a lathe never comes up on
-  unreviewed commissioned data — and that is out of this substage's bound.
+- It does not touch `deltas/` or `provision.sh`. Making `--config-backup`
+  optional was a provisioning-safety change and landed there as `--fresh`, a
+  deliberate, loud flag — not here.
 - It does not touch `stage-elspi/06-seat` or the DRM default. Two modes ship
   (`first-opener`, `cap-sys-admin`); `first-opener` is the default and was
   **measured** on real hardware 2026-09-13
   (`docs/design/runtime-inventory.md`, "SETTLED 2026-09-13 on hardware").
   Neither fact changes here.
-- It does not write an SWD chapter (item 3) or an ELSPI.md "after first boot"
-  section (item 4) — `docs/swd-first-load.md` already exists and is one of
-  this order's required reads, but authoring/expanding it was not this
-  substage's bound.
+- It does not write documentation for the SWD first load; that is
+  `docs/swd-first-load.md`.
 
 ## The blind spot this substage adds
 
-`/etc/elspi-image.json`'s `cannot_be_verified_without_hardware` list gains one
-member: whether the converge/start branch above would actually work is
-untested, because it has never run — no image has ever had a checkout to run
-it against. That is a genuinely new limitation (not one of the existing
-GPU/touchscreen/UART hardware blind spots) and it is declared rather than
-left implicit, per this repo's own rule that a harness holding a private copy
-of what it cannot see will eventually disagree with the image and be believed
-anyway.
+`/etc/elspi-image.json`'s `cannot_be_verified_without_hardware` list carries
+one member for it: whether a converge/start branch would actually work is
+untested, because that branch does not exist and has never run. That is a
+genuinely different limitation from the GPU/touchscreen/UART hardware blind
+spots, and it is declared rather than left implicit, per this repo's own rule
+that a harness holding a private copy of what it cannot see will eventually
+disagree with the image and be believed anyway.

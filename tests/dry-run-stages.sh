@@ -145,9 +145,9 @@ run_stage 12-first-boot-seed
 
 # 14-first-boot-ui is the same shape as 12-first-boot-seed and chroot-free for
 # the same reason. It is a SCAFFOLD (stage-elspi/14-first-boot-ui/README.md),
-# not the feature task 6aa73b01 asks for -- it ships the trigger, not a
-# converge/start branch, because the payload would move the application
-# checkout across docs/design/seam.md's ratified line.
+# not the first-boot-into-the-UI feature -- it ships the trigger, not a
+# converge/start branch: starting the baked app unattended is a separate,
+# still-open decision.
 run_stage 14-first-boot-ui
 
 # WHERE THE SUBSTAGE ENABLES THE UNIT, checked here rather than only in

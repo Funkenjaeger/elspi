@@ -919,17 +919,15 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-section "First-boot UI hook (stage-elspi/14-first-boot-ui -- task 6aa73b01)"
+section "First-boot UI hook (stage-elspi/14-first-boot-ui)"
 
-# THIS IS A SCAFFOLD, NOT THE FEATURE. Task 6aa73b01 item 1 asks for a fresh
-# card to boot into the UI with a checkout baked into the image and converge
-# run automatically. That would move the application across
-# docs/design/seam.md's ratified line (11-manifest's delta_layer_owns still
-# names the reflex checkout and reflex-ui.service as deltas-owned), which this
-# order was told not to re-litigate. So this section asserts only the TRIGGER:
-# a unit that exists, is enabled, and is ordered correctly -- not that it
-# starts anything, because today it never does. See
-# stage-elspi/14-first-boot-ui/README.md.
+# THIS IS A SCAFFOLD, NOT THE FEATURE. The goal is a fresh card that boots
+# into the UI with converge run automatically. The checkout IS baked in since
+# the 2026-09-21 seam amendment (10a-app-checkout), but starting it unattended
+# is a separate decision and the hook's converge/start branch is unwritten.
+# So this section asserts only the TRIGGER: a unit that exists, is enabled,
+# and is ordered correctly -- not that it starts anything, because today it
+# never does. See stage-elspi/14-first-boot-ui/README.md.
 
 FBUI_UNIT_FILE="${ROOTFS}${FBUI_UNIT}"
 FBUI_SCRIPT_FILE="${ROOTFS}${FBUI_SCRIPT}"
@@ -1013,9 +1011,9 @@ fi
 
 # THE THING THIS SCAFFOLD CANNOT PROVE, STATED OUT LOUD RATHER THAN LEFT
 # IMPLICIT. Not a hardware limit like the others in this section -- a
-# SEAM limit: there is nothing to run this against until task 6aa73b01 item 1
-# is decided.
-unknown "The first-boot-ui hook's converge/start branch has NEVER RUN, on any image, because no image has ever had a checkout at .paths.app_root for it to find. The checks above prove the trigger is wired correctly; they cannot and do not prove anything starts, because nothing does yet."
+# SEAM limit: the checkout is baked in, but the branch that would converge
+# and start it has not been written.
+unknown "The first-boot-ui hook's converge/start branch has NEVER RUN, on any image: the app is baked in at .paths.app_root, but that branch is unwritten, so the hook logs verdict=UNIMPLEMENTED and starts nothing. The checks above prove the trigger is wired correctly; they cannot and do not prove anything starts, because nothing does yet."
 
 # ---------------------------------------------------------------------------
 section "Artifact integrity"

@@ -1,5 +1,5 @@
 [Unit]
-Description=elspi first-boot UI hook (converge+start reflex-ui once a checkout is baked in -- a NOOP today, see README)
+Description=elspi first-boot UI hook (would converge+start the baked reflex-ui; that branch is unwritten, so it only logs a verdict)
 Documentation=file:///usr/local/sbin/elspi-first-boot-ui
 
 # ORDERING, and why each edge is here.

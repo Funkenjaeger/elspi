@@ -481,7 +481,7 @@ mutate "the manifest is not valid JSON" \
 mutate "the manifest is missing entirely" \
 	"rm -f etc/elspi-image.json"
 
-# The first-boot UI hook (stage-elspi/14-first-boot-ui, task 6aa73b01)
+# The first-boot UI hook (stage-elspi/14-first-boot-ui)
 #
 # THIS IS A SCAFFOLD, NOT THE FEATURE -- see stage-elspi/14-first-boot-ui/
 # README.md. The mutations below prove the TRIGGER is actually enforced:

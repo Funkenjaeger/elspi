@@ -222,7 +222,7 @@ cat > "${MANIFEST}" <<- JSON
 	  "first_boot_ui": {
 	    "unit": "/etc/systemd/system/elspi-first-boot-ui.service",
 	    "script": "/usr/local/sbin/elspi-first-boot-ui",
-	    "status": "scaffold only -- enabled and correctly ordered against elspi-first-boot-seed.service and plymouth-quit-wait.service, but its converge/start branch is UNIMPLEMENTED because no image has ever baked in a reflex checkout (docs/design/seam.md keeps the app deltas-owned). See task 6aa73b01 item 1 and stage-elspi/14-first-boot-ui/README.md.",
+	    "status": "scaffold only -- enabled and correctly ordered against elspi-first-boot-seed.service and plymouth-quit-wait.service. The app IS baked in (baked_app above), but the hook's converge/start branch is UNIMPLEMENTED, so it logs verdict=UNIMPLEMENTED and starts nothing. See stage-elspi/14-first-boot-ui/README.md.",
 	    "verified_on_hardware": false
 	  },
 
@@ -231,8 +231,7 @@ cat > "${MANIFEST}" <<- JSON
 	    "start.sh and its KCFG_* environment",
 	    "the single sudoers NOPASSWD rule",
 	    "restore of /var/lib/reflex-config from backup (HARD FAIL if absent)",
-	    "the interactive phase: the dev-role question, and any credential the Imager seed did not carry",
-	    "reinstall of the OT state-pull forced-command key"
+	    "the interactive phase: the dev-role question, and any credential the Imager seed did not carry"
 	  ],
 
 	  "cannot_be_verified_without_hardware": [
@@ -243,7 +242,7 @@ cat > "${MANIFEST}" <<- JSON
 	    "anything config.txt or a dtoverlay actually DOES (firmware level)",
 	    "usb_max_current_enable=1 brownout mitigation",
 	    "audio output on card 0",
-	    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui): enabled and ordered correctly, but it has never executed end-to-end because no image has ever had a checkout for it to find -- task 6aa73b01 item 1 is the seam decision that would change that",
+	    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui): enabled and ordered correctly, but the branch is unwritten, so starting the baked app unattended has never executed end-to-end",
 	    "SSH login on a real card with the key or password typed into Imager (the image is keyless since 2026-09-23; the seed unit's key install is verified offline only)"
 	  ]
 	}

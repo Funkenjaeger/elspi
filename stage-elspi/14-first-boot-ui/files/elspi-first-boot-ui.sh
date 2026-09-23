@@ -1,21 +1,23 @@
 #!/bin/bash
-# elspi-first-boot-ui -- the RUNTIME half of the hook for task 6aa73b01 item 1
-# ("make a fresh elspi card boot straight into the UI: no SSH, no mandatory
-# backup, SWD chapter documented").
+# elspi-first-boot-ui -- the RUNTIME half of the first-boot-into-the-UI hook
+# (the goal: a fresh elspi card boots straight into the UI, with no SSH and
+# no mandatory backup).
 #
 # WHAT THIS ACTUALLY DOES TODAY: nothing visible. It looks for a reflex
 # checkout at the path the image's own manifest declares
-# (/etc/elspi-image.json .paths.app_root) and, finding none -- which is true
-# of every image this repo has ever built, because docs/design/seam.md keeps
-# the application checkout deltas-owned (see 11-manifest's
-# delta_layer_owns declaration) -- logs a clear, named verdict and exits 0.
+# (/etc/elspi-image.json .paths.app_root). Since the 2026-09-21 seam amendment
+# the image DOES bake one there (stage-elspi/10a-app-checkout), so every card
+# built since then finds it -- and this script's converge/start branch has not
+# been written yet. It therefore logs verdict=UNIMPLEMENTED, names that
+# branch as the missing piece, and exits 0. Images built before 2026-09-21
+# carried no checkout and log verdict=NOOP instead.
 #
-# THIS IS A NO-OP BY DESIGN, NOT A BUG. Baking a checkout into the image and
-# converging it automatically here is a change to the RATIFIED image-vs-deltas
-# seam, and that decision belongs to Evan, not to this build. See
-# stage-elspi/14-first-boot-ui/README.md for the full reasoning and exactly
-# what would need to change to turn this into something that starts
-# reflex-ui unattended.
+# THIS IS A NO-OP BY DESIGN, NOT A BUG. Starting the application unattended
+# is a separate decision from baking it in -- the manifest declares
+# baked_app.started_on_first_boot=false, and starting reflex-ui stays a
+# deliberate step of provisioning (docs/provisioning.md). See
+# stage-elspi/14-first-boot-ui/README.md for what would need to change to turn
+# this into something that starts reflex-ui unattended.
 #
 # CONTRACT (checked by both this script's own post-write gate in 00-run.sh and
 # by tests/verify-image.sh):
@@ -52,19 +54,17 @@ fi
 
 # GATE: the one signal this whole script exists to read. A checkout baked
 # into the image is what a future converge/start branch would need; its
-# absence is not a failure, it is the current, ratified state of the seam.
+# absence (an image built before 2026-09-21) is not a failure.
 if [ ! -d "${APP_ROOT}" ]; then
-	log "verdict=NOOP reason='no checkout at ${APP_ROOT} -- expected today. The application is deltas-owned (docs/design/seam.md); nothing to converge or start.'"
+	log "verdict=NOOP reason='no checkout at ${APP_ROOT} -- an image built before the app was baked in; nothing to converge or start.'"
 	record NOOP
 	exit 0
 fi
 
-# A checkout exists. No image this repo has built has ever produced one, so
-# reaching here means the seam decision in task 6aa73b01 item 1 has been made
-# and this script's converge/start branch still needs writing. Refuse loudly
-# to the journal -- silently doing nothing with a checkout present would look
-# identical to the expected NOOP case above, and the two are not the same
-# finding.
-log "verdict=UNIMPLEMENTED reason='a checkout exists at ${APP_ROOT} but the converge/start branch has not been written yet -- see task 6aa73b01 item 1 and stage-elspi/14-first-boot-ui/README.md'"
+# A checkout exists -- every image built since 2026-09-21 -- and this
+# script's converge/start branch still needs writing. Say so loudly in the
+# journal: silently doing nothing with a checkout present would look identical
+# to the NOOP case above, and the two are not the same finding.
+log "verdict=UNIMPLEMENTED reason='a checkout exists at ${APP_ROOT} but the converge/start branch has not been written yet -- see stage-elspi/14-first-boot-ui/README.md in the elspi repository'"
 record UNIMPLEMENTED
 exit 0

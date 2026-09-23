@@ -117,7 +117,7 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
     "DRM master acquisition (no GPU in the harness)",
     "the touchscreen",
     "SPI, I2C and the UART link to the STM32",
-    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui) has never executed end-to-end -- see task 6aa73b01 item 1"
+    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui): the branch is unwritten, so starting the baked app unattended has never executed end-to-end"
   ]
 }
 JSON
@@ -335,15 +335,16 @@ SSHD
 
 # --- the first-boot UI hook (stage-elspi/14-first-boot-ui) ------------------
 # A scaffold, not a feature -- see stage-elspi/14-first-boot-ui/README.md.
-# The fixture models a NOOP run (no baked-in checkout, which is every real
-# image today): the stub just exits 0, same as the seed's stub above.
-printf '#!/bin/bash\n# fixture stub: elspi first-boot ui (noop -- no baked-in checkout)\nexit 0\n' \
+# The fixture's stub just exits 0, same as the seed's stub above: the real
+# script only ever logs a verdict (UNIMPLEMENTED on every image that bakes the
+# app in) and exits 0.
+printf '#!/bin/bash\n# fixture stub: elspi first-boot ui (logs a verdict, starts nothing)\nexit 0\n' \
 	> "${DEST}/usr/local/sbin/elspi-first-boot-ui"
 chmod 0755 "${DEST}/usr/local/sbin/elspi-first-boot-ui"
 
 cat > "${DEST}/etc/systemd/system/elspi-first-boot-ui.service" <<'UNIT'
 [Unit]
-Description=elspi first-boot UI hook (converge+start reflex-ui once a checkout is baked in -- a NOOP today, see README)
+Description=elspi first-boot UI hook (would converge+start the baked reflex-ui; that branch is unwritten, so it only logs a verdict)
 After=elspi-first-boot-seed.service
 After=plymouth-quit-wait.service
 
