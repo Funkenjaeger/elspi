@@ -94,7 +94,11 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
     "timezone": "Etc/UTC",
     "locale": "en_US.UTF-8",
     "keymap": "us",
-    "replaced_per_card_by_imager": ["hostname", "timezone", "keymap"]
+    "replaced_per_card_by_imager": ["hostname", "timezone", "keymap"],
+    "site_build_config_applied": false
+  },
+  "boot_config": {
+    "usb_max_current_enable": false
   },
   "first_boot_ui": {
     "unit": "/etc/systemd/system/elspi-first-boot-ui.service",
@@ -231,7 +235,6 @@ dtoverlay=nospi10
 [all]
 enable_uart=1
 disable_splash=1
-usb_max_current_enable=1
 CFG
 
 printf 'console=tty1 root=ROOTDEV rootfstype=ext4 fsck.repair=yes rootwait quiet splash logo.nologo plymouth.ignore-serial-consoles\n' \

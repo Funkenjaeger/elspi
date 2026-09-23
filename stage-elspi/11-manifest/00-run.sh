@@ -84,6 +84,20 @@ for _v in TARGET_HOSTNAME TIMEZONE_DEFAULT LOCALE_DEFAULT KEYBOARD_KEYMAP; do
 done
 unset _v
 
+# The build knobs elspi.conf exports (a site build config may have set them),
+# as JSON booleans. Unset means elspi.conf was not the config, and its
+# defaults -- off, no site config -- are what 03-boot-config applied too.
+case "${ELSPI_USB_MAX_CURRENT:-0}" in
+	1) USB_MAX_CURRENT_JSON=true ;;
+	0) USB_MAX_CURRENT_JSON=false ;;
+	*) echo "FATAL: ELSPI_USB_MAX_CURRENT is '${ELSPI_USB_MAX_CURRENT}', expected 0 or 1"; exit 1 ;;
+esac
+case "${ELSPI_SITE_CONF_APPLIED:-0}" in
+	1) SITE_CONF_JSON=true ;;
+	0) SITE_CONF_JSON=false ;;
+	*) echo "FATAL: ELSPI_SITE_CONF_APPLIED is '${ELSPI_SITE_CONF_APPLIED}', expected 0 or 1"; exit 1 ;;
+esac
+
 # IMAGE_BUILD_SHA -- the git rev of THIS repo (elspi is a soft fork of pi-gen
 # itself; there is no separate "elspi repo" checkout) at build time.
 # build-docker.sh:67 already computes this on the host and forwards it into
@@ -201,7 +215,12 @@ cat > "${MANIFEST}" <<- JSON
 	    "timezone": "${TIMEZONE_DEFAULT}",
 	    "locale": "${LOCALE_DEFAULT}",
 	    "keymap": "${KEYBOARD_KEYMAP}",
-	    "replaced_per_card_by_imager": ["hostname", "timezone", "keymap"]
+	    "replaced_per_card_by_imager": ["hostname", "timezone", "keymap"],
+	    "site_build_config_applied": ${SITE_CONF_JSON}
+	  },
+
+	  "boot_config": {
+	    "usb_max_current_enable": ${USB_MAX_CURRENT_JSON}
 	  },
 
 	  "paths": {
@@ -261,7 +280,7 @@ cat > "${MANIFEST}" <<- JSON
 	    "the touchscreen",
 	    "SPI, I2C and the UART link to the STM32",
 	    "anything config.txt or a dtoverlay actually DOES (firmware level)",
-	    "usb_max_current_enable=1 brownout mitigation",
+	    "whether usb_max_current_enable (off unless a site build turns it on) prevents a USB touchscreen's brownouts",
 	    "audio output on card 0",
 	    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui): enabled and ordered correctly, but the branch is unwritten, so starting the baked app unattended has never executed end-to-end",
 	    "SSH login on a real card with the key or password typed into Imager (the image is keyless since 2026-09-23; the seed unit's key install is verified offline only)"
@@ -280,7 +299,7 @@ fi
 for key in log_dir config_dir venv app_parent default_mode reflex_lock_commit \
            first_boot_seed first_boot_ui unit script image_build_sha image_release \
            runtime_versions baked_app updater_ready protocol_version_readable \
-           ssh key_source build_defaults; do
+           ssh key_source build_defaults boot_config usb_max_current_enable; do
 	grep -q "\"${key}\"" "${MANIFEST}" || {
 		echo "FATAL: manifest is missing required key '${key}'"
 		exit 1

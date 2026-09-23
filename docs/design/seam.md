@@ -40,7 +40,7 @@ genuinely non-obvious call here.
 | What | Why here |
 |---|---|
 | Base trixie/armhf, pi-gen stages 0–2 | definitional |
-| `config.txt`, `cmdline.txt` — SPI, I²C, UART, camera off, quiet+splash, `usb_max_current_enable=1`, upstream's `[pi5] dtoverlay=nospi10` | firmware-level, needs a reboot, and wrong means no display or no Modbus. Cheap to bake, painful to retrofit |
+| `config.txt`, `cmdline.txt` — SPI, I²C, UART, camera off, quiet+splash, upstream's `[pi5] dtoverlay=nospi10`; `usb_max_current_enable=1` only when a site build config sets `ELSPI_USB_MAX_CURRENT=1` | firmware-level, needs a reboot, and wrong means no display or no Modbus. Cheap to bake, painful to retrofit |
 | Plymouth theme and splash | boot-path, invisible to deltas |
 | Every Debian package: SDL2 + Mesa DRI + libmtdev, `network-manager`, the build toolchain, `gcc-arm-none-eabi`, `cmake`, `openocd` | apt at provision time is a network dependency on the recovery path |
 | `openocd` udev rules | static, not secret, never changes |

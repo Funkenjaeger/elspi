@@ -41,8 +41,8 @@ export FIRST_USER_NAME=default
 # elspi.conf is sourced in a child shell with NO site config, so what is
 # checked below is the PUBLIC image's defaults; the child prints `export`
 # lines for exactly the names the stages read.
-BUILD_VARS="TARGET_HOSTNAME TIMEZONE_DEFAULT LOCALE_DEFAULT KEYBOARD_KEYMAP"
-BUILD_EXPORTS="$(cd "${REPO}" && env -u ELSPI_SITE_CONF BUILD_VARS="${BUILD_VARS}" bash -c '
+BUILD_VARS="TARGET_HOSTNAME TIMEZONE_DEFAULT LOCALE_DEFAULT KEYBOARD_KEYMAP ELSPI_USB_MAX_CURRENT ELSPI_SITE_CONF_APPLIED"
+BUILD_EXPORTS="$(cd "${REPO}" && env -u ELSPI_SITE_CONF -u ELSPI_USB_MAX_CURRENT BUILD_VARS="${BUILD_VARS}" bash -c '
 	. ./elspi.conf >/dev/null 2>&1 || exit 1
 	for v in ${BUILD_VARS}; do printf "export %s=%q\n" "${v}" "${!v}"; done
 ')" || { echo "FAIL: could not source elspi.conf"; exit 1; }
@@ -62,6 +62,46 @@ install -m 644 "${REPO}/stage1/00-boot-files/files/cmdline.txt" "${ROOTFS_DIR}/b
 install -m 644 "${REPO}/stage2/04-cloud-init/files/meta-data" "${ROOTFS_DIR}/boot/firmware/"
 
 PASS=0; FAIL=0
+
+# --- the build config itself: exports, and the optional site config ---------
+# pi-gen runs every stage as a CHILD of build.sh, so a value the stages read
+# must be EXPORTED by the config -- asserted here by reading it back in a
+# grandchild, which is where a stage stands. Then ELSPI_SITE_CONF: sourced
+# after elspi.conf, able to override it, recorded as applied, and FATAL when
+# it names a file that is not there.
+conf_probe() { # conf_probe [VAR=value ...] -> prints what a stage would see
+	( cd "${REPO}" && env -u ELSPI_SITE_CONF -u REFLEX_SOURCE -u ELSPI_USB_MAX_CURRENT "$@" bash -c '
+		# A config that FATALs runs `exit`, which would take this shell with
+		# it -- so it is tried in a subshell first.
+		( . ./elspi.conf ) >/dev/null 2>&1 || { echo "SOURCE-FAILED"; exit 0; }
+		. ./elspi.conf >/dev/null 2>&1
+		bash -c "printf \"%s|%s|%s\n\" \"\${REFLEX_SOURCE:-UNSET}\" \"\${ELSPI_USB_MAX_CURRENT:-UNSET}\" \"\${ELSPI_SITE_CONF_APPLIED:-UNSET}\""
+	' )
+}
+SITE_CONF="${WORK}/site.conf"
+printf 'ELSPI_USB_MAX_CURRENT=1\nTIMEZONE_DEFAULT="America/Chicago"\n' > "${SITE_CONF}"
+GOT="$(conf_probe)"
+case "${GOT}" in
+	https://*"|0|0") echo "  ok: public config: a stage sees REFLEX_SOURCE and ELSPI_USB_MAX_CURRENT=0, no site config"; PASS=$((PASS+1)) ;;
+	*) echo "  FAIL: public config: a stage sees '${GOT}' (want <url>|0|0)"; FAIL=$((FAIL+1)) ;;
+esac
+GOT="$(conf_probe ELSPI_SITE_CONF="${SITE_CONF}")"
+case "${GOT}" in
+	https://*"|1|1") echo "  ok: ELSPI_SITE_CONF is sourced after elspi.conf, overrides it, and a stage sees the result"; PASS=$((PASS+1)) ;;
+	*) echo "  FAIL: with a site config a stage sees '${GOT}' (want <url>|1|1)"; FAIL=$((FAIL+1)) ;;
+esac
+GOT="$(conf_probe ELSPI_SITE_CONF="${WORK}/no-such-site.conf")"
+case "${GOT}" in
+	SOURCE-FAILED*) echo "  ok: an ELSPI_SITE_CONF that is not a readable file is FATAL"; PASS=$((PASS+1)) ;;
+	*) echo "  FAIL: a missing ELSPI_SITE_CONF was not refused (a stage saw '${GOT}')"; FAIL=$((FAIL+1)) ;;
+esac
+printf 'ELSPI_USB_MAX_CURRENT=yes\n' > "${WORK}/bad-knob.conf"
+GOT="$(conf_probe ELSPI_SITE_CONF="${WORK}/bad-knob.conf")"
+case "${GOT}" in
+	SOURCE-FAILED*) echo "  ok: ELSPI_USB_MAX_CURRENT other than 0/1 is FATAL"; PASS=$((PASS+1)) ;;
+	*) echo "  FAIL: ELSPI_USB_MAX_CURRENT=yes was accepted (a stage saw '${GOT}')"; FAIL=$((FAIL+1)) ;;
+esac
+
 run_stage() { # run_stage <substage-dir>
 	local d="$1"
 	printf '\n\033[1m-- %s --\033[0m\n' "${d}"
@@ -142,6 +182,13 @@ b = json.load(open(sys.argv[1])).get("build_defaults", {})
 want = {"hostname": os.environ["TARGET_HOSTNAME"], "timezone": os.environ["TIMEZONE_DEFAULT"],
         "locale": os.environ["LOCALE_DEFAULT"], "keymap": os.environ["KEYBOARD_KEYMAP"]}
 bad = [k for k, v in want.items() if b.get(k) != v]
+d = json.load(open(sys.argv[1]))
+if d.get("boot_config", {}).get("usb_max_current_enable") is not (os.environ["ELSPI_USB_MAX_CURRENT"] == "1"):
+    bad.append("boot_config.usb_max_current_enable")
+    want["boot_config.usb_max_current_enable"] = os.environ["ELSPI_USB_MAX_CURRENT"]
+if b.get("site_build_config_applied") is not (os.environ["ELSPI_SITE_CONF_APPLIED"] == "1"):
+    bad.append("site_build_config_applied")
+    want["site_build_config_applied"] = os.environ["ELSPI_SITE_CONF_APPLIED"]
 if bad:
     print("        mismatched:", ", ".join("%s=%r (build config: %r)" % (k, b.get(k), want[k]) for k in bad))
 sys.exit(1 if bad else 0)
@@ -243,15 +290,43 @@ fi
 # --- IDEMPOTENCE ------------------------------------------------------------
 # pi-gen re-runs stages on a resumed build. A second pass must not double-append
 # usb_max_current_enable or re-break an already-correct file.
+#
+# usb_max_current_enable is a build knob, OFF in the public config: absent after
+# two default passes; exactly once after two passes with it ON (a site build);
+# and gone again after an OFF pass over an ON tree (a resumed build whose knob
+# changed).
+usb_count() { grep -c "^usb_max_current_enable=" "${ROOTFS_DIR}/boot/firmware/config.txt"; }
+if [ "${ELSPI_USB_MAX_CURRENT}" = 0 ] && [ "$(usb_count)" -eq 0 ]; then
+	echo "  ok: the public config leaves usb_max_current_enable out of config.txt"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: public config: ELSPI_USB_MAX_CURRENT=${ELSPI_USB_MAX_CURRENT}, usb_max_current_enable lines=$(usb_count)"
+	FAIL=$((FAIL+1))
+fi
 echo
 printf '\033[1m-- second pass (idempotence) --\033[0m\n'
 if ( cd "${REPO}/stage-elspi/03-boot-config" && ./00-run.sh >/dev/null ); then
-	DUPES=$(grep -c "^usb_max_current_enable=1$" "${ROOTFS_DIR}/boot/firmware/config.txt")
-	if [ "${DUPES}" -eq 1 ]; then
-		echo "  ok: usb_max_current_enable appears exactly once after two passes"
+	if [ "$(usb_count)" -eq 0 ]; then
+		echo "  ok: usb_max_current_enable still absent after two default passes"
 		PASS=$((PASS+1))
 	else
-		echo "  FAIL: usb_max_current_enable appears ${DUPES} times after two passes"
+		echo "  FAIL: usb_max_current_enable appears $(usb_count) times after two default passes"
+		FAIL=$((FAIL+1))
+	fi
+	( cd "${REPO}/stage-elspi/03-boot-config" && ELSPI_USB_MAX_CURRENT=1 ./00-run.sh >/dev/null && ELSPI_USB_MAX_CURRENT=1 ./00-run.sh >/dev/null )
+	if [ "$(grep -c '^usb_max_current_enable=1$' "${ROOTFS_DIR}/boot/firmware/config.txt")" -eq 1 ] && [ "$(usb_count)" -eq 1 ]; then
+		echo "  ok: with ELSPI_USB_MAX_CURRENT=1, usb_max_current_enable=1 appears exactly once after two passes"
+		PASS=$((PASS+1))
+	else
+		echo "  FAIL: with ELSPI_USB_MAX_CURRENT=1, usb_max_current_enable lines=$(usb_count) after two passes"
+		FAIL=$((FAIL+1))
+	fi
+	( cd "${REPO}/stage-elspi/03-boot-config" && ELSPI_USB_MAX_CURRENT=0 ./00-run.sh >/dev/null )
+	if [ "$(usb_count)" -eq 0 ]; then
+		echo "  ok: an OFF pass over an ON tree removes usb_max_current_enable (resumed build, knob changed)"
+		PASS=$((PASS+1))
+	else
+		echo "  FAIL: an OFF pass left usb_max_current_enable in config.txt"
 		FAIL=$((FAIL+1))
 	fi
 	TOKENS=$(grep -o "quiet" "${ROOTFS_DIR}/boot/firmware/cmdline.txt" | wc -l)

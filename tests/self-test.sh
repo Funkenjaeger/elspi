@@ -208,8 +208,10 @@ mutate "SPI turned back off" \
 	"sed -i 's|^dtparam=spi=on|#dtparam=spi=on|' boot/firmware/config.txt"
 mutate "the Pi 5 nospi10 block dropped (ospi's regression)" \
 	"sed -i '/dtoverlay=nospi10/d' boot/firmware/config.txt"
-mutate "usb_max_current_enable removed (touchscreen brownouts)" \
-	"sed -i '/usb_max_current_enable/d' boot/firmware/config.txt"
+mutate "usb_max_current_enable present though the manifest declares it off" \
+	"printf 'usb_max_current_enable=1\n' >> boot/firmware/config.txt"
+mutate "the manifest declares usb_max_current_enable on but config.txt lacks it (touchscreen brownouts)" \
+	"sed -i 's|\"usb_max_current_enable\": false|\"usb_max_current_enable\": true|' etc/elspi-image.json"
 mutate "enable_uart removed" \
 	"sed -i '/enable_uart/d' boot/firmware/config.txt"
 mutate "serial console put back on the Modbus UART" \

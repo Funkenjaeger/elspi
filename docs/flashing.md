@@ -31,8 +31,9 @@ logs.
 
 **The target machine:** a Raspberry Pi 5 with the touchscreen attached. The
 image is `armhf` userland on a 64-bit kernel, with `config.txt` written for that
-board — including upstream's `[pi5] dtoverlay=nospi10` and
-`usb_max_current_enable=1`.
+board — including upstream's `[pi5] dtoverlay=nospi10`. The public image leaves
+`usb_max_current_enable` off; a Pi 5 powering a USB touchscreen may need it, and
+a [site build config](provisioning.md#a-site-build-config) turns it on.
 
 **Keep the card that is currently in the machine.** It is the rollback and it is
 the running lathe. Flash a *second* card.
@@ -136,7 +137,8 @@ overwrites the files.
 Imager has no field for the system **locale**: its cloud-init output carries
 no `locale:` key, so every card keeps the image's `en_US.UTF-8`. The
 application formats nothing through the locale; it affects only shell tools
-over SSH. A build of your own can set `LOCALE_DEFAULT` (see `elspi.conf`).
+over SSH. A build of your own can set `LOCALE_DEFAULT` (see
+[the site build config](provisioning.md#a-site-build-config)).
 
 **The username must be `default`.** That is the image's service user: the
 account that owns `/var/lib/reflex-config`, `/var/log/reflex` and `~/projects`,

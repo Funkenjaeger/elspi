@@ -1,7 +1,7 @@
 #!/bin/bash -e
 
 # Firmware-level configuration: SPI, I2C, UART, camera off, quiet+splash, and
-# the touchscreen brownout workaround.
+# -- when a site build asks for it -- the USB touchscreen brownout workaround.
 #
 # docs/design/seam.md puts all of this in the IMAGE: it needs a reboot, and wrong means no
 # display or no Modbus. Cheap to bake, painful to retrofit.
@@ -78,7 +78,9 @@ echo "== config.txt =="
 uncomment_or_die "dtparam=i2c_arm=on" "${CONFIG}"
 uncomment_or_die "dtparam=spi=on"     "${CONFIG}"
 
-# No camera on this machine, and autodetect costs boot time.
+# GENERIC APPLIANCE HYGIENE, not one site's hardware: the application uses no
+# camera on any machine, so autodetect only costs boot time and loads
+# overlays for nothing.
 replace_or_die "camera_auto_detect=1" "camera_auto_detect=0" "${CONFIG}"
 
 # Guard, not an edit: upstream's Pi 5 SPI block is one of the two lines ospi
@@ -97,10 +99,32 @@ append_once "enable_uart=1" "${CONFIG}"
 # Firmware rainbow splash off (Plymouth owns the boot visuals).
 append_once "disable_splash=1" "${CONFIG}"
 
-# LOCAL HARDWARE WORKAROUND, exists in neither upstream nor ospi:
-# "Force high current USB mode to mitigate brownouts of USB-attached
-# touchscreen display". This one is about the real panel on the real lathe.
-append_once "usb_max_current_enable=1" "${CONFIG}"
+# A BUILD KNOB, OFF BY DEFAULT: ELSPI_USB_MAX_CURRENT (elspi.conf). A Pi 5
+# powering a USB touchscreen may need usb_max_current_enable=1 -- "force high
+# current USB mode to mitigate brownouts of USB-attached touchscreen display"
+# -- but it is a property of one panel and supply, not of the appliance, so a
+# site build config turns it on. OFF is enforced too, not merely skipped: a
+# resumed build whose knob changed must not keep the previous pass's line.
+case "${ELSPI_USB_MAX_CURRENT:-0}" in
+	1)
+		append_once "usb_max_current_enable=1" "${CONFIG}"
+		;;
+	0)
+		if grep -q '^usb_max_current_enable=' "${CONFIG}"; then
+			sed -i '/^usb_max_current_enable=/d' "${CONFIG}"
+			echo "  removed: usb_max_current_enable (ELSPI_USB_MAX_CURRENT=0)"
+		fi
+		if grep -q '^usb_max_current_enable=' "${CONFIG}"; then
+			echo "FATAL: post-write check failed -- usb_max_current_enable is still in ${CONFIG}"
+			exit 1
+		fi
+		echo "  off: usb_max_current_enable (ELSPI_USB_MAX_CURRENT=0, the default)"
+		;;
+	*)
+		echo "FATAL: ELSPI_USB_MAX_CURRENT must be 0 or 1 (got '${ELSPI_USB_MAX_CURRENT}')"
+		exit 1
+		;;
+esac
 
 echo "== cmdline.txt =="
 

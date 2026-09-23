@@ -21,6 +21,10 @@
 #     OS_LIST_URL=https://github.com/<org>/<repo>/releases/download/<tag>/image_<date>-elspi.img.xz
 #   (the image url Imager downloads from -- see docs/flashing.md).
 #
+# ELSPI_SITE_CONF=<file>  (env var, optional) a site build config sourced
+#   after elspi.conf -- see elspi.conf's last block. This script mounts it
+#   into the build container and forwards the variable.
+#
 # A NEW file, per docs/design/fork.md: build-docker.sh is upstream and stays untouched.
 #
 # ---------------------------------------------------------------------------
@@ -110,13 +114,37 @@ echo "qemu-arm: ${RESOLVED} (static)"
 # BY NAME ONLY, never name=value: PIGEN_DOCKER_OPTS is expanded unquoted.
 # Only names that are SET are added -- `-e FOO` for an unset FOO passes the
 # host's (absent) value and would override elspi.conf's default with empty.
-for _v in REFLEX_SOURCE REFLEX_RELEASE REFLEX_ORIGIN_URL; do
+for _v in REFLEX_SOURCE REFLEX_RELEASE REFLEX_ORIGIN_URL ELSPI_USB_MAX_CURRENT; do
 	if [ -n "${!_v:-}" ]; then
 		export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS:-} -e ${_v}"
 		echo "forwarding: ${_v}"
 	fi
 done
 unset _v
+
+# --- the optional SITE build config (elspi.conf's last block) ---------------
+# elspi.conf is sourced twice: here on the host by build-docker.sh, and inside
+# the container by build.sh. The second one only sees the file if it is
+# MOUNTED there and only knows its name if ELSPI_SITE_CONF is FORWARDED -- the
+# same trap as a local REFLEX_SOURCE, removed here rather than documented.
+# It is mounted read-only at its own absolute path, so the one variable means
+# the same file on both sides. A path with whitespace or a ':' cannot be
+# passed through PIGEN_DOCKER_OPTS (expanded unquoted; ':' is docker's -v
+# separator), so it is refused rather than mangled.
+if [ -n "${ELSPI_SITE_CONF:-}" ]; then
+	[ -f "${ELSPI_SITE_CONF}" ] && [ -r "${ELSPI_SITE_CONF}" ] \
+		|| { echo "FATAL: ELSPI_SITE_CONF=${ELSPI_SITE_CONF} is not a readable file"; exit 1; }
+	ELSPI_SITE_CONF="$(cd "$(dirname "${ELSPI_SITE_CONF}")" && pwd)/$(basename "${ELSPI_SITE_CONF}")"
+	case "${ELSPI_SITE_CONF}" in
+		*[[:space:]:]*)
+			echo "FATAL: ELSPI_SITE_CONF=${ELSPI_SITE_CONF} contains whitespace or ':'."
+			echo "       Move or link it to a plain path; it has to cross into the container."
+			exit 1 ;;
+	esac
+	export ELSPI_SITE_CONF
+	export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS:-} -v ${ELSPI_SITE_CONF}:${ELSPI_SITE_CONF}:ro -e ELSPI_SITE_CONF"
+	echo "site config: ${ELSPI_SITE_CONF} (mounted read-only into the build container)"
+fi
 
 # A LOCAL MIRROR PATH IS NOT AUTOMATICALLY VISIBLE INSIDE THE CONTAINER, and
 # this is the one trap this loop does not remove. `REFLEX_SOURCE=/path/to/

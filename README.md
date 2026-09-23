@@ -60,7 +60,9 @@ becomes on the machine: **[docs/flashing.md](docs/flashing.md)**.
 
 Building the image: `./build-elspi.sh` (no arguments -- the image is keyless;
 your SSH key and/or password go on Imager's customisation page at flash time);
-tests are in `tests/`.
+tests are in `tests/`. One installation's own hardware and defaults go in an
+optional site build config, `ELSPI_SITE_CONF=/path/to/site.conf` -- see
+[Provisioning](docs/provisioning.md#a-site-build-config).
 
 ## License
 

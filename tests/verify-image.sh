@@ -621,10 +621,25 @@ CFG="${ROOTFS}/boot/firmware/config.txt"
 CMD="${ROOTFS}/boot/firmware/cmdline.txt"
 
 for line in "dtparam=i2c_arm=on" "dtparam=spi=on" "camera_auto_detect=0" \
-            "enable_uart=1" "disable_splash=1" "usb_max_current_enable=1" \
-            "dtoverlay=nospi10"; do
+            "enable_uart=1" "disable_splash=1" "dtoverlay=nospi10"; do
 	check "config.txt: ${line}" grep -qxF "${line}" "${CFG}"
 done
+
+# usb_max_current_enable is a BUILD KNOB (ELSPI_USB_MAX_CURRENT, off unless a
+# site build config turns it on), so config.txt is checked against what the
+# manifest DECLARES, in both directions: declared on and missing is a panel
+# that browns out; declared off and present is an image asking more of the
+# supply than its manifest admits.
+USB_DECLARED="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))["boot_config"]["usb_max_current_enable"]; print({True: "on", False: "off"}[v])' "${MANIFEST}" 2>/dev/null || true)"
+case "${USB_DECLARED}" in
+	on)  check "config.txt: usb_max_current_enable=1 (the manifest declares it on)" grep -qxF "usb_max_current_enable=1" "${CFG}" ;;
+	off) if grep -q '^usb_max_current_enable=' "${CFG}" 2>/dev/null; then
+		     bad "config.txt has no usb_max_current_enable (the manifest declares it off)"
+	     else
+		     ok "config.txt has no usb_max_current_enable (the manifest declares it off)"
+	     fi ;;
+	*)   bad "the manifest declares boot_config.usb_max_current_enable as a boolean" ;;
+esac
 
 # THE serial console must be off the Modbus UART.
 if grep -q "console=serial0" "${CMD}" 2>/dev/null; then

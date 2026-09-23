@@ -330,6 +330,23 @@ hooks run last.
 contract, for anyone writing one, is in
 [`deltas/README.md`](https://github.com/Funkenjaeger/elspi/blob/master/deltas/README.md).
 
+## A site build config
+
+The build has the same seam. `ELSPI_SITE_CONF=/path/to/site.conf ./build-elspi.sh`
+sources that shell file **after** `elspi.conf`, so it can override any of it —
+`TIMEZONE_DEFAULT`, `LOCALE_DEFAULT`, `KEYBOARD_*`, `TARGET_HOSTNAME`,
+`REFLEX_*` — and set the one board knob the public image leaves off:
+`ELSPI_USB_MAX_CURRENT=1`, which writes `usb_max_current_enable=1` into
+`config.txt`. **A Raspberry Pi 5 powering a USB touchscreen may need it**:
+without it the Pi 5 limits its USB ports to 600 mA unless the supply
+advertises 5 A, and a panel drawing more browns out. `build-elspi.sh` mounts
+the file into the build container and forwards the variable; a name that is
+set but not a readable file stops the build. The image records only *whether*
+a site config was applied (`build_defaults.site_build_config_applied` and
+`boot_config.usb_max_current_enable` in `/etc/elspi-image.json`), never its
+path or contents, and `tests/verify-image.sh` checks `config.txt` and the time
+zone against those declarations.
+
 ## Starting the UI
 
 **Nothing in provisioning starts the application.** That is deliberate: phase 2
