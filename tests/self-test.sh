@@ -174,7 +174,7 @@ mutate "service user dropped from the 'dialout' group (Modbus)" \
 mutate "a DRM mode fragment reverts to User=root" \
 	"sed -i 's|^User=default|User=root|' usr/share/elspi/drm-modes/first-opener.conf"
 
-# The venv must be the service user's all the way down (Open Loops 6aac9465):
+# The venv must be the service user's all the way down:
 # reflex's updater `uv sync`s into it as that user, after flashing. Making an
 # entry owned by SOMEONE ELSE needs chown, i.e. root -- so without root this
 # mutation is reported as not run rather than registered as a pass it did not

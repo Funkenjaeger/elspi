@@ -361,8 +361,8 @@ echo "  scrubbed: no reflog, no logs/, refs = tags$( [ "${PUBLIC_REFS_KNOWN}" = 
 # --- Ownership --------------------------------------------------------------
 # The in-app updater runs `git fetch`, `git checkout` and `uv sync` AS THE
 # SERVICE USER. A root-owned checkout is refused by resolve_checkout()'s
-# sibling preflight the same way a root-owned venv was (Open Loops 6aac9465,
-# fixed in 08-venv 2026-09-17) -- and git additionally refuses a repository
+# sibling preflight the same way a root-owned venv was (fixed in 08-venv
+# 2026-09-17) -- and git additionally refuses a repository
 # whose owner is not the caller ("detected dubious ownership"), which looks
 # nothing like a permissions problem in a log.
 #

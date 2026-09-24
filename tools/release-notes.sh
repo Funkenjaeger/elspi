@@ -52,8 +52,8 @@
 # is on whoever runs it, not something this script can check from here.
 #
 # No release CI exists yet -- this script is run BY HAND when cutting a
-# release and its output is pasted into the GitHub release page. The pi-gen
-# release-automation item on the Open Loops heap tracks adding that.
+# release and its output is pasted into the GitHub release page. Automating
+# that into CI is a known gap, not yet built.
 
 set -euo pipefail
 

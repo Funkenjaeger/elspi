@@ -439,7 +439,7 @@ else
 	unknown "pillow ABSENT -- img_pil unavailable. docs/design/seam.md ratified promoting it to a runtime dep in the reflex repo; that has not landed."
 fi
 
-# The service user owns the WHOLE venv (Open Loops 6aac9465). reflex's in-app
+# The service user owns the WHOLE venv. reflex's in-app
 # updater runs `uv sync` into it as that user, after flashing the firmware;
 # the root:root venv elspi shipped until 2026-09-17 fails that sync. find -P
 # (the default) judges symlinks themselves, matching 08-venv's `chown -R -h`.
@@ -470,8 +470,8 @@ else
 fi
 
 # The updater runs `git fetch`, `git checkout` and `uv sync` AS THE SERVICE
-# USER. Same reasoning as the venv's ownership check above (Open Loops
-# 6aac9465), plus one git-specific edge: git refuses a repository whose owner
+# USER. Same reasoning as the venv's ownership check above, plus one
+# git-specific edge: git refuses a repository whose owner
 # is not the caller ("detected dubious ownership"), which in a log looks
 # nothing like a permissions problem. find -P judges symlinks themselves.
 app_owned_by_service_user() {

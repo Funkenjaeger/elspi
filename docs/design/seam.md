@@ -117,8 +117,8 @@ therefore only has to be *a* good starting point, not *the current* one — a
 much weaker obligation than the one call 1 was written against.
 
 **What it buys.** A freshly flashed card boots into the UI with no converge
-step and no SSH — task 6aa73b01 item 1, which was unbuildable under the
-original call. Order 2026-09-20#5 is what surfaced this: its builder refused
+step and no SSH — previously unbuildable under the original call. Order
+2026-09-20#5 is what surfaced this: its builder refused
 to amend a ratified call and shipped the trigger scaffold only.
 
 **What it costs, honestly.** Image and app were already a version pair; they
