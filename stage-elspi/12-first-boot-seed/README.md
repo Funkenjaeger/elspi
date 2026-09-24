@@ -84,8 +84,64 @@ could have come out differently. The steps:
 | 2 | `rfkill unblock wlan`, `nmcli radio wifi on` | blocked-line count before/after; `nmcli radio wifi` before/after; `NetworkManager.state` says `WirelessEnabled=true` |
 | 3 | Set the regulatory domain from the seed | `iw reg get` before/after |
 | 4 | Apply the password cloud-init discarded | the `/etc/shadow` field before/after |
-| 5 | Report Imager's `ssh_pwauth` effect on sshd | `PasswordAuthentication yes` present or not |
-| 6 | Neutralise `user-data` and `network-config` | content read back after writing |
+| 5 | Install the seed's SSH keys, each exactly once; warn loudly if the seed carries neither a password nor a key | each key's blob re-read from `authorized_keys` after the append; `stat` of `~/.ssh` (700) and the file (600) and their owner |
+| 6 | Report — never change — the SSH authentication choice Imager made | `PasswordAuthentication` in `sshd_config.d/50-cloud-init.conf`; any *other* file setting an auth option is a `WARNING` |
+| 7 | Neutralise `user-data` and `network-config` | content read back after writing |
+
+`tests/test-first-boot-seed.sh` runs this script for real — not a copy of its
+logic — against a synthetic rootfs (`ELSPI_SEED_TEST_ROOT` prefixes every path
+it touches) with user-data in the shape Imager 2.x writes: one key, two keys, a
+key cloud-init already installed, password only, password and key, neither,
+upstream's unseeded template, malformed YAML, another account's name, an
+overriding sshd drop-in, and the three outcomes of a `lock_passwd: false` seed
+with no password (below). `tests/self-test.sh` collects it.
+
+### Why step 5 is needed — the image is keyless
+
+**Decided 2026-09-23: no SSH public key is ever baked into this image.** It is
+built from a public repository into public release images, and nobody's
+personal key belongs in one. So the keys typed into Imager's customisation page
+are the *only* keys a fresh card has, and this unit installs them itself —
+before step 7 wipes the seed — rather than trusting cloud-init with an account
+that already exists. (cloud-init 25.2 does import `ssh_authorized_keys` for a
+pre-existing user; step 4 is the record of why "cloud-init handles it" is not
+taken on faith for this account.)
+
+- **The shape it reads** is what `rpi-imager`'s
+  `src/customization_generator.cpp` (`generateCloudInitUserData`) writes: a
+  *singular* `user:` mapping whose `ssh_authorized_keys:` is a list of
+  double-quoted keys, one per item. A `users:` list and a top-level
+  `ssh_authorized_keys` are read too, because cloud-init honours both. Parsed
+  with PyYAML, which cloud-init depends on; if it is somehow missing the step
+  says so and installs nothing rather than guessing.
+- **Exactly once, by key material.** A key whose base64 blob is already in
+  `authorized_keys` — written by cloud-init, by an earlier boot, or listed twice
+  in the seed — is not appended again, whatever its comment says. That is the
+  same rule cloud-init's own `ssh_util.update_authorized_keys` uses.
+- **Logged by fingerprint only** (`ssh-keygen -lf`), which doubles as the
+  validator: a line `ssh-keygen` cannot read is skipped.
+- **Keys are optional.** A password alone is a way in. Only a seed carrying
+  **neither** triggers the loud `NO SSH WAY IN` warning — that card is reachable
+  only from the touchscreen. A seed that is already neutralised (every boot after
+  the first) is not "no credential" and does not warn.
+- **The unit runs with `ProtectHome=no`.** It carried `ProtectHome=yes` until
+  2026-09-23, which hides `/home` from the service entirely: every key install
+  would have failed and the seed would then have been wiped. `00-run.sh` and
+  `tests/verify-image.sh` both refuse `ProtectHome` on this unit.
+
+### Why step 6 only reports
+
+**SSH authentication is the operator's choice, per card.** The image enables
+sshd and sets no authentication option of its own (`PUBKEY_ONLY_SSH=0`), so RPi
+OS's default — password authentication allowed — stands until Imager says
+otherwise. Imager's *public-key only* becomes `ssh_pwauth: false`, its password
+option `ssh_pwauth: true`, and cloud-init 25.2 writes either as
+`PasswordAuthentication no|yes` in `/etc/ssh/sshd_config.d/50-cloud-init.conf`.
+sshd takes the **first** value it reads, and Debian's `sshd_config` Includes that
+directory at its top, so cloud-init's file wins over `sshd_config`'s body and
+loses only to a drop-in sorting ahead of `50-`. The image ships none —
+`00-run.sh` and `tests/verify-image.sh` both refuse an auth option in either
+place — and step 6 warns if one ever appears on a running machine.
 
 ### Why steps 2 and 3 are needed at all
 
@@ -108,26 +164,64 @@ cloud-init 25.2, `distros/__init__.py:894-907`: for a **pre-existing** user the
 (`stage-elspi/05-service-user`), so the password the operator typed is silently
 discarded.
 
-And then the same function **unlocks the account anyway**. `passwd -l` prefixes
-`!` to the *existing* hash and leaves the rest — `shadow(5)`: "The remaining
-characters on the line represent the password field before the password was
-locked" — so `default`'s field is `!<build throwaway hash>`, not `!`.
-cloud-init's empty-locked patterns (`distros/__init__.py:139`) are
-`^{username}::` and `^{username}:!:`, and neither matches. So
-`has_existing_password` is True at line 912, `lock_passwd: false` takes the
-branch at line 927, and line 940 calls `unlock_passwd()` — making the random
-`FIRST_USER_PASS` throwaway from `elspi.conf` a **live password that nobody
-knows**.
+### The unlock hole — closed at the source on 2026-09-23
 
-Step 4 closes both halves, deciding which applies from the seed itself:
+Until 2026-09-23 the same function then **unlocked the account anyway**.
+`05-service-user` locked it with `passwd -l`, which prefixes `!` to the
+*existing* hash and leaves the rest — `shadow(5)`: "The remaining characters
+on the line represent the password field before the password was locked" — so
+`default`'s field was `!<build throwaway hash>`. cloud-init's empty-locked
+patterns (`distros/__init__.py:139`) are `^{username}::` and
+`^{username}:!:`, and neither matched. So `has_existing_password` was True at
+line 912, `lock_passwd: false` took the branch at line 927, and line 940
+called `unlock_passwd()` — making the random `FIRST_USER_PASS` throwaway from
+`elspi.conf` a **live password that nobody knew**. It also meant every public
+image carried the throwaway's SHA-512 hash in `/etc/shadow`.
 
-- `passwd` present → install it with `chpasswd -e` (this also overwrites the
-  throwaway), after checking it is a `crypt(3)` hash and that it differs from
-  what is already there;
+**`05-service-user` now writes a bare `!`** (`usermod -p '!'`), so no hash
+ships at all, and cloud-init's own logic stops the unlock:
+
+- `^default:!:` matches, so `has_existing_password` is **False** (line 912);
+- Imager's `passwd` is ignored for an existing user, so there is no
+  `ud_password_specified` either;
+- `lock_passwd: false` therefore falls through to the
+  `elif pre_existing_user:` branch (lines 941-953), which logs *"Not
+  unlocking blank password for existing user"* and **never calls
+  `unlock_passwd()`**.
+
+Had anything called it, `passwd -u` refuses a bare `!` anyway: shadow 4.17.4
+(Debian trixie's), `src/passwd.c:522-528`, prints *"unlocking the password
+would result in a passwordless account"* and exits `E_FAILURE` (3). That
+refusal is **not** harmless inside cloud-init, though, and it is the one path
+that still reaches it: a hand-written seed with an **empty**
+`hashed_passwd`/`plain_text_passwd` and `lock_passwd: false` *is*
+`ud_password_specified`, so `unlock_passwd()` runs; cloud-init accepts exit 3
+(`rcs=[0, 3]`, line 1055) and, because stderr is not empty, falls back to
+`passwd -d` (lines 1059-1064) — leaving an **empty** password field. Imager
+never writes such a seed, but step 4 handles it.
+
+### What step 4 does
+
+It decides from the seed itself, and from the field cloud-init left behind:
+
+- `passwd` present → install it with `chpasswd -e` over the locked field,
+  after checking it is a `crypt(3)` hash and that it differs from what is
+  already there. **This is the path every Imager password takes**, and it is
+  unaffected by how the field was locked: `chpasswd -e` replaces the whole
+  field;
 - `hashed_passwd`/`plain_text_passwd` present → cloud-init already did it
   (`distros/__init__.py:876-892`); say so and do nothing;
-- neither, but `lock_passwd: false` → revoke the unlocked throwaway with
-  `usermod -p '!'`, restoring the image's declared locked state.
+- neither, but `lock_passwd: false` → check the field:
+  - `!` or `*` → the image's declared state held; nothing to do;
+  - **empty** → cloud-init's `passwd -d` fallback: `WARNING`, then
+    `usermod -p '!'`;
+  - a bare hash → an image built before 2026-09-23 whose throwaway cloud-init
+    unlocked: `WARNING`, then `usermod -p '!'`;
+  - `!<hash>` → still locked; nothing to do.
+
+`tests/test-first-boot-seed.sh` section 0 asserts the stage's code form (bare
+`!`, no `passwd -l`) and replays cloud-init's line-139 patterns against both
+field shapes; cases 10-12 run the three `lock_passwd: false` outcomes.
 
 ### Why the seed is overwritten and not deleted
 
@@ -160,16 +254,14 @@ file is broken".
 
 ## What this substage does *not* do
 
-- It does not revert `PasswordAuthentication yes` if the operator ticked
-  Imager's password-SSH option. That was an explicit choice on the
-  customisation page; the unit **warns** in the journal and leaves it.
-  `docs/flashing.md` says which box to tick.
-- It does not set the hostname, create users, install keys, or configure
-  Wi-Fi. cloud-init does all of that from the seed. This substage only fixes
-  what cloud-init cannot do on this image and then cleans up.
+- It does not change the SSH authentication choice made on Imager's page, in
+  either direction. It reports it (step 6).
+- It does not set the hostname, create users, or configure Wi-Fi. cloud-init
+  does all of that from the seed. This substage fixes what cloud-init cannot
+  (or cannot be trusted to) do on this image, and then cleans up.
 - It has **never run on real hardware.** A card *has* now booted — 2026-09-13,
   `image_2026-09-13-elspi` — but the unit's job was deleted by systemd before
-  it started, so not one of the six steps has ever executed. Everything above
+  it started, so not one of its steps has ever executed. Everything above
   is still derived from cloud-init 25.2 source and upstream's stage scripts and
   verified only by the offline harness. See `docs/design/verification.md`'s tiers — this
   remains a Tier 3 item until a card boots *and the unit runs*.
@@ -213,7 +305,7 @@ resolution, and systemd's resolution is to **delete a job** — it deleted ours.
   above stands, with the build throwaway live.
 - The **seed was still on the card**: `user-data` still carrying `passwd:` and
   `network-config` still carrying `password:`, on the unencrypted FAT
-  partition. Step 6 is the whole security argument of design (a) and it did not
+  partition. Step 6 (the neutralisation, now step 7) is the whole security argument of design (a) and it did not
   happen.
 
 Every other offline check was green on this image. The unit was installed,

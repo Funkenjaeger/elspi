@@ -37,6 +37,29 @@ fail on a freshly flashed card, which is the one thing the amendment leans on.
 Nothing here runs at provision or first boot, so the provision path gains no
 network fetch.
 
+## What the clone knew about the build is taken back out
+
+Rewriting `origin` is not enough on its own. A clone from a local mirror also
+records, inside `.git`, the reflog line `clone: from <REFLEX_SOURCE>` stamped
+with the **builder's git identity**, and a remote-tracking ref for **every
+branch the mirror has** — including work-in-progress branches that were never
+published, each keeping its commits in the object store. So after the clone:
+
+- **Remote-tracking refs** ship only if they are known to be on the public
+  origin, and without a network the only way to know that is that they were
+  read from it: `REFLEX_SOURCE` is literally `REFLEX_ORIGIN_URL` (the default
+  build, and CI). From any other source, every one is deleted. The in-app
+  updater does not use them — it fetches tags anonymously from the public URL.
+- The **reflog** is expired and `.git/logs/` removed.
+- `git gc --prune=now` drops every object only a deleted ref could reach.
+
+Gate 7 then refuses the image if `.git/logs` exists, if any reflog entry is
+left, if any ref other than a tag (plus `origin/*` for a public source) is
+present, if the build source's path or the builder's identity appears in any
+text file under `.git` outside the object store, or if any object in the store
+is unreachable. `tests/test-app-checkout-stage.sh` builds from a synthetic
+mirror carrying an unpublished `wip/` branch and checks each of these directly.
+
 ## The selection rule lives in `files/select-release.sh`
 
 A full release is exactly `v<major>.<minor>.<patch>`. That is read out of

@@ -243,7 +243,7 @@ entry = collections.OrderedDict((
     ("name", name),
     ("description",
      "Reflex ELS appliance image, Debian trixie armhf. On the next pages: "
-     "user 'default', public-key SSH only, Wi-Fi, country US."),
+     "user 'default', a password and/or an SSH key (at least one), Wi-Fi and its country."),
     ("url", url),
     ("release_date", date),
     ("extract_size", int(raw_size)),

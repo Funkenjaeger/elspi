@@ -3,9 +3,10 @@
 #
 # WHY THIS EXISTS: whether a given mechanism actually takes DRM master cannot
 # be tested without a GPU, so the verification harness cannot answer it and CI
-# never will. It is settled on the real Pi. Evan has no terminal on elspi -- it
-# is a touchscreen -- so every wrong guess that requires a reflash costs a
-# lathe power cycle. This makes an attempt cost one SSH command instead.
+# never will. It is settled on the real Pi. An elspi machine has no terminal --
+# its only local interface is the touchscreen -- so every wrong guess that
+# requires a reflash costs a lathe power cycle. This makes an attempt cost one
+# SSH command instead.
 #
 #   elspi-drm-mode                 # show current mode
 #   elspi-drm-mode first-opener    # default; plain system unit, no privilege

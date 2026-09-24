@@ -1,19 +1,16 @@
 #!/bin/bash -e
 
-# stage-elspi/14-first-boot-ui -- the image-side HOOK for task 6aa73b01 item 1
-# ("make a fresh elspi card boot straight into the UI: no SSH, no mandatory
-# backup, SWD chapter documented"). README.md in this directory has the full
-# reasoning, and -- importantly -- what this substage deliberately does NOT
-# do yet and why.
+# stage-elspi/14-first-boot-ui -- the image-side HOOK for "a fresh elspi card
+# boots straight into the UI: no SSH, no mandatory backup". README.md in this
+# directory has the full reasoning, and -- importantly -- what this substage
+# deliberately does NOT do yet and why.
 #
-# SHORT VERSION: item 1 asks to bake a reflex checkout into the image and
-# auto-run converge at first boot. Doing that HERE would move the application
-# across docs/design/seam.md's ratified line (the app is deltas-owned; see
-# 11-manifest's delta_layer_owns declaration) -- exactly the re-litigation
-# this order was told not to do. So this substage ships the TRIGGER (a unit,
-# enabled, correctly ordered against Plymouth and the existing first-boot
-# seed) without the PAYLOAD. files/elspi-first-boot-ui.sh is a real, tested
-# no-op today and stays that way until Evan decides to amend the seam.
+# SHORT VERSION: this substage ships the TRIGGER (a unit, enabled, correctly
+# ordered against Plymouth and the existing first-boot seed) without the
+# PAYLOAD. Since the 2026-09-21 seam amendment the image bakes the reflex
+# checkout in (10a-app-checkout), but starting it unattended at first boot is
+# a separate, still-open decision, so files/elspi-first-boot-ui.sh finds the
+# checkout, logs verdict=UNIMPLEMENTED and exits 0.
 #
 # Chroot-free, like 12-first-boot-seed, for the same reason: it only touches
 # ${ROOTFS_DIR}, so tests/dry-run-stages.sh can exercise it on any Linux box
@@ -109,11 +106,11 @@ grep -qxF "ExecStart=-/usr/local/sbin/elspi-first-boot-ui" "${UNIT_DST}" || {
 if grep -qE '^\s*read\b' "${SCRIPT_DST}"; then
 	echo "FATAL: post-write check failed -- ${SCRIPT_DST} appears to call"
 	echo "       'read' (an interactive step). This hook must never block on"
-	echo "       input -- that is the whole point of task 6aa73b01."
+	echo "       input -- a first boot that waits for a keyboard is the failure it exists to avoid."
 	exit 1
 fi
 
-echo "  installed: /usr/local/sbin/elspi-first-boot-ui (0755, NOOP until a checkout is baked in -- see README.md)"
+echo "  installed: /usr/local/sbin/elspi-first-boot-ui (0755, logs a verdict only; its converge/start branch is unwritten -- see README.md)"
 echo "  installed: /etc/systemd/system/${UNIT_NAME}"
 echo "  enabled:   ${WANTS_TARGET}.wants/${UNIT_NAME}"
 echo "  ok: ordered After=elspi-first-boot-seed.service and After=plymouth-quit-wait.service"

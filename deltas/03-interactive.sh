@@ -75,7 +75,7 @@ ask_yn() { # ask_yn <prompt> ; returns 0 for yes
 
 # --- 1. the service account's password --------------------------------------
 # The image ships this account LOCKED (docs/design/seam.md call 2: no credential
-# repo, and the build's throwaway is revoked by passwd -l). Locked means sudo
+# repo, and the build's throwaway is revoked to a bare '!'). Locked means sudo
 # and password-SSH do not work, so this is usually the first thing needed.
 phase "1/4  password for ${SERVICE_USER}"
 if passwd -S "${SERVICE_USER}" 2>/dev/null | awk '{print $2}' | grep -q '^P$'; then

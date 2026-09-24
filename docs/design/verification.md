@@ -72,7 +72,8 @@ It does not mean the appliance works. Invisible to any VM:
 - anything `config.txt` or a `dtoverlay` actually *does* — firmware level, not
   emulated. These can only be asserted **textually**, that the expected lines are
   present.
-- the `usb_max_current_enable=1` brownout workaround
+- whether the `usb_max_current_enable=1` brownout workaround (off unless a site
+  build config turns it on) actually keeps a USB touchscreen powered
 
 The harness must print this list rather than leave it implicit. A check that
 cannot fail on the thing you care about reports a confident clean over exactly

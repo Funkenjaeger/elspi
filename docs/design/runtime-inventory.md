@@ -265,13 +265,20 @@ part that turned out to be unnecessary rather than wrong.
 
 ### The other half of not being able to test this: SSH must survive a UI failure
 
-`elspi.conf` sets `ENABLE_SSH=1` with `PUBKEY_ONLY_SSH=1`, and the build
-**refuses to produce an image without `ELSPI_PUBKEY`**. That is deliberate and
-it follows directly from the above. The service account's password is locked by
-design, so password SSH cannot work; without a baked key, a first boot where
-the UI does not come up is reachable only from the touchscreen -- which is
-exactly the thing in question. An image with no way in turns every DRM
-experiment back into a power cycle, which is what the switcher exists to avoid.
+`elspi.conf` sets `ENABLE_SSH=1` in every image, and that follows directly from
+the above: a first boot where the UI does not come up must still be reachable
+without the touchscreen, which is exactly the thing in question. An image with
+no way in turns every DRM experiment back into a power cycle, which is what the
+switcher exists to avoid.
+
+**How you get in changed on 2026-09-23** (`docs/design/seam.md`, call 2's
+second amendment). The image used to bake a public key in (`ELSPI_PUBKEY`) and
+refuse to build without one, with `PUBKEY_ONLY_SSH=1`. It is now **keyless**,
+with `PUBKEY_ONLY_SSH=0`: the service account still ships locked, and the way
+in is whatever the operator typed into Imager's customisation page -- a
+password, a public key, or both -- applied on the machine by
+`stage-elspi/12-first-boot-seed`. A card flashed with neither is reachable only
+from the touchscreen, and the seed unit says so loudly on its first boot.
 
 
 ### THE HARNESS CANNOT ANSWER THIS — state it out loud

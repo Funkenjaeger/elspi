@@ -81,6 +81,25 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
     "leaves_intact": ["/boot/firmware/meta-data"],
     "verified_on_hardware": true
   },
+  "ssh": {
+    "enabled": true,
+    "key_source": "imager-seed",
+    "keys_installed_by": "/usr/local/sbin/elspi-first-boot-seed",
+    "baked_authorized_keys": false,
+    "auth": "imager-choice",
+    "image_sets_auth_options": false
+  },
+  "build_defaults": {
+    "hostname": "elspi",
+    "timezone": "Etc/UTC",
+    "locale": "en_US.UTF-8",
+    "keymap": "us",
+    "replaced_per_card_by_imager": ["hostname", "timezone", "keymap"],
+    "site_build_config_applied": false
+  },
+  "boot_config": {
+    "usb_max_current_enable": false
+  },
   "first_boot_ui": {
     "unit": "/etc/systemd/system/elspi-first-boot-ui.service",
     "script": "/usr/local/sbin/elspi-first-boot-ui",
@@ -109,7 +128,7 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
     "DRM master acquisition (no GPU in the harness)",
     "the touchscreen",
     "SPI, I2C and the UART link to the STM32",
-    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui) has never executed end-to-end -- see task 6aa73b01 item 1"
+    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui): the branch is unwritten, so starting the baked app unattended has never executed end-to-end"
   ]
 }
 JSON
@@ -216,7 +235,6 @@ dtoverlay=nospi10
 [all]
 enable_uart=1
 disable_splash=1
-usb_max_current_enable=1
 CFG
 
 printf 'console=tty1 root=ROOTDEV rootfstype=ext4 fsck.repair=yes rootwait quiet splash logo.nologo plymouth.ignore-serial-consoles\n' \
@@ -229,9 +247,9 @@ ln -sf /dev/null "${DEST}/etc/systemd/system/serial-getty@ttyAMA0.service"
 printf 'defaults.pcm.card 0\ndefaults.ctl.card 0\n' > "${DEST}/etc/asound.conf"
 
 # --- timezone ---------------------------------------------------------------
-mkdir -p "${DEST}/usr/share/zoneinfo/America"
-: > "${DEST}/usr/share/zoneinfo/America/New_York"
-ln -sf ../usr/share/zoneinfo/America/New_York "${DEST}/etc/localtime"
+mkdir -p "${DEST}/usr/share/zoneinfo/Etc"
+: > "${DEST}/usr/share/zoneinfo/Etc/UTC"
+ln -sf ../usr/share/zoneinfo/Etc/UTC "${DEST}/etc/localtime"
 
 # --- drm plumbing -----------------------------------------------------------
 # TWO fragments, not three. `logind-seat` -- and the tty1 autologin fragment
@@ -282,6 +300,7 @@ After=NetworkManager.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=-/usr/local/sbin/elspi-first-boot-seed
+ProtectHome=no
 
 [Install]
 WantedBy=cloud-init.target
@@ -299,17 +318,43 @@ mkdir -p "${DEST}/etc/systemd/system/cloud-init.target.wants"
 ln -sf ../elspi-first-boot-seed.service \
 	"${DEST}/etc/systemd/system/cloud-init.target.wants/elspi-first-boot-seed.service"
 
+# --- SSH: keyless, and no authentication policy of the image's own ----------
+# DECIDED 2026-09-23. No authorized_keys anywhere (keys arrive from the Imager
+# seed at flash time), and sshd_config in Debian's stock SHAPE: the drop-in
+# Include at the top, the authentication options present only as comments,
+# and an EMPTY sshd_config.d. That is what makes Imager's per-card choice --
+# cloud-init's 50-cloud-init.conf -- the one sshd reads first.
+#
+# Written by hand, like the rest of this fixture. The seed unit's
+# ProtectHome=no (above) is part of the same contract: the script writes the
+# seeded keys into /home.
+mkdir -p "${DEST}/etc/ssh/sshd_config.d"
+cat > "${DEST}/etc/ssh/sshd_config" <<'SSHD'
+# fixture: Debian trixie's stock sshd_config, abridged
+Include /etc/ssh/sshd_config.d/*.conf
+#PubkeyAuthentication yes
+#PasswordAuthentication yes
+#PermitEmptyPasswords no
+KbdInteractiveAuthentication no
+UsePAM yes
+X11Forwarding yes
+PrintMotd no
+AcceptEnv LANG LC_* COLORTERM NO_COLOR
+Subsystem	sftp	/usr/lib/openssh/sftp-server
+SSHD
+
 # --- the first-boot UI hook (stage-elspi/14-first-boot-ui) ------------------
 # A scaffold, not a feature -- see stage-elspi/14-first-boot-ui/README.md.
-# The fixture models a NOOP run (no baked-in checkout, which is every real
-# image today): the stub just exits 0, same as the seed's stub above.
-printf '#!/bin/bash\n# fixture stub: elspi first-boot ui (noop -- no baked-in checkout)\nexit 0\n' \
+# The fixture's stub just exits 0, same as the seed's stub above: the real
+# script only ever logs a verdict (UNIMPLEMENTED on every image that bakes the
+# app in) and exits 0.
+printf '#!/bin/bash\n# fixture stub: elspi first-boot ui (logs a verdict, starts nothing)\nexit 0\n' \
 	> "${DEST}/usr/local/sbin/elspi-first-boot-ui"
 chmod 0755 "${DEST}/usr/local/sbin/elspi-first-boot-ui"
 
 cat > "${DEST}/etc/systemd/system/elspi-first-boot-ui.service" <<'UNIT'
 [Unit]
-Description=elspi first-boot UI hook (converge+start reflex-ui once a checkout is baked in -- a NOOP today, see README)
+Description=elspi first-boot UI hook (would converge+start the baked reflex-ui; that branch is unwritten, so it only logs a verdict)
 After=elspi-first-boot-seed.service
 After=plymouth-quit-wait.service
 
@@ -419,6 +464,17 @@ git -C "${APP_ROOT_FIX}" checkout -q --detach v1.0.0
 # The remote the real image ships: anonymous, public, and NOT the path the
 # build read from.
 git -C "${APP_ROOT_FIX}" remote add origin "https://github.com/Funkenjaeger/reflex.git"
+
+# Scrub the fixture's OWN build-time state the same way 10a-app-checkout's
+# gate 7 scrubs a real clone: no local branch, no reflog, no logs/, nothing a
+# deleted ref alone reaches. `git init` starts on a branch and keeps a reflog
+# by default, and a fixture that shipped either would make verify-image.sh's
+# own scrub checks red on the BASELINE, not on a deliberate mutation.
+git -C "${APP_ROOT_FIX}" for-each-ref --format='delete %(refname)' refs/heads \
+	| git -C "${APP_ROOT_FIX}" update-ref --no-deref --stdin
+git -C "${APP_ROOT_FIX}" reflog expire --expire=now --expire-unreachable=now --all
+rm -rf "${APP_ROOT_FIX}/.git/logs"
+git -C "${APP_ROOT_FIX}" gc --quiet --prune=now
 
 APP_COMMIT_FIX="$(git -C "${APP_ROOT_FIX}" rev-parse --verify HEAD)"
 sed -i "s/@@APP_COMMIT@@/${APP_COMMIT_FIX}/" "${DEST}/etc/elspi-image.json"

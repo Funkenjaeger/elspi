@@ -41,6 +41,36 @@
 # WHY IT CANNOT FETCH THE BACKUP ITSELF. It would have to know where the
 # backup host is, and item 13 forbids anything machine-specific in this repo.
 # You bring the backup to the Pi; this phase refuses to proceed without it.
+#
+# --- THE CONTENT BAR: the public minimum, and a site's stricter one --------
+# PUBLIC MINIMUM: a non-empty Els-0.yaml, i.e. at least ONE yaml file. That is
+# what reflex itself requires, derived from the application at the newest
+# full release (v1.1.0), not from any one machine:
+#
+#   * NO settings file is needed to START. Every persisted object is a
+#     SavingDispatcher (ui/reflex/dispatchers/saving_dispatcher.py), whose
+#     read_settings() (:55-62) calls save_settings() -- i.e. WRITES DEFAULTS
+#     -- when its <Class>-<id>.yaml is absent (read_settings(), :101-103,
+#     returns None for a missing file).
+#   * Axes are the same, louder: with no Axis-*.yaml, BoardDispatcher.
+#     _create_axes() (ui/reflex/dispatchers/board.py:72-119) builds four
+#     IDENTITY axes and saves them.
+#   * Els-0.yaml is the ELS dispatcher's file (ui/reflex/app.py:258,
+#     ElsDispatcher(id_override="0"); dispatchers/els.py:128) and carries the
+#     commissioned backlash and calibration. It is the one file whose absence
+#     turns "restore" into "run on defaults", so it is the floor.
+#
+# So beyond Els-0.yaml, a missing file means the app silently writes its
+# default -- the very failure this phase exists for. A site that knows how
+# many files ITS machine carries should therefore raise the bar:
+# ELSPI_RESTORE_MIN_YAML=<n> (in the environment, or in the site hooks
+# directory's site.env, which provision.sh loads). It may only RAISE it: a
+# value below the public minimum is refused. Missing Axis-*.yaml is also
+# reported by name, whatever the bar.
+#
+# ROOT IS NEEDED ONLY TO WRITE. Every content gate below runs before
+# need_root, so a refusal is the SAME refusal for any caller, and
+# deltas/tests/test-restore-contract.sh can observe it unprivileged.
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -107,8 +137,21 @@ if [ "${FRESH}" = "1" ]; then
 
 	ok "${CONFIG_DIR} does not exist or is empty -- nothing restored, nothing written"
 else
-	need_root
-	resolve_service_user
+	# --- THE BAR (see the header) ---------------------------------------------
+	RESTORE_MIN_PUBLIC=1
+	RESTORE_MIN="${ELSPI_RESTORE_MIN_YAML:-${RESTORE_MIN_PUBLIC}}"
+	case "${RESTORE_MIN}" in
+		''|*[!0-9]*) die "ELSPI_RESTORE_MIN_YAML='${ELSPI_RESTORE_MIN_YAML}' is not a whole number. REFUSING rather than guessing a bar." ;;
+	esac
+	RESTORE_MIN=$((10#${RESTORE_MIN}))
+	[ "${RESTORE_MIN}" -ge "${RESTORE_MIN_PUBLIC}" ] \
+		|| die "ELSPI_RESTORE_MIN_YAML=${RESTORE_MIN} is below the public minimum (${RESTORE_MIN_PUBLIC}: Els-0.yaml).
+  A site may raise the bar, never lower it. REFUSING."
+	if [ -n "${ELSPI_RESTORE_MIN_YAML:-}" ]; then
+		RESTORE_BAR_SRC="ELSPI_RESTORE_MIN_YAML (a site's bar)"
+	else
+		RESTORE_BAR_SRC="the public minimum: Els-0.yaml"
+	fi
 
 	# --- THE CONTRACT ---------------------------------------------------------
 	# Absent backup is a HARD FAIL. Not a warning, not "continuing with defaults",
@@ -123,11 +166,11 @@ else
   Nothing can regenerate it, so coming up with defaults would produce a
   machine that runs and is silently wrong.
 
-  Bring the most recent capture to this Pi and pass it:
-      --config-backup /path/to/elspi-reflex-config-YYYY-MM-DD
-  On the backup host these live under ~/backups/elspi/ . CHECK THE DATE -- a
-  stale capture restores stale geometry, which is the failure this text exists
-  for."
+  Bring the most recent capture of ${CONFIG_DIR} -- from wherever your
+  backups of it are kept -- to this Pi and pass it:
+      --config-backup /path/to/reflex-config-capture
+  CHECK ITS DATE -- a stale capture restores stale geometry, which is the
+  failure this text exists for."
 	fi
 
 	[ -e "${BACKUP}" ] || die "--config-backup ${BACKUP} does not exist"
@@ -163,12 +206,22 @@ else
   geometry, and a capture without it is not a restore point. REFUSING."
 
 	NYAML="$(find "${SRC}" -maxdepth 1 -name '*.yaml' | wc -l)"
-	[ "${NYAML}" -ge 15 ] \
-		|| die "only ${NYAML} yaml file(s) in ${SRC}; the live machine carried 17 at
-  last count (2 files of slack above the bar). This looks like a partial
-  capture. REFUSING rather than restoring a subset over a machine that needs
-  all of it."
-	ok "${NYAML} yaml files, Els-0.yaml present and non-empty"
+	[ "${NYAML}" -ge "${RESTORE_MIN}" ] \
+		|| die "only ${NYAML} yaml file(s) in ${SRC}; the bar is ${RESTORE_MIN}, set by
+  ${RESTORE_BAR_SRC}. This looks like a partial capture. REFUSING rather than
+  restoring a subset over a machine that needs all of it -- every file left
+  out comes back as the application's DEFAULT the first time it starts."
+	ok "${NYAML} yaml files (bar: ${RESTORE_MIN}, ${RESTORE_BAR_SRC}), Els-0.yaml present and non-empty"
+
+	# Reported, not refused, at the public minimum: with no Axis-*.yaml the
+	# application builds four IDENTITY axes on first start (reflex
+	# ui/reflex/dispatchers/board.py:_create_axes) -- geometry that looks
+	# plausible and is not this machine's.
+	if [ -z "$(find "${SRC}" -maxdepth 1 -name 'Axis-*.yaml' -print -quit)" ]; then
+		warn "no Axis-*.yaml in ${SRC}: the application will create four DEFAULT
+        (identity) axes on first start. If this machine was commissioned, the
+        capture is incomplete -- check it before starting reflex-ui."
+	fi
 
 	# --- SHOW THE HUMAN WHAT IS ABOUT TO LAND ---------------------------------
 	# The checkable claim is "these files were copied". The claim that MATTERS is
@@ -185,6 +238,10 @@ else
 	printf '\n'
 
 	# --- restore ---------------------------------------------------------------
+	# Root from here on, and only from here on: everything above only READ.
+	need_root
+	resolve_service_user
+
 	# Existing config is MOVED ASIDE, never overwritten in place. If this run is
 	# wrong, the previous state is still on the disk.
 	if [ -d "${CONFIG_DIR}" ] && [ -n "$(ls -A "${CONFIG_DIR}" 2>/dev/null)" ]; then

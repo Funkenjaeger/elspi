@@ -186,9 +186,15 @@ FBS_SCRIPT="$(jget "['first_boot_seed']['script']")"
 # the seed above. It is a SCAFFOLD, not a feature: see its own README.md.
 FBUI_UNIT="$(jget "['first_boot_ui']['unit']")"
 FBUI_SCRIPT="$(jget "['first_boot_ui']['script']")"
+# SSH (keyless since 2026-09-23): where keys come from and who decides the
+# authentication policy. Read here and asserted to be exactly the declared
+# policy in the SSH section below.
+SSH_KEY_SOURCE="$(jget "['ssh']['key_source']")"
+SSH_AUTH="$(jget "['ssh']['auth']")"
 
 for v in SERVICE_USER VENV APP_PARENT APP_ROOT CONFIG_DIR LOG_DIR DRM_DEFAULT DRM_SWITCHER \
-         DRM_MODES FBS_UNIT FBS_SCRIPT FBUI_UNIT FBUI_SCRIPT APP_RELEASE APP_COMMIT; do
+         DRM_MODES FBS_UNIT FBS_SCRIPT FBUI_UNIT FBUI_SCRIPT APP_RELEASE APP_COMMIT \
+         SSH_KEY_SOURCE SSH_AUTH; do
 	if [ -z "${!v}" ]; then bad "manifest declares ${v}"; else ok "manifest declares ${v}=${!v}"; fi
 done
 
@@ -208,9 +214,12 @@ done
 check "root password is locked" \
 	grep -qE '^root:[*!]' "${ROOTFS}/etc/shadow"
 
-# The build-time throwaway from FIRST_USER_PASS must not ship usable.
-check "${SERVICE_USER} password is locked" \
-	grep -qE "^${SERVICE_USER}:!" "${ROOTFS}/etc/shadow"
+# The build-time throwaway from FIRST_USER_PASS must not ship usable -- nor
+# ship at all. EXACTLY '!': passwd -l's '!<hash>' carried the throwaway's hash
+# into a public image, and cloud-init unlocks that shape on first boot
+# (stage-elspi/12-first-boot-seed/README.md, "The unlock hole").
+check "${SERVICE_USER} password field is a bare '!' (locked, no hash shipped)" \
+	grep -qE "^${SERVICE_USER}:!:" "${ROOTFS}/etc/shadow"
 
 # The whole point of the 2026-09-01 decision.
 if grep -qs "User=root" "${ROOTFS}/usr/share/elspi/drm-modes/"*.conf; then
@@ -365,7 +374,8 @@ check "/usr/bin/git exists in the rootfs" rootfs_exists /usr/bin/git
 #   find       restore and phase 3
 #   mktemp     converge's validate-before-install of the sudoers files
 #   tar        restore unpacks a tarball backup
-#   ssh-keygen phase 3 prints authorized_keys fingerprints
+#   ssh-keygen phase 3 prints authorized_keys fingerprints, and the first-boot
+#              seed unit validates and fingerprints the Imager seed's keys
 #   passwd     phase 3 sets the service account's password; the account ships
 #              LOCKED, so without this the machine cannot be commissioned
 #   openocd    the firmware toolchain docs/design/seam.md call 3 bakes in unconditionally
@@ -429,7 +439,7 @@ else
 	unknown "pillow ABSENT -- img_pil unavailable. docs/design/seam.md ratified promoting it to a runtime dep in the reflex repo; that has not landed."
 fi
 
-# The service user owns the WHOLE venv (Open Loops 6aac9465). reflex's in-app
+# The service user owns the WHOLE venv. reflex's in-app
 # updater runs `uv sync` into it as that user, after flashing the firmware;
 # the root:root venv elspi shipped until 2026-09-17 fails that sync. find -P
 # (the default) judges symlinks themselves, matching 08-venv's `chown -R -h`.
@@ -460,8 +470,8 @@ else
 fi
 
 # The updater runs `git fetch`, `git checkout` and `uv sync` AS THE SERVICE
-# USER. Same reasoning as the venv's ownership check above (Open Loops
-# 6aac9465), plus one git-specific edge: git refuses a repository whose owner
+# USER. Same reasoning as the venv's ownership check above, plus one
+# git-specific edge: git refuses a repository whose owner
 # is not the caller ("detected dubious ownership"), which in a log looks
 # nothing like a permissions problem. find -P judges symlinks themselves.
 app_owned_by_service_user() {
@@ -572,6 +582,76 @@ if [ "${APP_IS_REPO}" -eq 1 ]; then
 		*)
 			bad "origin is a fetchable URL, not the build host's path (found: ${APP_ORIGIN})" ;;
 	esac
+
+	# --- (B2) the build-time .git scrub, RE-CHECKED HERE --------------------
+	# 10a-app-checkout's own gate 7/7b asserts every one of these at build time,
+	# right after writing them. This harness does not trust that self-report --
+	# same reason it re-measures ownership and tag history above rather than
+	# reading the stage's echo -- so each property is re-measured against the
+	# ARTIFACT: a checkout carrying its clone reflog, a mirror's stray branches,
+	# the build host's own local-mirror path or the builder's git identity would
+	# each tell whoever pokes at a shipped card something about how and where it
+	# was built, which is exactly what the anonymous-clone scrub exists to avoid.
+
+	# No reflog: it records "clone: from <source>" and is stamped with the
+	# builder's identity.
+	if [ -e "${APP_DIR}/.git/logs" ]; then
+		bad "${APP_ROOT}/.git/logs is absent -- present, it would record the build source and the builder's identity"
+	else
+		ok "${APP_ROOT}/.git/logs is absent"
+	fi
+	if [ -z "$(git -C "${APP_DIR}" reflog show --all 2>/dev/null | head -n1)" ]; then
+		ok "${APP_ROOT} carries no reflog entries"
+	else
+		bad "${APP_ROOT} carries reflog entries -- they record the build source and the builder's identity"
+	fi
+
+	# No ref outside a tag or origin's own remote-tracking refs: a mirror's
+	# work-in-progress branch, a local branch, a stash or a note would each keep
+	# its own commits reachable in the object store too.
+	STRAY_REF="$(git -C "${APP_DIR}" for-each-ref --format='%(refname)' | grep -Ev '^refs/(tags|remotes/origin)/' | head -n1 || true)"
+	if [ -z "${STRAY_REF}" ]; then
+		ok "${APP_ROOT} carries no refs outside tags and origin's remote-tracking refs"
+	else
+		bad "${APP_ROOT} carries ${STRAY_REF}, which is not a tag or a remote-tracking ref of origin"
+	fi
+
+	# No /mnt/git string anywhere under .git outside the object store: that is
+	# this estate's local-mirror path, and a checkout naming it would tell
+	# whoever pokes at a shipped card exactly where and how it was built.
+	LEAKED_PATH="$(grep -rIlF --exclude-dir=objects -- '/mnt/git' "${APP_DIR}/.git" 2>/dev/null | head -n1 || true)"
+	if [ -z "${LEAKED_PATH}" ]; then
+		ok "${APP_ROOT}/.git names no /mnt/git build-source path"
+	else
+		bad "${LEAKED_PATH#"${ROOTFS}"} names a /mnt/git build-source path"
+	fi
+
+	# No builder git identity anywhere under .git outside the object store,
+	# computed the same way 10a-app-checkout computes it at build time. This
+	# only measures anything when this harness runs on a host with a git
+	# identity configured (the build host or a CI runner right after the build);
+	# elsewhere it is UNKNOWN rather than a pass it did not earn.
+	BUILDER_IDENT="$(git var GIT_COMMITTER_IDENT 2>/dev/null | sed -E 's/ [0-9]+ [-+][0-9]{4}$//' || true)"
+	if [ -n "${BUILDER_IDENT}" ]; then
+		LEAKED_IDENT="$(grep -rIlF --exclude-dir=objects -- "${BUILDER_IDENT}" "${APP_DIR}/.git" 2>/dev/null | head -n1 || true)"
+		if [ -z "${LEAKED_IDENT}" ]; then
+			ok "${APP_ROOT}/.git records no builder git identity (${BUILDER_IDENT})"
+		else
+			bad "${LEAKED_IDENT#"${ROOTFS}"} records the builder's git identity (${BUILDER_IDENT})"
+		fi
+	else
+		unknown "this host has no git identity configured, so the builder-identity leak check could not be measured"
+	fi
+
+	# origin is the PUBLIC anonymous URL exactly, not merely fetchable. Same
+	# default 10a-app-checkout and elspi.conf use for REFLEX_ORIGIN_URL, and
+	# overridable the same way for a synthetic rootfs in the test harness.
+	REFLEX_ORIGIN_URL="${REFLEX_ORIGIN_URL:-https://github.com/Funkenjaeger/reflex.git}"
+	if [ "${APP_ORIGIN}" = "${REFLEX_ORIGIN_URL}" ]; then
+		ok "origin is the anonymous HTTPS URL (${REFLEX_ORIGIN_URL})"
+	else
+		bad "origin is the anonymous HTTPS URL: expected ${REFLEX_ORIGIN_URL}, found '${APP_ORIGIN}'"
+	fi
 fi
 
 # --- (C) the baked release is a FULL release --------------------------------
@@ -611,10 +691,25 @@ CFG="${ROOTFS}/boot/firmware/config.txt"
 CMD="${ROOTFS}/boot/firmware/cmdline.txt"
 
 for line in "dtparam=i2c_arm=on" "dtparam=spi=on" "camera_auto_detect=0" \
-            "enable_uart=1" "disable_splash=1" "usb_max_current_enable=1" \
-            "dtoverlay=nospi10"; do
+            "enable_uart=1" "disable_splash=1" "dtoverlay=nospi10"; do
 	check "config.txt: ${line}" grep -qxF "${line}" "${CFG}"
 done
+
+# usb_max_current_enable is a BUILD KNOB (ELSPI_USB_MAX_CURRENT, off unless a
+# site build config turns it on), so config.txt is checked against what the
+# manifest DECLARES, in both directions: declared on and missing is a panel
+# that browns out; declared off and present is an image asking more of the
+# supply than its manifest admits.
+USB_DECLARED="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))["boot_config"]["usb_max_current_enable"]; print({True: "on", False: "off"}[v])' "${MANIFEST}" 2>/dev/null || true)"
+case "${USB_DECLARED}" in
+	on)  check "config.txt: usb_max_current_enable=1 (the manifest declares it on)" grep -qxF "usb_max_current_enable=1" "${CFG}" ;;
+	off) if grep -q '^usb_max_current_enable=' "${CFG}" 2>/dev/null; then
+		     bad "config.txt has no usb_max_current_enable (the manifest declares it off)"
+	     else
+		     ok "config.txt has no usb_max_current_enable (the manifest declares it off)"
+	     fi ;;
+	*)   bad "the manifest declares boot_config.usb_max_current_enable as a boolean" ;;
+esac
 
 # THE serial console must be off the Modbus UART.
 if grep -q "console=serial0" "${CMD}" 2>/dev/null; then
@@ -648,12 +743,20 @@ fi
 # ---------------------------------------------------------------------------
 section "Timezone"
 
-if [ -L "${ROOTFS}/etc/localtime" ]; then
+# The zone an UNSEEDED card keeps -- Imager's customisation page replaces it
+# per card through cloud-init. Checked against what the build DECLARED
+# (build_defaults.timezone: elspi.conf's Etc/UTC, or a site build config's),
+# not against a zone typed into this harness, so a site build is verified by
+# the same line as a public one.
+TZ_DECLARED="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["build_defaults"]["timezone"])' "${MANIFEST}" 2>/dev/null || true)"
+if [ -z "${TZ_DECLARED}" ]; then
+	bad "the manifest declares build_defaults.timezone"
+elif [ -L "${ROOTFS}/etc/localtime" ]; then
 	TZ_TARGET="$(readlink "${ROOTFS}/etc/localtime")"
-	if [[ "${TZ_TARGET}" == *"America/New_York"* ]]; then
-		ok "timezone is America/New_York (the -0500 bug fixed at source)"
+	if [[ "${TZ_TARGET}" == */zoneinfo/"${TZ_DECLARED}" ]]; then
+		ok "timezone is the declared build default ${TZ_DECLARED}"
 	else
-		bad "timezone is America/New_York (found: ${TZ_TARGET})"
+		bad "timezone is the declared build default ${TZ_DECLARED} (found: ${TZ_TARGET})"
 	fi
 else
 	bad "/etc/localtime is a symlink"
@@ -826,21 +929,98 @@ check "seed unit's ExecStart is '-' prefixed (cannot fail the boot)" \
 check "seed unit orders After=cloud-final.service" \
 	grep -qE '^After=.*cloud-final\.service' "${FBS_UNIT_FILE}"
 
+# The script installs the Imager seed's SSH keys into /home (the image is
+# keyless). ProtectHome=yes -- which this unit shipped with until 2026-09-23 --
+# hides /home from the service, and every key install would then fail with the
+# seed wiped afterwards.
+if grep -qiE '^ProtectHome=(yes|true|on|1|read-only|tmpfs)[[:space:]]*$' "${FBS_UNIT_FILE}" 2>/dev/null; then
+	bad "seed unit does NOT hide /home (it sets $(grep -iE '^ProtectHome=' "${FBS_UNIT_FILE}"); the seeded SSH keys could never be installed)"
+else
+	ok "seed unit does not hide /home (ProtectHome is off, so it can install the seeded SSH keys)"
+fi
+
 # What none of the above can see.
-unknown "The first-boot seed has NEVER RUN -- image_2026-09-13-elspi booted on the real Pi and systemd deleted the unit's job to break an ordering cycle, so not one step executed. The checks above would have been green on that image except for the two ordering-cycle assertions added afterwards. Whether the radio comes on, whether the regulatory domain takes, whether cloud-init applies the Imager password, and whether the seed is actually erased from the FAT partition are all still Tier 3 items needing a real card in the real Pi."
+unknown "The first-boot seed has NEVER RUN -- image_2026-09-13-elspi booted on the real Pi and systemd deleted the unit's job to break an ordering cycle, so not one step executed. The checks above would have been green on that image except for the two ordering-cycle assertions added afterwards. Whether the radio comes on, whether the regulatory domain takes, whether cloud-init applies the Imager password, whether the seeded SSH keys land in authorized_keys, and whether the seed is actually erased from the FAT partition are all still Tier 3 items needing a real card in the real Pi. (The key install and password paths ARE exercised offline, against a synthetic rootfs, by tests/test-first-boot-seed.sh.)"
 
 # ---------------------------------------------------------------------------
-section "First-boot UI hook (stage-elspi/14-first-boot-ui -- task 6aa73b01)"
+section "SSH: keyless image, authentication is the operator's Imager choice"
 
-# THIS IS A SCAFFOLD, NOT THE FEATURE. Task 6aa73b01 item 1 asks for a fresh
-# card to boot into the UI with a checkout baked into the image and converge
-# run automatically. That would move the application across
-# docs/design/seam.md's ratified line (11-manifest's delta_layer_owns still
-# names the reflex checkout and reflex-ui.service as deltas-owned), which this
-# order was told not to re-litigate. So this section asserts only the TRIGGER:
-# a unit that exists, is enabled, and is ordered correctly -- not that it
-# starts anything, because today it never does. See
-# stage-elspi/14-first-boot-ui/README.md.
+# DECIDED 2026-09-23. Two properties, both stated in the manifest and both
+# checked against the rootfs here:
+#
+#   1. NO KEY IS BAKED IN. This image is built from a public repo into public
+#      release images; nobody's personal key belongs in one. Keys arrive from
+#      Imager's customisation page and the seed unit installs them.
+#   2. THE IMAGE SETS NO SSH AUTHENTICATION OPTION. Imager decides per card:
+#      "public-key only" becomes PasswordAuthentication no, password SSH
+#      becomes yes, both written by cloud-init to sshd_config.d/50-cloud-init.conf.
+#      sshd takes the FIRST value it reads, so any option the image set -- a
+#      drop-in sorting ahead of "50-", or a line in sshd_config's body -- would
+#      override that choice or stand in for it. Before 2026-09-23 the image set
+#      PasswordAuthentication no (PUBKEY_ONLY_SSH=1), which made the password an
+#      operator typed into Imager useless over SSH.
+if [ "${SSH_KEY_SOURCE}" = "imager-seed" ]; then
+	ok "manifest declares ssh.key_source=imager-seed"
+else
+	bad "manifest declares ssh.key_source=imager-seed (found: '${SSH_KEY_SOURCE}')"
+fi
+if [ "${SSH_AUTH}" = "imager-choice" ]; then
+	ok "manifest declares ssh.auth=imager-choice"
+else
+	bad "manifest declares ssh.auth=imager-choice (found: '${SSH_AUTH}')"
+fi
+
+SU_HOME="$(awk -F: -v u="${SERVICE_USER}" '$1==u {print $6}' "${ROOTFS}/etc/passwd")"
+for ak in "${SU_HOME:-/home/${SERVICE_USER}}/.ssh/authorized_keys" /root/.ssh/authorized_keys; do
+	if [ -e "${ROOTFS}${ak}" ] || [ -L "${ROOTFS}${ak}" ]; then
+		bad "no baked SSH key: ${ak} is ABSENT (it exists -- the image is supposed to be keyless)"
+	else
+		ok "no baked SSH key: ${ak} is absent"
+	fi
+done
+
+SSHD_AUTH_RE='^[[:space:]]*(PasswordAuthentication|AuthenticationMethods|PubkeyAuthentication)[[:space:]]'
+SSHD_CFG="${ROOTFS}/etc/ssh/sshd_config"
+if [ ! -f "${SSHD_CFG}" ]; then
+	bad "/etc/ssh/sshd_config present (ENABLE_SSH=1 -- is openssh-server installed?)"
+else
+	ok "/etc/ssh/sshd_config present"
+	if grep -qiE "${SSHD_AUTH_RE}" "${SSHD_CFG}"; then
+		bad "sshd_config's body sets no SSH authentication option (it does: $(grep -m1 -iE "${SSHD_AUTH_RE}" "${SSHD_CFG}" | tr -s ' \t' ' '))"
+	else
+		ok "sshd_config's body sets no SSH authentication option"
+	fi
+	# cloud-init writes 50-cloud-init.conf only when sshd_config Includes the
+	# drop-in directory; without the Include it edits sshd_config in place,
+	# after any line already there. Either way works, but the Include is what
+	# the rest of this reasoning -- and the seed unit's report -- assumes.
+	check "sshd_config Includes /etc/ssh/sshd_config.d/*.conf" \
+		grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' "${SSHD_CFG}"
+fi
+
+SSHD_OVERRIDES=""
+for f in "${ROOTFS}/etc/ssh/sshd_config.d"/*.conf; do
+	[ -f "${f}" ] || continue
+	if grep -qiE "${SSHD_AUTH_RE}" "${f}"; then
+		SSHD_OVERRIDES="${SSHD_OVERRIDES} ${f#"${ROOTFS}"}"
+	fi
+done
+if [ -n "${SSHD_OVERRIDES}" ]; then
+	bad "no sshd_config.d drop-in sets an SSH authentication option (found:${SSHD_OVERRIDES}) -- it would override the choice made on Imager's page"
+else
+	ok "no sshd_config.d drop-in sets an SSH authentication option (Imager's 50-cloud-init.conf is what sshd reads first)"
+fi
+
+# ---------------------------------------------------------------------------
+section "First-boot UI hook (stage-elspi/14-first-boot-ui)"
+
+# THIS IS A SCAFFOLD, NOT THE FEATURE. The goal is a fresh card that boots
+# into the UI with converge run automatically. The checkout IS baked in since
+# the 2026-09-21 seam amendment (10a-app-checkout), but starting it unattended
+# is a separate decision and the hook's converge/start branch is unwritten.
+# So this section asserts only the TRIGGER: a unit that exists, is enabled,
+# and is ordered correctly -- not that it starts anything, because today it
+# never does. See stage-elspi/14-first-boot-ui/README.md.
 
 FBUI_UNIT_FILE="${ROOTFS}${FBUI_UNIT}"
 FBUI_SCRIPT_FILE="${ROOTFS}${FBUI_SCRIPT}"
@@ -924,9 +1104,9 @@ fi
 
 # THE THING THIS SCAFFOLD CANNOT PROVE, STATED OUT LOUD RATHER THAN LEFT
 # IMPLICIT. Not a hardware limit like the others in this section -- a
-# SEAM limit: there is nothing to run this against until task 6aa73b01 item 1
-# is decided.
-unknown "The first-boot-ui hook's converge/start branch has NEVER RUN, on any image, because no image has ever had a checkout at .paths.app_root for it to find. The checks above prove the trigger is wired correctly; they cannot and do not prove anything starts, because nothing does yet."
+# SEAM limit: the checkout is baked in, but the branch that would converge
+# and start it has not been written.
+unknown "The first-boot-ui hook's converge/start branch has NEVER RUN, on any image: the app is baked in at .paths.app_root, but that branch is unwritten, so the hook logs verdict=UNIMPLEMENTED and starts nothing. The checks above prove the trigger is wired correctly; they cannot and do not prove anything starts, because nothing does yet."
 
 # ---------------------------------------------------------------------------
 section "Artifact integrity"
@@ -1080,13 +1260,15 @@ else
 		#
 		# nspawn defaults both to "auto", which writes the HOST's timezone and
 		# resolv.conf INTO the container rootfs. Measured 2026-09-07: a boot
-		# attempt repointed the image's /etc/localtime from America/New_York to
-		# Etc/UTC, and replaced /etc/resolv.conf with Docker's.
+		# attempt repointed the image's /etc/localtime to the host's Etc/UTC,
+		# and replaced /etc/resolv.conf with Docker's.
 		#
 		# Both are fields this image deliberately controls -- the timezone is
-		# the -0500 bug fixed at source -- so the harness was silently undoing
-		# the thing it then went on to check. A later run duly reported
-		# "timezone is America/New_York (found: Etc/UTC)" as an image defect.
+		# the declared build default -- so the harness was silently undoing
+		# the thing it then went on to check, and a later run duly reported
+		# the host's zone as an image defect. (The public default is now
+		# Etc/UTC itself, which would make the same clobbering INVISIBLE on a
+		# UTC host: all the more reason it stays off.)
 		timeout 300 systemd-nspawn -D "${ROOTFS}" \
 			--boot --register=no --keep-unit --quiet \
 			--timezone=off --resolv-conf=off \

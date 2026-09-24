@@ -1,20 +1,29 @@
 #!/bin/bash
 # Build the elspi image. Wraps build-docker.sh and handles the host-side traps.
 #
-#   ./build-elspi.sh                       # bake ~/.ssh/id_ed25519.pub
-#   ./build-elspi.sh path/to/key.pub       # bake a specific public key
+#   ./build-elspi.sh
 #
-# OS_LIST_URL=<https-or-file-url>  (env var, not a flag -- $1 above is already
-#   taken by the pubkey path, and every other knob here, PRESERVE_CONTAINER /
-#   CONTINUE / IMG_NAME / CONTAINER_NAME, is env-var-only, so this follows the
-#   same shape). Passed straight through as `--url` to tools/make-os-list.sh.
+# It takes NO arguments, and in particular no SSH key: the image is KEYLESS
+# (2026-09-23). Keys and the password come from Raspberry Pi Imager's
+# customisation page at flash time -- see elspi.conf's SSH block. Until then
+# $1 was a public key to bake in; passing one now is refused with a message
+# rather than silently ignored.
+#
+# OS_LIST_URL=<https-or-file-url>  (env var, not a flag -- every knob here,
+#   PRESERVE_CONTAINER / CONTINUE / IMG_NAME / CONTAINER_NAME, is
+#   env-var-only, so this follows the same shape). Passed straight through as
+#   `--url` to tools/make-os-list.sh.
 #   Unset by default: the build still succeeds and deploy/os_list.json still
 #   gets written, but with a file:// URL good on THIS machine only, and this
 #   script prints a loud WARNING below saying so. Set it once you know where
 #   the image and its os_list.json will actually be served from -- for a
 #   tagged GitHub release that is:
-#     OS_LIST_URL=https://github.com/<org>/<repo>/releases/download/<tag>/os_list.json
-#   See docs/flashing.md.
+#     OS_LIST_URL=https://github.com/<org>/<repo>/releases/download/<tag>/image_<date>-elspi.img.xz
+#   (the image url Imager downloads from -- see docs/flashing.md).
+#
+# ELSPI_SITE_CONF=<file>  (env var, optional) a site build config sourced
+#   after elspi.conf -- see elspi.conf's last block. This script mounts it
+#   into the build container and forwards the variable.
 #
 # A NEW file, per docs/design/fork.md: build-docker.sh is upstream and stays untouched.
 #
@@ -40,12 +49,14 @@
 #    .deb into the user's own tree and expose the static binary under the name
 #    the precheck looks for. `apt-get download` needs no privilege.
 #
-# 2. ONLY GIT_HASH IS FORWARDED INTO THE CONTAINER (build-docker.sh:149). An
-#    ELSPI_PUBKEY exported on the host simply is not there when build.sh runs,
-#    so the build dies INSIDE the container, minutes in, complaining about a
-#    variable you can see set in your own shell. Forwarded here via
-#    PIGEN_DOCKER_OPTS, by NAME -- never name=value, because that variable is
-#    expanded unquoted and every SSH public key contains spaces.
+# 2. ONLY GIT_HASH IS FORWARDED INTO THE CONTAINER (build-docker.sh:149). A
+#    build parameter exported on the host simply is not there when build.sh
+#    runs, so the build misbehaves INSIDE the container, minutes in, over a
+#    variable you can see set in your own shell. The REFLEX_* parameters are
+#    forwarded below via PIGEN_DOCKER_OPTS, by NAME -- never name=value,
+#    because that variable is expanded unquoted and a value with spaces would
+#    be word-split into separate docker arguments. (This trap was first hit
+#    with ELSPI_PUBKEY, the build-time key the image no longer takes.)
 #
 # 3. The base image is i386/debian:trixie on x86_64, not debian:trixie
 #    (build-docker.sh:85-92). Worth knowing before debugging a container that
@@ -55,7 +66,16 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHIM="${HOME}/.local/qemu-shim"
-PUBKEY_FILE="${1:-${HOME}/.ssh/id_ed25519.pub}"
+
+# KEYLESS: refuse the old `./build-elspi.sh path/to/key.pub` form out loud.
+# Ignoring the argument would let someone believe their key went in.
+if [ "$#" -gt 0 ]; then
+	echo "FATAL: build-elspi.sh takes no arguments (got: $*)."
+	echo "  The elspi image is KEYLESS: no SSH key is baked in at build time."
+	echo "  Put your public key (and/or a password) on Raspberry Pi Imager's"
+	echo "  customisation page when you flash -- see docs/flashing.md."
+	exit 1
+fi
 
 cd "${REPO}"
 
@@ -83,24 +103,7 @@ if ! file -L "${RESOLVED}" | grep -Eq "statically linked|static-pie linked"; the
 fi
 echo "qemu-arm: ${RESOLVED} (static)"
 
-# --- the key baked into the image -------------------------------------------
-# A PUBLIC key, not a secret. It is what makes a failed UI recoverable over SSH
-# instead of by power-cycling a lathe: the account ships locked, so password
-# SSH cannot work, and a card with no key in it is reachable only from the
-# touchscreen -- which is the thing under test.
-[ -f "${PUBKEY_FILE}" ] || { echo "FATAL: no public key at ${PUBKEY_FILE}"; exit 1; }
-ELSPI_PUBKEY="$(cat "${PUBKEY_FILE}")"
-export ELSPI_PUBKEY
-case "${ELSPI_PUBKEY}" in
-	ssh-*|ecdsa-*|sk-*) ;;
-	*) echo "FATAL: ${PUBKEY_FILE} does not look like an SSH public key"; exit 1 ;;
-esac
-echo "baking:   $(ssh-keygen -lf "${PUBKEY_FILE}" | awk '{print $1, $2, $4}')"
-
-# --- trap 2: forward it by NAME ---------------------------------------------
-export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS:-} -e ELSPI_PUBKEY"
-
-# --- the app-release parameters, forwarded the same way ---------------------
+# --- trap 2: the app-release parameters, forwarded by NAME ------------------
 # stage-elspi/10a-app-checkout's REFLEX_SOURCE / REFLEX_RELEASE /
 # REFLEX_ORIGIN_URL are parameters of the BUILD (docs/design/seam.md amendment
 # 2026-09-21). They are read inside the container, and build-docker.sh passes
@@ -111,21 +114,45 @@ export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS:-} -e ELSPI_PUBKEY"
 # BY NAME ONLY, never name=value: PIGEN_DOCKER_OPTS is expanded unquoted.
 # Only names that are SET are added -- `-e FOO` for an unset FOO passes the
 # host's (absent) value and would override elspi.conf's default with empty.
-for _v in REFLEX_SOURCE REFLEX_RELEASE REFLEX_ORIGIN_URL; do
+for _v in REFLEX_SOURCE REFLEX_RELEASE REFLEX_ORIGIN_URL ELSPI_USB_MAX_CURRENT; do
 	if [ -n "${!_v:-}" ]; then
-		export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS} -e ${_v}"
+		export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS:-} -e ${_v}"
 		echo "forwarding: ${_v}"
 	fi
 done
 unset _v
 
+# --- the optional SITE build config (elspi.conf's last block) ---------------
+# elspi.conf is sourced twice: here on the host by build-docker.sh, and inside
+# the container by build.sh. The second one only sees the file if it is
+# MOUNTED there and only knows its name if ELSPI_SITE_CONF is FORWARDED -- the
+# same trap as a local REFLEX_SOURCE, removed here rather than documented.
+# It is mounted read-only at its own absolute path, so the one variable means
+# the same file on both sides. A path with whitespace or a ':' cannot be
+# passed through PIGEN_DOCKER_OPTS (expanded unquoted; ':' is docker's -v
+# separator), so it is refused rather than mangled.
+if [ -n "${ELSPI_SITE_CONF:-}" ]; then
+	[ -f "${ELSPI_SITE_CONF}" ] && [ -r "${ELSPI_SITE_CONF}" ] \
+		|| { echo "FATAL: ELSPI_SITE_CONF=${ELSPI_SITE_CONF} is not a readable file"; exit 1; }
+	ELSPI_SITE_CONF="$(cd "$(dirname "${ELSPI_SITE_CONF}")" && pwd)/$(basename "${ELSPI_SITE_CONF}")"
+	case "${ELSPI_SITE_CONF}" in
+		*[[:space:]:]*)
+			echo "FATAL: ELSPI_SITE_CONF=${ELSPI_SITE_CONF} contains whitespace or ':'."
+			echo "       Move or link it to a plain path; it has to cross into the container."
+			exit 1 ;;
+	esac
+	export ELSPI_SITE_CONF
+	export PIGEN_DOCKER_OPTS="${PIGEN_DOCKER_OPTS:-} -v ${ELSPI_SITE_CONF}:${ELSPI_SITE_CONF}:ro -e ELSPI_SITE_CONF"
+	echo "site config: ${ELSPI_SITE_CONF} (mounted read-only into the build container)"
+fi
+
 # A LOCAL MIRROR PATH IS NOT AUTOMATICALLY VISIBLE INSIDE THE CONTAINER, and
-# this is the one trap this loop does not remove. `REFLEX_SOURCE=/mnt/git/
-# reflex.git` names a path on the HOST; the build runs in Docker, so it also
-# needs bind-mounting:
+# this is the one trap this loop does not remove. `REFLEX_SOURCE=/path/to/
+# mirror/reflex.git` names a path on the HOST; the build runs in Docker, so it
+# also needs bind-mounting, at the same path:
 #
-#   REFLEX_SOURCE=/mnt/git/reflex.git \
-#   PIGEN_DOCKER_OPTS="-v /mnt/git/reflex.git:/mnt/git/reflex.git:ro" \
+#   REFLEX_SOURCE=/path/to/mirror/reflex.git \
+#   PIGEN_DOCKER_OPTS="-v /path/to/mirror/reflex.git:/path/to/mirror/reflex.git:ro" \
 #   ./build-elspi.sh
 #
 # Said here rather than left to be discovered three hours in, which is how
@@ -219,7 +246,7 @@ if [ -z "${OS_LIST_URL:-}" ]; then
 	echo "  a card) cannot open it and fails with something like 'not found: <path>'."
 	echo "  This deploy/os_list.json is fine for testing a --repo flash from THIS"
 	echo "  machine only. Before publishing it anywhere else, re-run with:"
-	echo "      OS_LIST_URL=https://github.com/<org>/<repo>/releases/download/<tag>/os_list.json ./build-elspi.sh"
+	echo "      OS_LIST_URL=https://github.com/<org>/<repo>/releases/download/<tag>/image_<date>-elspi.img.xz ./build-elspi.sh"
 	echo "  (or whatever URL this image will actually be served from). See docs/flashing.md."
 	echo "=================================================================="
 fi

@@ -120,7 +120,8 @@ This image needs Imager 2.0 or newer.
 seeds a card through firstrun.sh / userconf.txt, and this image never reads
 those: its first boot is cloud-init, fed from user-data / network-config /
 meta-data on the FAT partition. On 1.x you get an unseeded card: no password, no
-Wi-Fi, no country, and only the build-time public key to get in.
+key, no Wi-Fi, no country -- and, since the image carries no SSH key of its own,
+no SSH way in at all.
 
 Install 2.x from https://www.raspberrypi.com/software/
 EOF
@@ -131,5 +132,7 @@ fi
 echo "Imager:  ${IMAGER} (version ${VERSION}, from ${SOURCE})"
 echo "Repo:    ${OSLIST}"
 echo "Expect ONE OS entry, then Device, Storage, and the customisation page."
+echo "On that page: username 'default', and a PASSWORD and/or an SSH PUBLIC KEY."
+echo "The image is keyless -- with neither, the card has no SSH way in (touchscreen only)."
 
 exec "${IMAGER}" --repo "${OSLIST}"

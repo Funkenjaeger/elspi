@@ -84,6 +84,7 @@ nav:
   - Using a card:
       - Flashing a card: flashing.md
       - Provisioning: provisioning.md
+      - Site layer: site-layer.md
       - First load (SWD): swd-first-load.md
   - Design notes:
       - Where the image ends: design/seam.md

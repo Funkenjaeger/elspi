@@ -31,8 +31,9 @@ logs.
 
 **The target machine:** a Raspberry Pi 5 with the touchscreen attached. The
 image is `armhf` userland on a 64-bit kernel, with `config.txt` written for that
-board — including upstream's `[pi5] dtoverlay=nospi10` and
-`usb_max_current_enable=1`.
+board — including upstream's `[pi5] dtoverlay=nospi10`. The public image leaves
+`usb_max_current_enable` off; a Pi 5 powering a USB touchscreen may need it, and
+a [site build config](provisioning.md#a-site-build-config) turns it on.
 
 **Keep the card that is currently in the machine.** It is the rollback and it is
 the running lathe. Flash a *second* card.
@@ -82,12 +83,12 @@ rpi-imager --repo https://github.com/Funkenjaeger/elspi/releases/latest/download
     a release asset:
 
     ```
-    OS_LIST_URL=https://github.com/Funkenjaeger/elspi/releases/download/<tag>/os_list.json ./build-elspi.sh
+    OS_LIST_URL=https://github.com/Funkenjaeger/elspi/releases/download/<tag>/image_<date>-elspi.img.xz ./build-elspi.sh
     ```
 
-    (Note: that URL is for `os_list.json` itself, matching the `--repo` value
-    used above; `os_list.json`'s own `url` field inside it points at the
-    `image_*.img.xz` asset next to it in the same release.) Leave it unset for
+    (Note: that is the image's own URL -- the one Imager downloads once it
+    reads the `url` field inside `os_list.json` -- not `os_list.json`'s own
+    address, which is what `--repo` above points at.) Leave it unset for
     a local-only build-and-flash — `build-elspi.sh` prints a WARNING naming the
     `file://` URL it wrote and which machine it is only good on, so a build
     headed for a release does not get published by accident with the wrong
@@ -108,7 +109,9 @@ rpi-imager --repo https://github.com/Funkenjaeger/elspi/releases/latest/download
     Imager 2.x never offers the customisation page for a local file and does not
     say so — `imageSupportsCustomization()` is false for a file URL, so the
     wizard silently skips every customisation step. The flash succeeds and you
-    get a card with **no password, no key, no Wi-Fi and no country**. The only
+    get a card with **no password, no key, no Wi-Fi and no country** — and
+    because the image carries no SSH key of its own, **no SSH way in at all**:
+    the touchscreen is the only access to that card. The only
     visible difference is a wizard with two fewer pages. The page appears only
     for an entry in an OS-list repository declaring
     `init_format: cloudinit-rpi`, which is what `os_list.json` is for.
@@ -122,13 +125,20 @@ overwrites the files.
 
 | Field | Value | What it becomes |
 |---|---|---|
-| Hostname | `elspi` | the machine's hostname, matching the image's `TARGET_HOSTNAME`, so `ssh default@elspi` works on a network with mDNS |
+| Hostname | `elspi`, or a name of your own | the machine's hostname. The image's built-in `elspi` (`TARGET_HOSTNAME`) is only a default: whatever you type here replaces it on first boot, and `ssh default@<that name>` then works on a network with mDNS |
+| Time zone / keyboard layout | yours | cloud-init sets both on first boot. An unseeded card keeps the image defaults: `Etc/UTC` and a US layout |
 | Username | **`default` — exactly** | nothing: the account already exists in the image. See below |
-| Password | pick one and write it down | the `default` account's password, and therefore the `sudo` password. The account ships **locked**; this is what unlocks it |
-| SSH | **enable**, and choose **“Allow public-key authentication only”** | `sshd` posture. See below |
-| Public key | your workstation's `id_ed25519.pub` | `~default/.ssh/authorized_keys` — the recovery path, and how you get in at all |
+| Password | pick one and write it down | the `default` account's password, and therefore the `sudo` password — and, with password SSH, your SSH login. The account ships **locked**; this is what unlocks it |
+| SSH | **enable**; then allow password authentication, *or* paste a key and optionally choose **“Allow public-key authentication only”** | how `sshd` authenticates on this card. The image sets nothing here itself. See below |
+| Public key | *optional:* your workstation's `id_ed25519.pub` | `~default/.ssh/authorized_keys`, installed by the image's seed unit. The image ships **no key of its own** |
 | Wi-Fi SSID / password | the shop network | a NetworkManager keyfile |
-| Wireless LAN country | **`US`** (or yours) | the regulatory domain. Without it the radio stays off — see below |
+| Wireless LAN country | **yours** (`US`, `GB`, `DE`, …) | the regulatory domain. Without it the radio stays off — see below |
+
+Imager has no field for the system **locale**: its cloud-init output carries
+no `locale:` key, so every card keeps the image's `en_US.UTF-8`. The
+application formats nothing through the locale; it affects only shell tools
+over SSH. A build of your own can set `LOCALE_DEFAULT` (see
+[the site build config](provisioning.md#a-site-build-config)).
 
 **The username must be `default`.** That is the image's service user: the
 account that owns `/var/lib/reflex-config`, `/var/log/reflex` and `~/projects`,
@@ -137,12 +147,26 @@ and Imager creates a *second*, unrelated account — the lathe's own account sta
 locked, the new one owns nothing the application needs, and every path in the
 delta layer points at the wrong home directory.
 
-**Choose public-key-only SSH, not password SSH.** The image sets
-`PasswordAuthentication no` on purpose. Imager's password option writes
-`ssh_pwauth: true`, and cloud-init turns that into `PasswordAuthentication yes`
-— silently reversing the image's posture. The seed unit **warns about this in
-the journal and does not revert it**, because it was your explicit choice; but a
-lathe reachable by SSH password is not what this image ships.
+**Set a password, a public key, or both — not neither.** The image is
+*keyless*: it is built from a public repository into public release images, so
+no SSH key is baked into it, and the `default` account ships locked. Whatever
+you type on this page is therefore the only way in over SSH:
+
+- **A password** is enough on its own. Leave password authentication allowed
+  and `ssh default@elspi` asks for it. This is the easy path if you do not
+  already use SSH keys.
+- **A public key** is enough on its own too, and you may then choose
+  **“Allow public-key authentication only”** so the card refuses passwords over
+  SSH. The password, if you set one, still works at the console and for `sudo`.
+- **Neither** leaves a card reachable **only from the touchscreen**. The seed
+  unit says so in the journal (`NO SSH WAY IN`), but by then you are standing
+  at the machine: re-flash instead.
+
+**The SSH choice is yours, per card, and the image does not second-guess it.**
+Imager writes it as `ssh_pwauth: true` or `false`; cloud-init turns that into
+`PasswordAuthentication yes` or `no` in `/etc/ssh/sshd_config.d/50-cloud-init.conf`.
+The image sets no authentication option anywhere that could override it, and
+the seed unit only *reports* which one you picked.
 
 **The country is not cosmetic.** netplan's `regulatory-domain` key is rendered
 only by the *networkd* backend and this image uses NetworkManager, so nothing in
@@ -163,18 +187,24 @@ does real work on a first boot, and the seed unit runs after it.
 
 During that time the image's oneshot unit
 (`elspi-first-boot-seed.service`, ordered after `cloud-final.service` and
-enabled in `cloud-init.target`) does the four things cloud-init cannot do here:
+enabled in `cloud-init.target`) does the five things cloud-init cannot do here
+(or cannot be trusted to):
 
 1. **Turns the Wi-Fi radio on.** The base image ships
    `NetworkManager.state` with `WirelessEnabled=false` and the wlan rfkill
    soft-blocked, so a perfectly rendered Wi-Fi keyfile would never associate.
 2. **Applies the regulatory domain** you typed as the country.
 3. **Installs the password you typed.** cloud-init ignores Imager's `passwd`
-   key for an account that already exists — and then unlocks the account
-   anyway, leaving a random build-time throwaway live. The unit installs your
-   hash over it. If you left the password blank, it re-locks the account
-   instead.
-4. **Takes the credentials off the card.** `user-data` is overwritten with a
+   key for an account that already exists, so the unit installs your hash
+   itself. The account ships locked with a bare `!` — no password hash of any
+   kind is in the image — so if you left the password blank it simply stays
+   locked. (Images built before 2026-09-23 locked it differently, and
+   cloud-init unlocked a random build-time throwaway; the unit still revokes
+   that on such a card.)
+4. **Installs your SSH keys**, each exactly once, into
+   `~default/.ssh/authorized_keys`, and logs their fingerprints. If the page
+   carried neither a password nor a key it logs `NO SSH WAY IN` instead.
+5. **Takes the credentials off the card.** `user-data` is overwritten with a
    bare `#cloud-config` and `network-config` with `network: {version: 2}`.
    `meta-data` is left intact: it carries the instance-id, and blanking it would
    make every subsequent boot look like a first boot. The FAT partition is
@@ -196,15 +226,16 @@ broke.
 
 ### Confirm it is up
 
-The screen cannot tell you anything yet, so use SSH. From the workstation whose
-public key you gave Imager:
+The screen cannot tell you anything yet, so use SSH — from the workstation
+whose public key you gave Imager, or with the password you set there:
 
 ```sh
 ssh default@elspi
 ```
 
 That succeeding is the whole test of this page: the hostname resolved, the
-network came up, the account exists and your key was installed. Then confirm the
+network came up, the account exists and your key or password was installed.
+Then confirm the
 seed unit actually ran:
 
 ```sh
@@ -257,10 +288,15 @@ address on your router or with `nmap -sn`, and connect by IP:
 problem on the workstation's side, not a problem with the card.
 
 **SSH refuses your key and asks for a password.** The public key did not reach
-the card. If you also have the build-time key baked into the image
-(`ELSPI_PUBKEY` at build time), try that one — the two are independent, which is
-the point of having both. Otherwise re-flash: there is no way in to fix
-`authorized_keys` from outside.
+the card. The image has no key of its own to fall back on. If you also set a
+password and left password authentication allowed, log in with it and read
+`journalctl -u elspi-first-boot-seed` for the key lines; otherwise re-flash —
+there is no way to fix `authorized_keys` from outside.
+
+**SSH says `Permission denied (publickey)` and never asks for a password.**
+You chose “Allow public-key authentication only” on Imager's page, so the card
+refuses SSH passwords by design. Use the key you pasted there, or re-flash and
+allow password authentication.
 
 **The screen stays black and SSH does not answer either.** That is a boot
 failure rather than the expected black screen. Attach a keyboard and check the

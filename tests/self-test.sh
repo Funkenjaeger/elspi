@@ -165,6 +165,8 @@ mutate "root password unlocked" \
 	"sed -i 's|^root:\\*|root:\$6\$abc\$def|' etc/shadow"
 mutate "service user password left usable (build throwaway ships)" \
 	"sed -i 's|^default:!|default:\$6\$abc\$def|' etc/shadow"
+mutate "service user locked the passwd -l way ('!<hash>': the hash ships, cloud-init unlocks it)" \
+	"sed -i 's|^default:!:|default:!\$6\$abc\$def:|' etc/shadow"
 mutate "service user dropped from the 'video' group" \
 	"sed -i '/^video:/d' etc/group"
 mutate "service user dropped from the 'dialout' group (Modbus)" \
@@ -172,7 +174,7 @@ mutate "service user dropped from the 'dialout' group (Modbus)" \
 mutate "a DRM mode fragment reverts to User=root" \
 	"sed -i 's|^User=default|User=root|' usr/share/elspi/drm-modes/first-opener.conf"
 
-# The venv must be the service user's all the way down (Open Loops 6aac9465):
+# The venv must be the service user's all the way down:
 # reflex's updater `uv sync`s into it as that user, after flashing. Making an
 # entry owned by SOMEONE ELSE needs chown, i.e. root -- so without root this
 # mutation is reported as not run rather than registered as a pass it did not
@@ -206,8 +208,10 @@ mutate "SPI turned back off" \
 	"sed -i 's|^dtparam=spi=on|#dtparam=spi=on|' boot/firmware/config.txt"
 mutate "the Pi 5 nospi10 block dropped (ospi's regression)" \
 	"sed -i '/dtoverlay=nospi10/d' boot/firmware/config.txt"
-mutate "usb_max_current_enable removed (touchscreen brownouts)" \
-	"sed -i '/usb_max_current_enable/d' boot/firmware/config.txt"
+mutate "usb_max_current_enable present though the manifest declares it off" \
+	"printf 'usb_max_current_enable=1\n' >> boot/firmware/config.txt"
+mutate "the manifest declares usb_max_current_enable on but config.txt lacks it (touchscreen brownouts)" \
+	"sed -i 's|\"usb_max_current_enable\": false|\"usb_max_current_enable\": true|' etc/elspi-image.json"
 mutate "enable_uart removed" \
 	"sed -i '/enable_uart/d' boot/firmware/config.txt"
 mutate "serial console put back on the Modbus UART" \
@@ -288,8 +292,12 @@ mutate "asound.conf back on card 1 (the live defect)" \
 	"printf 'defaults.pcm.card 1\\ndefaults.ctl.card 1\\n' > etc/asound.conf"
 
 # Timezone
-mutate "timezone reverted off America/New_York" \
+mutate "timezone is not the declared build default" \
 	"ln -sf ../usr/share/zoneinfo/Europe/London etc/localtime"
+mutate "the manifest declares a different build-default timezone than the rootfs has" \
+	"sed -i 's|\"timezone\": \"Etc/UTC\"|\"timezone\": \"Europe/London\"|' etc/elspi-image.json"
+mutate "the manifest declares no build defaults at all" \
+	"python3 -c 'import json; p=\"etc/elspi-image.json\"; d=json.load(open(p)); d.pop(\"build_defaults\"); json.dump(d, open(p, \"w\"))'"
 
 # DRM plumbing
 mutate "a tty1 autologin shipped ACTIVE in the image" \
@@ -370,6 +378,40 @@ mutate "the seed unit's ExecStart loses its '-' prefix (can fail the boot)" \
 # script neutralises credentials nobody has read yet.
 mutate "the seed unit loses its After=cloud-final ordering" \
 	"sed -i '/^After=cloud-final.service\$/d' etc/systemd/system/elspi-first-boot-seed.service"
+# The unit this image shipped until 2026-09-23. With /home hidden, the seed
+# script cannot install a single Imager key -- and the image is keyless.
+mutate "the seed unit hides /home again (ProtectHome=yes: no seeded key could be installed)" \
+	"sed -i 's|^ProtectHome=no\$|ProtectHome=yes|' etc/systemd/system/elspi-first-boot-seed.service"
+
+# --- KEYLESS, and SSH auth is the operator's Imager choice (2026-09-23) -----
+#
+# A public key baked into a public release image is the thing this decision
+# exists to stop. The key below is not a key anyone holds: it is the right
+# SHAPE, which is all the harness may look at.
+mutate "a public key baked into the service user's authorized_keys" \
+	"mkdir -p home/default/.ssh && printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZpeHR1cmUtbm90LWEtcmVhbC1rZXktZml4dHVyZQ baked\\n' > home/default/.ssh/authorized_keys"
+mutate "a public key baked into root's authorized_keys" \
+	"mkdir -p root/.ssh && printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZpeHR1cmUtbm90LWEtcmVhbC1rZXktZml4dHVyZQ baked\\n' > root/.ssh/authorized_keys"
+# The drop-in first specified for the keyless change, and withdrawn before it
+# shipped (2026-09-23). Sorting ahead of cloud-init's 50-cloud-init.conf, it
+# would silently beat an operator who chose password SSH on Imager's page.
+mutate "a key-only sshd drop-in sorting AHEAD of cloud-init's 50-cloud-init.conf" \
+	"printf 'PasswordAuthentication no\\nKbdInteractiveAuthentication no\\n' > etc/ssh/sshd_config.d/10-elspi-keyonly.conf"
+# Sorting after it loses to Imager's choice, but decides whenever Imager made
+# none -- still a policy the image imposed.
+mutate "an sshd drop-in sorting AFTER cloud-init's that still sets an auth option" \
+	"printf 'PasswordAuthentication no\\n' > etc/ssh/sshd_config.d/90-late.conf"
+# What PUBKEY_ONLY_SSH=1 makes upstream stage2/01-sys-tweaks do.
+mutate "sshd_config's body says PasswordAuthentication no (PUBKEY_ONLY_SSH=1 is back)" \
+	"sed -i 's|^#PasswordAuthentication yes\$|PasswordAuthentication no|' etc/ssh/sshd_config"
+mutate "sshd_config no longer Includes sshd_config.d" \
+	"sed -i '/^Include /d' etc/ssh/sshd_config"
+mutate "the manifest declares a build-time key source" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d['ssh']['key_source']='build-time';json.dump(d,open(p,'w'))\""
+mutate "the manifest declares the image's own key-only SSH policy" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d['ssh']['auth']='pubkey-only';json.dump(d,open(p,'w'))\""
+mutate "the manifest does not declare ssh at all" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d.pop('ssh',None);json.dump(d,open(p,'w'))\""
 
 # --- THE BAKED APPLICATION (stage-elspi/10a-app-checkout, seam.md amendment
 #     2026-09-21) -----------------------------------------------------------
@@ -403,7 +445,7 @@ mutate "the checkout is not a reflex monorepo tree (no ui/pyproject.toml)" \
 # THE BUILD HOST'S PATH SHIPPED AS origin. The card in the machine shop then
 # fetches from a directory that exists only on whoever built the image.
 mutate "origin is the build host's local mirror path, not a fetchable URL" \
-	"git -C home/default/projects/reflex remote set-url origin /mnt/git/reflex.git"
+	"git -C home/default/projects/reflex remote set-url origin /path/to/mirror/reflex.git"
 # seam call 2: no credential enters this repo, and the image ships none.
 mutate "the shipped .git/config carries a credentialled URL" \
 	"git -C home/default/projects/reflex remote set-url origin https://user:tokenvalue@github.com/Funkenjaeger/reflex.git"
@@ -445,7 +487,7 @@ mutate "the manifest is not valid JSON" \
 mutate "the manifest is missing entirely" \
 	"rm -f etc/elspi-image.json"
 
-# The first-boot UI hook (stage-elspi/14-first-boot-ui, task 6aa73b01)
+# The first-boot UI hook (stage-elspi/14-first-boot-ui)
 #
 # THIS IS A SCAFFOLD, NOT THE FEATURE -- see stage-elspi/14-first-boot-ui/
 # README.md. The mutations below prove the TRIGGER is actually enforced:
@@ -592,6 +634,26 @@ else
 	echo "  FAIL  stage-elspi/10a-app-checkout did not do what it claims, or a"
 	echo "        guard that must refuse did not."
 	echo "        tests/test-app-checkout-stage.sh said:"
+	sed 's/^/           /' "${WORK}/out.txt"
+	FAILED=$((FAILED+1))
+fi
+
+# --- the first-boot seed script itself, run for real (2026-09-23) ----------
+# Collected here for the same reason as the runners above. Everything in the
+# seed section of verify-image.sh checks that the unit is INSTALLED and WIRED;
+# this runs the real script against a synthetic rootfs and Imager-shaped
+# user-data, and checks what it did: keys installed once and only once,
+# passwords applied, and the loud warning when a seed carries neither.
+echo
+echo "== the first-boot seed script, run for real (keyless image, 2026-09-23) =="
+echo "   Against a synthetic rootfs, with throwaway keys generated per run."
+echo "   Delegated to tests/test-first-boot-seed.sh."
+if bash "${HERE}/test-first-boot-seed.sh" >"${WORK}/out.txt" 2>&1; then
+	echo "  OK    the seed installs Imager keys once, applies passwords, warns on neither"
+	PASSED=$((PASSED+1))
+else
+	echo "  FAIL  the first-boot seed script did not do what it claims."
+	echo "        tests/test-first-boot-seed.sh said:"
 	sed 's/^/           /' "${WORK}/out.txt"
 	FAILED=$((FAILED+1))
 fi

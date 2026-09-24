@@ -1,5 +1,5 @@
 [Unit]
-Description=elspi first-boot seed (radio, regulatory domain, seed neutralisation)
+Description=elspi first-boot seed (radio, regulatory domain, password, SSH keys, seed neutralisation)
 Documentation=file:///usr/local/sbin/elspi-first-boot-seed
 
 # ORDERING IS THE WHOLE DESIGN HERE.
@@ -49,7 +49,14 @@ StandardError=journal
 # so it needs root and a writable /boot/firmware. It is deliberately NOT
 # sandboxed beyond this: ProtectSystem would hide the very files it exists to
 # overwrite.
-ProtectHome=yes
+#
+# ProtectHome=no, AND IT MUST STAY no (2026-09-23). The image is keyless, and
+# this script is what installs the Imager seed's SSH keys into
+# /home/default/.ssh/authorized_keys. ProtectHome=yes -- which this unit
+# carried until then -- makes /home empty and inaccessible to the service, so
+# every key install would fail with the seed then wiped: a card with no SSH
+# way in. tests/verify-image.sh and 00-run.sh both refuse ProtectHome here.
+ProtectHome=no
 NoNewPrivileges=no
 
 [Install]

@@ -51,12 +51,30 @@ set -e
 # throwaway purely to satisfy build.sh's DISABLE_FIRST_BOOT_USER_RENAME guard
 # (build.sh:291 exits 1 without it). That throwaway is revoked here.
 #
+# REVOKED WITH A BARE '!', NOT WITH passwd -l (2026-09-23). passwd -l only
+# PREFIXES '!' to the existing hash, so /etc/shadow shipped
+# '!<sha512 of the throwaway>' -- a hash of a random string in a public image,
+# and, worse, the root of the cloud-init unlock hole: cloud-init 25.2 treats
+# only 'name::' and 'name:!:' as "no password" (distros/__init__.py:139), so a
+# hash behind the '!' counted as an existing password, and an Imager seed with
+# lock_passwd: false unlocked it into a live password nobody knows
+# (distros/__init__.py:912-940). usermod -p '!' REPLACES the field: no hash
+# ships at all, cloud-init's pattern matches, and it declines to unlock.
+# passwd -u would refuse it too (shadow 4.17.4 src/passwd.c:522-528: "would
+# result in a passwordless account"). stage-elspi/12-first-boot-seed/README.md
+# has the derivation.
+#
+# NO BACKTICKS AND NO DOLLAR SIGNS IN THESE COMMENTS: this is the body of an
+# UNQUOTED heredoc, so the build host's shell expands both before on_chroot
+# ever sees a comment.
+#
 # Locking the password means sudo needs a password that does not exist yet --
-# the interactive provision phase sets the real one. (Until 2026-09-13 this
-# comment also noted that the lock did not block 06-seat's tty1 autologin;
-# that logind-seat rung was deleted once first-opener was verified on
-# hardware, and no autologin is staged any more.)
-passwd -l ${SERVICE_USER}
+# the one typed into Imager (installed by 12-first-boot-seed), or the one the
+# interactive provision phase sets. (Until 2026-09-13 this comment also noted
+# that the lock did not block 06-seat's tty1 autologin; that logind-seat rung
+# was deleted once first-opener was verified on hardware, and no autologin is
+# staged any more.)
+usermod -p '!' ${SERVICE_USER}
 
 # --- Directories the application WRITES to ----------------------------------
 # /var/lib/reflex-config is live commissioned machine data. reflex WRITES here,
@@ -156,9 +174,14 @@ for d in var/lib/reflex-config var/log/reflex "home/${SERVICE_USER}/projects" "h
 done
 echo "  created: /var/lib/reflex-config /var/log/reflex ~/projects ~/.kivy"
 
-if ! grep -qE "^${SERVICE_USER}:!" "${ROOTFS_DIR}/etc/shadow"; then
-	echo "FATAL: post-write check failed -- ${SERVICE_USER} password is not locked."
-	echo "       The build-time throwaway from FIRST_USER_PASS would ship usable."
+# EXACTLY '!', not merely "starts with '!'": a '!' in front of a hash is the
+# `passwd -l` shape this stage no longer ships -- the throwaway's hash in a
+# public image, and the one cloud-init unlocks.
+if ! grep -qE "^${SERVICE_USER}:!:" "${ROOTFS_DIR}/etc/shadow"; then
+	echo "FATAL: post-write check failed -- ${SERVICE_USER}'s password field is not a"
+	echo "       bare '!'. Either the account is unlocked (the build-time throwaway"
+	echo "       from FIRST_USER_PASS would ship usable) or a hash sits behind the"
+	echo "       '!' (the passwd -l shape, which cloud-init unlocks on first boot)."
 	exit 1
 fi
-echo "  ${SERVICE_USER} password locked (build-time throwaway revoked)"
+echo "  ${SERVICE_USER} password field is a bare '!' (build-time throwaway revoked, no hash ships)"

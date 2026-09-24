@@ -223,10 +223,10 @@ expect_red "--url with an unsupported scheme" \
 
 echo
 echo "== seen-red: the file:// NOTE guard must fire for ANY default URL, not just /mnt =="
-# A dserver-shaped absolute path: under \$WORK, itself under \$TMPDIR (/tmp or
-# /home -- never /mnt). The OLD guard (base :146, /mnt/[a-z]/* only) would
+# A build-host-shaped absolute path: under \$WORK, itself under \$TMPDIR (/tmp
+# or /home -- never /mnt). The OLD guard (base :146, /mnt/[a-z]/* only) would
 # have matched nothing here; that is the defect this build fixes.
-DSERVER_DIR="${WORK}/dserver-shaped/home/evand"
+DSERVER_DIR="${WORK}/buildhost-shaped/home/builder"
 mkdir -p "${DSERVER_DIR}"
 case "${DSERVER_DIR}" in
 	/mnt/*) echo "  UNKNOWN fixture landed under /mnt -- TMPDIR is Windows-mounted here"; exit 2 ;;

@@ -235,7 +235,7 @@ fi
 # the obligation rather than discovering it.
 echo "  NOTE  reflex-ui.service is a DELTA artifact and is absent by design."
 
-# --- the venv belongs to the service user (Open Loops 6aac9465) -----------
+# --- the venv belongs to the service user -----------------------------------
 # The in-app updater runs `uv sync` into /opt/reflex-venv as the service user,
 # AFTER flashing the firmware; a root-owned venv (the state elspi shipped in
 # until 2026-09-17) fails that sync. Every entry, symlinks included, must be

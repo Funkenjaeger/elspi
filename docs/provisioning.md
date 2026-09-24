@@ -259,10 +259,16 @@ an explicit uncommissioned state, never silently on in-code defaults.*
 ### Phase 2 — restore
 
 Accepts a directory or a tarball and normalises it. It gates on the *content*,
-not the path: a non-empty `Els-0.yaml` must be present, and there must be at
-least 15 `.yaml` files (the live machine carried 17 at last count, 2 files of
-slack above the bar). A partial capture is refused rather than restored as a
-subset.
+not the path: a non-empty `Els-0.yaml` must be present — that is the public
+minimum, because it is the one file reflex cannot start *correctly* without.
+Every other settings file the application recreates with its own defaults
+when it is missing, and with no `Axis-*.yaml` it builds four identity axes, so
+a missing `Axis-*.yaml` is named in a warning. **A site that knows how many
+files its machine carries should raise the bar**:
+`ELSPI_RESTORE_MIN_YAML=<n>` in its `site.env` (see [Site hooks](#site-hooks)),
+and a capture with fewer `.yaml` files is then refused as partial rather than
+restored as a subset. A site can raise the bar, never lower it. All of these
+checks only read, so they run before the phase asks for root.
 
 Then it **prints the commissioned values it is about to install** — the backlash
 steps, the last measured calibration, the ceiling, the drift notice — because
@@ -325,10 +331,36 @@ phases use. `DRY_RUN` is passed through, not enforced — a hook is responsible
 for honouring it. **A hook that fails stops provisioning, named**, which is why
 hooks run last.
 
+The same directory may also hold a **`site.env`**: the site's *settings* for
+the phases, as opposed to steps that run after them. It is read before phase 1
+and parsed as data, never sourced — every line is `ELSPI_<NAME>=<value>` (a
+blank line or a `#` comment aside), anything else stops provisioning with its
+line number, and each value is exported to the phases. Today one phase reads
+one: `ELSPI_RESTORE_MIN_YAML` raises phase 2's content bar. Run
+`02-restore.sh` on its own and pass it in the environment instead
+(`sudo ELSPI_RESTORE_MIN_YAML=<n> ./02-restore.sh …`).
+
 `--site-hooks` is optional and this repository ships no hooks. Without it,
 `provision.sh` says `no site hooks (none given)` and carries on. The full
 contract, for anyone writing one, is in
 [`deltas/README.md`](https://github.com/Funkenjaeger/elspi/blob/master/deltas/README.md).
+
+## A site build config
+
+The build has the same seam. `ELSPI_SITE_CONF=/path/to/site.conf ./build-elspi.sh`
+sources that shell file **after** `elspi.conf`, so it can override any of it —
+`TIMEZONE_DEFAULT`, `LOCALE_DEFAULT`, `KEYBOARD_*`, `TARGET_HOSTNAME`,
+`REFLEX_*` — and set the one board knob the public image leaves off:
+`ELSPI_USB_MAX_CURRENT=1`, which writes `usb_max_current_enable=1` into
+`config.txt`. **A Raspberry Pi 5 powering a USB touchscreen may need it**:
+without it the Pi 5 limits its USB ports to 600 mA unless the supply
+advertises 5 A, and a panel drawing more browns out. `build-elspi.sh` mounts
+the file into the build container and forwards the variable; a name that is
+set but not a readable file stops the build. The image records only *whether*
+a site config was applied (`build_defaults.site_build_config_applied` and
+`boot_config.usb_max_current_enable` in `/etc/elspi-image.json`), never its
+path or contents, and `tests/verify-image.sh` checks `config.txt` and the time
+zone against those declarations.
 
 ## Starting the UI
 

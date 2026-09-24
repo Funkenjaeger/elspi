@@ -1,0 +1,13 @@
+# Example build-time site config -- ELSPI_SITE_CONF=/path/to/site.conf
+# ./build-elspi.sh sources this file LAST, after every public default in
+# elspi.conf, so it can override any of them. Copy this to your own site
+# layer (as `site.conf`, no `.example`) and edit there -- never in this repo
+# (see docs/site-layer.md).
+
+# The one board knob the public image leaves off. A Raspberry Pi 5 powering a
+# USB touchscreen may need this: without it, the Pi 5 limits its USB ports to
+# 600 mA unless the supply advertises 5 A, and a panel drawing more browns out.
+ELSPI_USB_MAX_CURRENT=1
+
+# Any of elspi.conf's other defaults may be overridden the same way, e.g.:
+TIMEZONE_DEFAULT="America/Chicago"

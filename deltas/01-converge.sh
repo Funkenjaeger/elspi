@@ -111,7 +111,7 @@ run env UV_PROJECT_ENVIRONMENT="${VENV}" UV_PYTHON_DOWNLOADS=never \
 # root-owned -- and the in-app updater, running as the service user, has to
 # `uv sync` into this same venv later (after flashing the firmware). Hand the
 # whole venv back. -h: re-own symlinks themselves; bin/python points at the
-# system interpreter. Found 2026-09-17, Open Loops 6aac9465.
+# system interpreter. Found 2026-09-17.
 run chown -R -h "${SERVICE_USER}:${SERVICE_USER}" "${VENV}"
 assert "every directory in ${VENV} writable by ${SERVICE_USER}" \
 	sudo -u "${SERVICE_USER}" sh -c "test -z \"\$(find '${VENV}' -type d ! -writable -print -quit)\""

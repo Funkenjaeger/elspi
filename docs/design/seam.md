@@ -40,7 +40,7 @@ genuinely non-obvious call here.
 | What | Why here |
 |---|---|
 | Base trixie/armhf, pi-gen stages 0–2 | definitional |
-| `config.txt`, `cmdline.txt` — SPI, I²C, UART, camera off, quiet+splash, `usb_max_current_enable=1`, upstream's `[pi5] dtoverlay=nospi10` | firmware-level, needs a reboot, and wrong means no display or no Modbus. Cheap to bake, painful to retrofit |
+| `config.txt`, `cmdline.txt` — SPI, I²C, UART, camera off, quiet+splash, upstream's `[pi5] dtoverlay=nospi10`; `usb_max_current_enable=1` only when a site build config sets `ELSPI_USB_MAX_CURRENT=1` | firmware-level, needs a reboot, and wrong means no display or no Modbus. Cheap to bake, painful to retrofit |
 | Plymouth theme and splash | boot-path, invisible to deltas |
 | Every Debian package: SDL2 + Mesa DRI + libmtdev, `network-manager`, the build toolchain, `gcc-arm-none-eabi`, `cmake`, `openocd` | apt at provision time is a network dependency on the recovery path |
 | `openocd` udev rules | static, not secret, never changes |
@@ -117,8 +117,8 @@ therefore only has to be *a* good starting point, not *the current* one — a
 much weaker obligation than the one call 1 was written against.
 
 **What it buys.** A freshly flashed card boots into the UI with no converge
-step and no SSH — task 6aa73b01 item 1, which was unbuildable under the
-original call. Order 2026-09-20#5 is what surfaced this: its builder refused
+step and no SSH — previously unbuildable under the original call. Order
+2026-09-20#5 is what surfaced this: its builder refused
 to amend a ratified call and shipped the trigger scaffold only.
 
 **What it costs, honestly.** Image and app were already a version pair; they
@@ -194,7 +194,8 @@ time.*
 
 **Raspberry Pi Imager 2.x's OS-customisation page is now the supported
 first-boot seed.** The operator types the hostname, the `default` account's
-password, the desktop public key and the Wi-Fi SSID/PSK into Imager; Imager
+password, a public key (optional since 2026-09-23 — see below) and the Wi-Fi
+SSID/PSK into Imager; Imager
 writes them to the FAT partition as cloud-init NoCloud files; cloud-init
 consumes them on first boot; and `stage-elspi/12-first-boot-seed`'s oneshot unit
 then **overwrites them on the card**, so they do not persist in cleartext on an
@@ -224,8 +225,9 @@ Two things worth recording, because they were *not* obvious and because they are
 why this needed shipped code rather than only a documentation change:
 
 1. **The `default` account still ships locked, and it must.** `05-service-user`
-   still runs `passwd -l`, and its post-write gate still FATALs if the account
-   is unlocked at build time. The account is unlocked *on the machine*, from the
+   locks it — with a bare `!` since 2026-09-23 (`usermod -p '!'`; it ran
+   `passwd -l` before, see item 2) — and its post-write gate FATALs on any
+   other password field. The account is unlocked *on the machine*, from the
    operator's own input, or not at all.
 
 2. **cloud-init would not have done what the customisation page implies.** For
@@ -235,11 +237,43 @@ why this needed shipped code rather than only a documentation change:
    generates purely to satisfy `build.sh:292`. Left alone, design (a) would have
    shipped a lathe whose `default` account had a **live password nobody knows**
    and whose typed password did nothing at all. The seed unit closes both
-   halves. `stage-elspi/12-first-boot-seed/README.md` carries the line-by-line
-   derivation.
+   halves. Since 2026-09-23 the unlock half is also closed at the source: with
+   a bare `!` in the field there is no hash for cloud-init to unlock, and its
+   own empty-locked check makes it decline. `stage-elspi/12-first-boot-seed/README.md`
+   carries the line-by-line derivation.
+
+#### AMENDMENT 2026-09-23 — the image is keyless, and SSH auth is the operator's choice
+
+**Decided by Evan.** Until now every build baked a public key into
+`~default/.ssh/authorized_keys` (`ELSPI_PUBKEY`, a repository variable in CI),
+and set `PUBKEY_ONLY_SSH=1`. Both are gone:
+
+- **No SSH key is ever baked in.** The repo is public and so are its release
+  images; nobody's personal key belongs in one. Keys arrive in the Imager seed
+  like the password, and the seed unit installs them itself, each exactly once,
+  before it wipes the seed. A build that finds any `authorized_keys` in the
+  rootfs fails (`stage-elspi/12-first-boot-seed/00-run.sh`).
+- **The image sets no SSH authentication policy.** `PUBKEY_ONLY_SSH=0` leaves
+  RPi OS's default (password authentication allowed). Imager's page decides per
+  card: its *public-key only* choice becomes `PasswordAuthentication no` in
+  cloud-init's `sshd_config.d/50-cloud-init.conf`, its password option `yes`.
+  Many operators — especially on Windows — cannot easily make or use SSH keys,
+  and a password typed into Imager has to work for them. Nothing of the image's
+  may set an authentication option that could override that choice; the build
+  and `tests/verify-image.sh` both refuse one.
+
+**What the operator must supply: a password, an SSH key, or both.** The key is
+optional. With neither, the card has no SSH way in and is reachable only from
+the touchscreen, and the seed unit logs that loudly. Imager's “Use custom” local
+file route never shows the customisation page at all, so it always produces such
+a card. `docs/flashing.md` carries the procedure.
+
+The image's manifest records it: `ssh.key_source` is `imager-seed`, `ssh.auth`
+is `imager-choice`.
 
 So call 2's answer is now: *the repo carries no credential, the image carries no
-credential, and the card carries one only for the length of the first boot.*
+credential — not even a public key — and the card carries one only for the
+length of the first boot.*
 
 ### 3. The firmware toolchain is a real choice, not an oversight
 

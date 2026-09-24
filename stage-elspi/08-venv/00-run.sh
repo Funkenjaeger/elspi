@@ -149,7 +149,7 @@ echo "  kivy ok: $(basename "${KIVY_DIST}"), compiled extensions present"
 # venv left root:root (as the uv sync above leaves it) makes that sync fail
 # with EACCES -- and the updater runs it AFTER flashing the firmware. Found
 # 2026-09-17 when a new dependency (segno) could only be installed by hand
-# with sudo; Open Loops 6aac9465. reflex's updater now also refuses an
+# with sudo. reflex's updater now also refuses an
 # unwritable venv before flashing, but the right state is simply this one.
 #
 # -h: re-own the venv's symlinks THEMSELVES. bin/python is an absolute link to

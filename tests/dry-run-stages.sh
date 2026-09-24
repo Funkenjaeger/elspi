@@ -37,6 +37,17 @@ trap 'rm -rf "${WORK}"' EXIT
 export ROOTFS_DIR="${WORK}/rootfs"
 export FIRST_USER_NAME=default
 
+# THE BUILD CONFIG'S VALUES, as build.sh would export them to the stages.
+# elspi.conf is sourced in a child shell with NO site config, so what is
+# checked below is the PUBLIC image's defaults; the child prints `export`
+# lines for exactly the names the stages read.
+BUILD_VARS="TARGET_HOSTNAME TIMEZONE_DEFAULT LOCALE_DEFAULT KEYBOARD_KEYMAP ELSPI_USB_MAX_CURRENT ELSPI_SITE_CONF_APPLIED"
+BUILD_EXPORTS="$(cd "${REPO}" && env -u ELSPI_SITE_CONF -u ELSPI_USB_MAX_CURRENT BUILD_VARS="${BUILD_VARS}" bash -c '
+	. ./elspi.conf >/dev/null 2>&1 || exit 1
+	for v in ${BUILD_VARS}; do printf "export %s=%q\n" "${v}" "${!v}"; done
+')" || { echo "FAIL: could not source elspi.conf"; exit 1; }
+eval "${BUILD_EXPORTS}"
+
 mkdir -p "${ROOTFS_DIR}"/boot/firmware "${ROOTFS_DIR}"/etc "${ROOTFS_DIR}"/usr/local/bin
 
 # Seed with the REAL upstream templates. If upstream moves these, the anchor
@@ -51,6 +62,46 @@ install -m 644 "${REPO}/stage1/00-boot-files/files/cmdline.txt" "${ROOTFS_DIR}/b
 install -m 644 "${REPO}/stage2/04-cloud-init/files/meta-data" "${ROOTFS_DIR}/boot/firmware/"
 
 PASS=0; FAIL=0
+
+# --- the build config itself: exports, and the optional site config ---------
+# pi-gen runs every stage as a CHILD of build.sh, so a value the stages read
+# must be EXPORTED by the config -- asserted here by reading it back in a
+# grandchild, which is where a stage stands. Then ELSPI_SITE_CONF: sourced
+# after elspi.conf, able to override it, recorded as applied, and FATAL when
+# it names a file that is not there.
+conf_probe() { # conf_probe [VAR=value ...] -> prints what a stage would see
+	( cd "${REPO}" && env -u ELSPI_SITE_CONF -u REFLEX_SOURCE -u ELSPI_USB_MAX_CURRENT "$@" bash -c '
+		# A config that FATALs runs `exit`, which would take this shell with
+		# it -- so it is tried in a subshell first.
+		( . ./elspi.conf ) >/dev/null 2>&1 || { echo "SOURCE-FAILED"; exit 0; }
+		. ./elspi.conf >/dev/null 2>&1
+		bash -c "printf \"%s|%s|%s\n\" \"\${REFLEX_SOURCE:-UNSET}\" \"\${ELSPI_USB_MAX_CURRENT:-UNSET}\" \"\${ELSPI_SITE_CONF_APPLIED:-UNSET}\""
+	' )
+}
+SITE_CONF="${WORK}/site.conf"
+printf 'ELSPI_USB_MAX_CURRENT=1\nTIMEZONE_DEFAULT="America/Chicago"\n' > "${SITE_CONF}"
+GOT="$(conf_probe)"
+case "${GOT}" in
+	https://*"|0|0") echo "  ok: public config: a stage sees REFLEX_SOURCE and ELSPI_USB_MAX_CURRENT=0, no site config"; PASS=$((PASS+1)) ;;
+	*) echo "  FAIL: public config: a stage sees '${GOT}' (want <url>|0|0)"; FAIL=$((FAIL+1)) ;;
+esac
+GOT="$(conf_probe ELSPI_SITE_CONF="${SITE_CONF}")"
+case "${GOT}" in
+	https://*"|1|1") echo "  ok: ELSPI_SITE_CONF is sourced after elspi.conf, overrides it, and a stage sees the result"; PASS=$((PASS+1)) ;;
+	*) echo "  FAIL: with a site config a stage sees '${GOT}' (want <url>|1|1)"; FAIL=$((FAIL+1)) ;;
+esac
+GOT="$(conf_probe ELSPI_SITE_CONF="${WORK}/no-such-site.conf")"
+case "${GOT}" in
+	SOURCE-FAILED*) echo "  ok: an ELSPI_SITE_CONF that is not a readable file is FATAL"; PASS=$((PASS+1)) ;;
+	*) echo "  FAIL: a missing ELSPI_SITE_CONF was not refused (a stage saw '${GOT}')"; FAIL=$((FAIL+1)) ;;
+esac
+printf 'ELSPI_USB_MAX_CURRENT=yes\n' > "${WORK}/bad-knob.conf"
+GOT="$(conf_probe ELSPI_SITE_CONF="${WORK}/bad-knob.conf")"
+case "${GOT}" in
+	SOURCE-FAILED*) echo "  ok: ELSPI_USB_MAX_CURRENT other than 0/1 is FATAL"; PASS=$((PASS+1)) ;;
+	*) echo "  FAIL: ELSPI_USB_MAX_CURRENT=yes was accepted (a stage saw '${GOT}')"; FAIL=$((FAIL+1)) ;;
+esac
+
 run_stage() { # run_stage <substage-dir>
 	local d="$1"
 	printf '\n\033[1m-- %s --\033[0m\n' "${d}"
@@ -121,6 +172,58 @@ else
 	echo "  ok: delta_layer_owns no longer claims the baked checkout"
 	PASS=$((PASS+1))
 fi
+# THE BUILD DEFAULTS, declared as the build config set them (a harness that
+# checks /etc/localtime reads this declaration), and the public image's
+# time zone pinned: Etc/UTC, nobody's in particular. An operator's own zone
+# comes from Imager's customisation page.
+if python3 - "${ROOTFS_DIR}/etc/elspi-image.json" <<'PY'
+import json, os, sys
+b = json.load(open(sys.argv[1])).get("build_defaults", {})
+want = {"hostname": os.environ["TARGET_HOSTNAME"], "timezone": os.environ["TIMEZONE_DEFAULT"],
+        "locale": os.environ["LOCALE_DEFAULT"], "keymap": os.environ["KEYBOARD_KEYMAP"]}
+bad = [k for k, v in want.items() if b.get(k) != v]
+d = json.load(open(sys.argv[1]))
+if d.get("boot_config", {}).get("usb_max_current_enable") is not (os.environ["ELSPI_USB_MAX_CURRENT"] == "1"):
+    bad.append("boot_config.usb_max_current_enable")
+    want["boot_config.usb_max_current_enable"] = os.environ["ELSPI_USB_MAX_CURRENT"]
+if b.get("site_build_config_applied") is not (os.environ["ELSPI_SITE_CONF_APPLIED"] == "1"):
+    bad.append("site_build_config_applied")
+    want["site_build_config_applied"] = os.environ["ELSPI_SITE_CONF_APPLIED"]
+if bad:
+    print("        mismatched:", ", ".join("%s=%r (build config: %r)" % (k, b.get(k), want[k]) for k in bad))
+sys.exit(1 if bad else 0)
+PY
+then
+	echo "  ok: the manifest declares the build defaults exactly as elspi.conf set them"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: the manifest's build_defaults do not match elspi.conf"
+	FAIL=$((FAIL+1))
+fi
+if [ "${TIMEZONE_DEFAULT}" = "Etc/UTC" ]; then
+	echo "  ok: the public image's default time zone is Etc/UTC"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: the public image's default time zone is '${TIMEZONE_DEFAULT}', not Etc/UTC"
+	FAIL=$((FAIL+1))
+fi
+
+# The REAL manifest must declare the keyless SSH policy (2026-09-23) --
+# checked here as well as against the fixture, for the reason above.
+if python3 - "${ROOTFS_DIR}/etc/elspi-image.json" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1])).get("ssh", {})
+sys.exit(0 if (s.get("key_source") == "imager-seed"
+               and s.get("auth") == "imager-choice"
+               and s.get("baked_authorized_keys") is False) else 1)
+PY
+then
+	echo "  ok: the manifest declares ssh key_source=imager-seed, auth=imager-choice, no baked keys"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: the manifest does not declare the keyless SSH policy"
+	FAIL=$((FAIL+1))
+fi
 
 # 12-first-boot-seed is deliberately chroot-free -- it only rewrites
 # /boot/firmware/meta-data and installs a unit under ${ROOTFS_DIR} -- which is
@@ -129,9 +232,9 @@ run_stage 12-first-boot-seed
 
 # 14-first-boot-ui is the same shape as 12-first-boot-seed and chroot-free for
 # the same reason. It is a SCAFFOLD (stage-elspi/14-first-boot-ui/README.md),
-# not the feature task 6aa73b01 asks for -- it ships the trigger, not a
-# converge/start branch, because the payload would move the application
-# checkout across docs/design/seam.md's ratified line.
+# not the first-boot-into-the-UI feature -- it ships the trigger, not a
+# converge/start branch: starting the baked app unattended is a separate,
+# still-open decision.
 run_stage 14-first-boot-ui
 
 # WHERE THE SUBSTAGE ENABLES THE UNIT, checked here rather than only in
@@ -187,15 +290,43 @@ fi
 # --- IDEMPOTENCE ------------------------------------------------------------
 # pi-gen re-runs stages on a resumed build. A second pass must not double-append
 # usb_max_current_enable or re-break an already-correct file.
+#
+# usb_max_current_enable is a build knob, OFF in the public config: absent after
+# two default passes; exactly once after two passes with it ON (a site build);
+# and gone again after an OFF pass over an ON tree (a resumed build whose knob
+# changed).
+usb_count() { grep -c "^usb_max_current_enable=" "${ROOTFS_DIR}/boot/firmware/config.txt"; }
+if [ "${ELSPI_USB_MAX_CURRENT}" = 0 ] && [ "$(usb_count)" -eq 0 ]; then
+	echo "  ok: the public config leaves usb_max_current_enable out of config.txt"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: public config: ELSPI_USB_MAX_CURRENT=${ELSPI_USB_MAX_CURRENT}, usb_max_current_enable lines=$(usb_count)"
+	FAIL=$((FAIL+1))
+fi
 echo
 printf '\033[1m-- second pass (idempotence) --\033[0m\n'
 if ( cd "${REPO}/stage-elspi/03-boot-config" && ./00-run.sh >/dev/null ); then
-	DUPES=$(grep -c "^usb_max_current_enable=1$" "${ROOTFS_DIR}/boot/firmware/config.txt")
-	if [ "${DUPES}" -eq 1 ]; then
-		echo "  ok: usb_max_current_enable appears exactly once after two passes"
+	if [ "$(usb_count)" -eq 0 ]; then
+		echo "  ok: usb_max_current_enable still absent after two default passes"
 		PASS=$((PASS+1))
 	else
-		echo "  FAIL: usb_max_current_enable appears ${DUPES} times after two passes"
+		echo "  FAIL: usb_max_current_enable appears $(usb_count) times after two default passes"
+		FAIL=$((FAIL+1))
+	fi
+	( cd "${REPO}/stage-elspi/03-boot-config" && ELSPI_USB_MAX_CURRENT=1 ./00-run.sh >/dev/null && ELSPI_USB_MAX_CURRENT=1 ./00-run.sh >/dev/null )
+	if [ "$(grep -c '^usb_max_current_enable=1$' "${ROOTFS_DIR}/boot/firmware/config.txt")" -eq 1 ] && [ "$(usb_count)" -eq 1 ]; then
+		echo "  ok: with ELSPI_USB_MAX_CURRENT=1, usb_max_current_enable=1 appears exactly once after two passes"
+		PASS=$((PASS+1))
+	else
+		echo "  FAIL: with ELSPI_USB_MAX_CURRENT=1, usb_max_current_enable lines=$(usb_count) after two passes"
+		FAIL=$((FAIL+1))
+	fi
+	( cd "${REPO}/stage-elspi/03-boot-config" && ELSPI_USB_MAX_CURRENT=0 ./00-run.sh >/dev/null )
+	if [ "$(usb_count)" -eq 0 ]; then
+		echo "  ok: an OFF pass over an ON tree removes usb_max_current_enable (resumed build, knob changed)"
+		PASS=$((PASS+1))
+	else
+		echo "  FAIL: an OFF pass left usb_max_current_enable in config.txt"
 		FAIL=$((FAIL+1))
 	fi
 	TOKENS=$(grep -o "quiet" "${ROOTFS_DIR}/boot/firmware/cmdline.txt" | wc -l)
@@ -320,6 +451,74 @@ if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG5}" ./00-ru
 	FAIL=$((FAIL+1))
 else
 	echo "  ok: seed stage refused the multi-user.target.wants enablement (ordering cycle)"
+	PASS=$((PASS+1))
+fi
+
+# THE KEYLESS GATES MUST FIRE (2026-09-23). The image never carries an SSH key
+# and never sets an SSH authentication option of its own -- keys and the
+# password-vs-key-only choice come from Imager's page, per card. Each gate is
+# handed the bad state it exists to refuse.
+neg_seed_root() { # neg_seed_root <dir> -- a tree the seed substage otherwise accepts
+	mkdir -p "$1/boot/firmware" "$1/etc/ssh/sshd_config.d" "$1/home/${FIRST_USER_NAME}"
+	install -m 644 "${REPO}/stage2/04-cloud-init/files/meta-data" "$1/boot/firmware/"
+	printf 'Include /etc/ssh/sshd_config.d/*.conf\n#PasswordAuthentication yes\nKbdInteractiveAuthentication no\n' \
+		> "$1/etc/ssh/sshd_config"
+}
+NEG_OK="${WORK}/neg-keyless-ok"
+neg_seed_root "${NEG_OK}"
+if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG_OK}" ./00-run.sh >/dev/null 2>&1 ); then
+	echo "  ok: seed stage accepts a keyless tree with stock sshd config (the control)"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: seed stage refused a keyless tree with stock sshd config -- the"
+	echo "        negative controls below would prove nothing"
+	FAIL=$((FAIL+1))
+fi
+
+NEG8="${WORK}/neg8"
+neg_seed_root "${NEG8}"
+mkdir -p "${NEG8}/home/${FIRST_USER_NAME}/.ssh"
+printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZpeHR1cmUtbm90LWEtcmVhbC1rZXktZml4dHVyZQ baked\n' \
+	> "${NEG8}/home/${FIRST_USER_NAME}/.ssh/authorized_keys"
+if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG8}" ./00-run.sh >/dev/null 2>&1 ); then
+	echo "  FAIL: seed stage accepted a rootfs with a BAKED authorized_keys"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: seed stage refused a baked authorized_keys (the image is keyless)"
+	PASS=$((PASS+1))
+fi
+
+NEG9="${WORK}/neg9"
+neg_seed_root "${NEG9}"
+printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
+	> "${NEG9}/etc/ssh/sshd_config.d/10-elspi-keyonly.conf"
+if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG9}" ./00-run.sh >/dev/null 2>&1 ); then
+	echo "  FAIL: seed stage accepted an sshd drop-in that overrides Imager's SSH choice"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: seed stage refused an sshd drop-in setting PasswordAuthentication"
+	PASS=$((PASS+1))
+fi
+
+NEG10="${WORK}/neg10"
+neg_seed_root "${NEG10}"
+sed -i 's|^#PasswordAuthentication yes$|PasswordAuthentication no|' "${NEG10}/etc/ssh/sshd_config"
+if ( cd "${REPO}/stage-elspi/12-first-boot-seed" && ROOTFS_DIR="${NEG10}" ./00-run.sh >/dev/null 2>&1 ); then
+	echo "  FAIL: seed stage accepted sshd_config with PasswordAuthentication no (PUBKEY_ONLY_SSH=1's edit)"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: seed stage refused sshd_config setting PasswordAuthentication (PUBKEY_ONLY_SSH=1's edit)"
+	PASS=$((PASS+1))
+fi
+
+# The REAL unit, as the substage installed it above: it must not hide /home,
+# or the seed script can never install an Imager key.
+if grep -qiE '^ProtectHome=(yes|true|on|1|read-only|tmpfs)[[:space:]]*$' \
+	"${ROOTFS_DIR}/etc/systemd/system/${FBS_SEED_UNIT}"; then
+	echo "  FAIL: the installed seed unit hides /home (ProtectHome) -- no Imager key could be installed"
+	FAIL=$((FAIL+1))
+else
+	echo "  ok: the installed seed unit does not hide /home"
 	PASS=$((PASS+1))
 fi
 

@@ -71,6 +71,33 @@ esac
 
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# THE DEFAULTS AN UNSEEDED CARD KEEPS. build.sh exports all four (with its own
+# defaults when the config sets none), so an empty one here means this is not
+# the build it claims to be. Declared so tests/verify-image.sh can check the
+# rootfs against what the build was ASKED for -- elspi.conf's defaults, or a
+# site build config's -- rather than against a zone typed into the harness.
+# Imager's customisation page replaces hostname, timezone and keymap per card
+# (cloud-init user-data); it has no locale field, so locale is what every
+# card keeps. See elspi.conf's "Locale, keyboard, time" block.
+for _v in TARGET_HOSTNAME TIMEZONE_DEFAULT LOCALE_DEFAULT KEYBOARD_KEYMAP; do
+	[ -n "${!_v:-}" ] || { echo "FATAL: ${_v} is empty -- build.sh always exports it"; exit 1; }
+done
+unset _v
+
+# The build knobs elspi.conf exports (a site build config may have set them),
+# as JSON booleans. Unset means elspi.conf was not the config, and its
+# defaults -- off, no site config -- are what 03-boot-config applied too.
+case "${ELSPI_USB_MAX_CURRENT:-0}" in
+	1) USB_MAX_CURRENT_JSON=true ;;
+	0) USB_MAX_CURRENT_JSON=false ;;
+	*) echo "FATAL: ELSPI_USB_MAX_CURRENT is '${ELSPI_USB_MAX_CURRENT}', expected 0 or 1"; exit 1 ;;
+esac
+case "${ELSPI_SITE_CONF_APPLIED:-0}" in
+	1) SITE_CONF_JSON=true ;;
+	0) SITE_CONF_JSON=false ;;
+	*) echo "FATAL: ELSPI_SITE_CONF_APPLIED is '${ELSPI_SITE_CONF_APPLIED}', expected 0 or 1"; exit 1 ;;
+esac
+
 # IMAGE_BUILD_SHA -- the git rev of THIS repo (elspi is a soft fork of pi-gen
 # itself; there is no separate "elspi repo" checkout) at build time.
 # build-docker.sh:67 already computes this on the host and forwards it into
@@ -183,6 +210,19 @@ cat > "${MANIFEST}" <<- JSON
 	  "service_user": "${FIRST_USER_NAME}",
 	  "runs_as_root": false,
 
+	  "build_defaults": {
+	    "hostname": "${TARGET_HOSTNAME}",
+	    "timezone": "${TIMEZONE_DEFAULT}",
+	    "locale": "${LOCALE_DEFAULT}",
+	    "keymap": "${KEYBOARD_KEYMAP}",
+	    "replaced_per_card_by_imager": ["hostname", "timezone", "keymap"],
+	    "site_build_config_applied": ${SITE_CONF_JSON}
+	  },
+
+	  "boot_config": {
+	    "usb_max_current_enable": ${USB_MAX_CURRENT_JSON}
+	  },
+
 	  "paths": {
 	    "venv": "/opt/reflex-venv",
 	    "app_parent": "/home/${FIRST_USER_NAME}/projects",
@@ -210,10 +250,19 @@ cat > "${MANIFEST}" <<- JSON
 	    "verified_on_hardware": true
 	  },
 
+	  "ssh": {
+	    "enabled": true,
+	    "key_source": "imager-seed",
+	    "keys_installed_by": "/usr/local/sbin/elspi-first-boot-seed",
+	    "baked_authorized_keys": false,
+	    "auth": "imager-choice",
+	    "image_sets_auth_options": false
+	  },
+
 	  "first_boot_ui": {
 	    "unit": "/etc/systemd/system/elspi-first-boot-ui.service",
 	    "script": "/usr/local/sbin/elspi-first-boot-ui",
-	    "status": "scaffold only -- enabled and correctly ordered against elspi-first-boot-seed.service and plymouth-quit-wait.service, but its converge/start branch is UNIMPLEMENTED because no image has ever baked in a reflex checkout (docs/design/seam.md keeps the app deltas-owned). See task 6aa73b01 item 1 and stage-elspi/14-first-boot-ui/README.md.",
+	    "status": "scaffold only -- enabled and correctly ordered against elspi-first-boot-seed.service and plymouth-quit-wait.service. The app IS baked in (baked_app above), but the hook's converge/start branch is UNIMPLEMENTED, so it logs verdict=UNIMPLEMENTED and starts nothing. See stage-elspi/14-first-boot-ui/README.md.",
 	    "verified_on_hardware": false
 	  },
 
@@ -222,8 +271,7 @@ cat > "${MANIFEST}" <<- JSON
 	    "start.sh and its KCFG_* environment",
 	    "the single sudoers NOPASSWD rule",
 	    "restore of /var/lib/reflex-config from backup (HARD FAIL if absent)",
-	    "the interactive phase: the dev-role question, and any credential the Imager seed did not carry",
-	    "reinstall of the OT state-pull forced-command key"
+	    "the interactive phase: the dev-role question, and any credential the Imager seed did not carry"
 	  ],
 
 	  "cannot_be_verified_without_hardware": [
@@ -232,9 +280,10 @@ cat > "${MANIFEST}" <<- JSON
 	    "the touchscreen",
 	    "SPI, I2C and the UART link to the STM32",
 	    "anything config.txt or a dtoverlay actually DOES (firmware level)",
-	    "usb_max_current_enable=1 brownout mitigation",
+	    "whether usb_max_current_enable (off unless a site build turns it on) prevents a USB touchscreen's brownouts",
 	    "audio output on card 0",
-	    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui): enabled and ordered correctly, but it has never executed end-to-end because no image has ever had a checkout for it to find -- task 6aa73b01 item 1 is the seam decision that would change that"
+	    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui): enabled and ordered correctly, but the branch is unwritten, so starting the baked app unattended has never executed end-to-end",
+	    "SSH login on a real card with the key or password typed into Imager (the image is keyless since 2026-09-23; the seed unit's key install is verified offline only)"
 	  ]
 	}
 JSON
@@ -249,7 +298,8 @@ fi
 
 for key in log_dir config_dir venv app_parent default_mode reflex_lock_commit \
            first_boot_seed first_boot_ui unit script image_build_sha image_release \
-           runtime_versions baked_app updater_ready protocol_version_readable; do
+           runtime_versions baked_app updater_ready protocol_version_readable \
+           ssh key_source build_defaults boot_config usb_max_current_enable; do
 	grep -q "\"${key}\"" "${MANIFEST}" || {
 		echo "FATAL: manifest is missing required key '${key}'"
 		exit 1
