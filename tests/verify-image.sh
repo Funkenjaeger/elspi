@@ -582,6 +582,76 @@ if [ "${APP_IS_REPO}" -eq 1 ]; then
 		*)
 			bad "origin is a fetchable URL, not the build host's path (found: ${APP_ORIGIN})" ;;
 	esac
+
+	# --- (B2) the build-time .git scrub, RE-CHECKED HERE --------------------
+	# 10a-app-checkout's own gate 7/7b asserts every one of these at build time,
+	# right after writing them. This harness does not trust that self-report --
+	# same reason it re-measures ownership and tag history above rather than
+	# reading the stage's echo -- so each property is re-measured against the
+	# ARTIFACT: a checkout carrying its clone reflog, a mirror's stray branches,
+	# the build host's own local-mirror path or the builder's git identity would
+	# each tell whoever pokes at a shipped card something about how and where it
+	# was built, which is exactly what the anonymous-clone scrub exists to avoid.
+
+	# No reflog: it records "clone: from <source>" and is stamped with the
+	# builder's identity.
+	if [ -e "${APP_DIR}/.git/logs" ]; then
+		bad "${APP_ROOT}/.git/logs is absent -- present, it would record the build source and the builder's identity"
+	else
+		ok "${APP_ROOT}/.git/logs is absent"
+	fi
+	if [ -z "$(git -C "${APP_DIR}" reflog show --all 2>/dev/null | head -n1)" ]; then
+		ok "${APP_ROOT} carries no reflog entries"
+	else
+		bad "${APP_ROOT} carries reflog entries -- they record the build source and the builder's identity"
+	fi
+
+	# No ref outside a tag or origin's own remote-tracking refs: a mirror's
+	# work-in-progress branch, a local branch, a stash or a note would each keep
+	# its own commits reachable in the object store too.
+	STRAY_REF="$(git -C "${APP_DIR}" for-each-ref --format='%(refname)' | grep -Ev '^refs/(tags|remotes/origin)/' | head -n1 || true)"
+	if [ -z "${STRAY_REF}" ]; then
+		ok "${APP_ROOT} carries no refs outside tags and origin's remote-tracking refs"
+	else
+		bad "${APP_ROOT} carries ${STRAY_REF}, which is not a tag or a remote-tracking ref of origin"
+	fi
+
+	# No /mnt/git string anywhere under .git outside the object store: that is
+	# this estate's local-mirror path, and a checkout naming it would tell
+	# whoever pokes at a shipped card exactly where and how it was built.
+	LEAKED_PATH="$(grep -rIlF --exclude-dir=objects -- '/mnt/git' "${APP_DIR}/.git" 2>/dev/null | head -n1 || true)"
+	if [ -z "${LEAKED_PATH}" ]; then
+		ok "${APP_ROOT}/.git names no /mnt/git build-source path"
+	else
+		bad "${LEAKED_PATH#"${ROOTFS}"} names a /mnt/git build-source path"
+	fi
+
+	# No builder git identity anywhere under .git outside the object store,
+	# computed the same way 10a-app-checkout computes it at build time. This
+	# only measures anything when this harness runs on a host with a git
+	# identity configured (the build host or a CI runner right after the build);
+	# elsewhere it is UNKNOWN rather than a pass it did not earn.
+	BUILDER_IDENT="$(git var GIT_COMMITTER_IDENT 2>/dev/null | sed -E 's/ [0-9]+ [-+][0-9]{4}$//' || true)"
+	if [ -n "${BUILDER_IDENT}" ]; then
+		LEAKED_IDENT="$(grep -rIlF --exclude-dir=objects -- "${BUILDER_IDENT}" "${APP_DIR}/.git" 2>/dev/null | head -n1 || true)"
+		if [ -z "${LEAKED_IDENT}" ]; then
+			ok "${APP_ROOT}/.git records no builder git identity (${BUILDER_IDENT})"
+		else
+			bad "${LEAKED_IDENT#"${ROOTFS}"} records the builder's git identity (${BUILDER_IDENT})"
+		fi
+	else
+		unknown "this host has no git identity configured, so the builder-identity leak check could not be measured"
+	fi
+
+	# origin is the PUBLIC anonymous URL exactly, not merely fetchable. Same
+	# default 10a-app-checkout and elspi.conf use for REFLEX_ORIGIN_URL, and
+	# overridable the same way for a synthetic rootfs in the test harness.
+	REFLEX_ORIGIN_URL="${REFLEX_ORIGIN_URL:-https://github.com/Funkenjaeger/reflex.git}"
+	if [ "${APP_ORIGIN}" = "${REFLEX_ORIGIN_URL}" ]; then
+		ok "origin is the anonymous HTTPS URL (${REFLEX_ORIGIN_URL})"
+	else
+		bad "origin is the anonymous HTTPS URL: expected ${REFLEX_ORIGIN_URL}, found '${APP_ORIGIN}'"
+	fi
 fi
 
 # --- (C) the baked release is a FULL release --------------------------------

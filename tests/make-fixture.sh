@@ -465,6 +465,17 @@ git -C "${APP_ROOT_FIX}" checkout -q --detach v1.0.0
 # build read from.
 git -C "${APP_ROOT_FIX}" remote add origin "https://github.com/Funkenjaeger/reflex.git"
 
+# Scrub the fixture's OWN build-time state the same way 10a-app-checkout's
+# gate 7 scrubs a real clone: no local branch, no reflog, no logs/, nothing a
+# deleted ref alone reaches. `git init` starts on a branch and keeps a reflog
+# by default, and a fixture that shipped either would make verify-image.sh's
+# own scrub checks red on the BASELINE, not on a deliberate mutation.
+git -C "${APP_ROOT_FIX}" for-each-ref --format='delete %(refname)' refs/heads \
+	| git -C "${APP_ROOT_FIX}" update-ref --no-deref --stdin
+git -C "${APP_ROOT_FIX}" reflog expire --expire=now --expire-unreachable=now --all
+rm -rf "${APP_ROOT_FIX}/.git/logs"
+git -C "${APP_ROOT_FIX}" gc --quiet --prune=now
+
 APP_COMMIT_FIX="$(git -C "${APP_ROOT_FIX}" rev-parse --verify HEAD)"
 sed -i "s/@@APP_COMMIT@@/${APP_COMMIT_FIX}/" "${DEST}/etc/elspi-image.json"
 
