@@ -376,6 +376,238 @@ Remove-Item Function:\gh -ErrorAction SilentlyContinue
 # machine's actual Imager install.
 
 # =============================================================================
+# 6. -Source forgejo. The network is faked by redefining Invoke-ForgejoApi and
+# Invoke-ForgejoDownload; git, wsl, Read-Host and the preflight checks are
+# faked the same way. The token is a made-up string in a temp file, and the
+# tests assert it never appears in a URL or in anything the script prints.
+# =============================================================================
+
+$fjDir = Join-Path ([System.IO.Path]::GetTempPath()) ("flash-test-build-forgejo-" + [guid]::NewGuid())
+New-Item -ItemType Directory -Force -Path $fjDir | Out-Null
+try {
+    $fjBase = 'https://forgejo.example'
+    $fjRepo = 'owner/repo'
+    $fjPkg = 'pkgowner/pkgname'
+    $fakeToken = 'FAKE-TEST-TOKEN-not-a-credential-7d1e'
+    $tokenFile = Join-Path $fjDir 'forgejo-token'
+    Set-Content -LiteralPath $tokenFile -Value $fakeToken -NoNewline
+    $shaA = 'a' * 40
+    $shaB = 'b' * 40
+
+    # -- auth: the token file gate ------------------------------------------
+    Assert-Throws 'forgejo: missing token file -> fails, telling Evan how to mint one' {
+        Get-ForgejoAuthHeader -TokenFile (Join-Path $fjDir 'no-such-token')
+    } 'read:package and read:repository'
+    Assert-Throws 'forgejo: missing token file -> the message names the path' {
+        Get-ForgejoAuthHeader -TokenFile (Join-Path $fjDir 'no-such-token')
+    } 'no-such-token'
+    $emptyToken = Join-Path $fjDir 'empty-token'
+    Set-Content -LiteralPath $emptyToken -Value '   ' -NoNewline
+    Assert-Throws 'forgejo: empty token file -> fails' { Get-ForgejoAuthHeader -TokenFile $emptyToken } 'is empty'
+    $hdr = Get-ForgejoAuthHeader -TokenFile $tokenFile
+    Assert-True 'forgejo: header is "Authorization: token <t>"' ($hdr.Authorization -eq "token $fakeToken")
+
+    # -- config gate ----------------------------------------------------------
+    Assert-Throws 'forgejo: no URL -> names the env var' { Assert-ForgejoConfig -Url '' -Repo $fjRepo -Package $fjPkg } 'ELSPI_FORGEJO_URL'
+    Assert-Throws 'forgejo: repo not owner/repo -> names the env var' { Assert-ForgejoConfig -Url $fjBase -Repo 'justone' -Package $fjPkg } 'ELSPI_FORGEJO_REPO'
+    Assert-Throws 'forgejo: package not owner/name -> names the env var' { Assert-ForgejoConfig -Url $fjBase -Repo $fjRepo -Package '' } 'ELSPI_FORGEJO_PACKAGE'
+    Assert-True 'forgejo: trailing slash trimmed from URL' ((Assert-ForgejoConfig -Url "$fjBase/" -Repo $fjRepo -Package $fjPkg) -eq $fjBase)
+
+    # -- run resolution -------------------------------------------------------
+    $script:fjCalls = @()
+    function Invoke-ForgejoApi {
+        param([string] $Uri, [hashtable] $Headers)
+        $script:fjCalls += $Uri
+        # As if the server IGNORED status/workflow_id: a newer failed run, a
+        # newer running one, and a newer success of a different workflow must
+        # all lose to the newest successful image.yml run.
+        return [PSCustomObject]@{ total_count = 5; workflow_runs = @(
+            [PSCustomObject]@{ id = 11; status = 'success'; workflow_id = 'image.yml'; commit_sha = $shaA; prettyref = 'arm64'; created = '2026-09-20T00:00:00Z' },
+            [PSCustomObject]@{ id = 15; status = 'failure'; workflow_id = 'image.yml'; commit_sha = ('c' * 40); prettyref = 'arm64'; created = '2026-09-25T00:00:00Z' },
+            [PSCustomObject]@{ id = 13; status = 'success'; workflow_id = 'image.yml'; commit_sha = $shaB; prettyref = 'arm64'; created = '2026-09-22T00:00:00Z' },
+            [PSCustomObject]@{ id = 16; status = 'running'; workflow_id = 'image.yml'; commit_sha = ('d' * 40); prettyref = 'arm64'; created = '2026-09-26T00:00:00Z' },
+            [PSCustomObject]@{ id = 17; status = 'success'; workflow_id = 'other.yml'; commit_sha = ('e' * 40); prettyref = 'arm64'; created = '2026-09-26T01:00:00Z' }
+        ) }
+    }
+    $b = Resolve-ForgejoBuild -BaseUrl $fjBase -Repo $fjRepo -Headers $hdr -Branch 'arm64'
+    Assert-True 'forgejo: -Branch picks the newest SUCCESSFUL image.yml run' ($b.run_id -eq 13 -and $b.sha -eq $shaB) "(got run $($b.run_id) sha $($b.sha))"
+    Assert-True 'forgejo: runs query carries ref, workflow_id and status filters' `
+        ($script:fjCalls[0] -eq "$fjBase/api/v1/repos/$fjRepo/actions/runs?ref=refs%2Fheads%2Farm64&workflow_id=image.yml&status=success&limit=20") "(got $($script:fjCalls[0]))"
+
+    function Invoke-ForgejoApi {
+        param([string] $Uri, [hashtable] $Headers)
+        return [PSCustomObject]@{ total_count = 2; workflow_runs = @(
+            [PSCustomObject]@{ id = 15; status = 'failure'; workflow_id = 'image.yml'; commit_sha = $shaA; created = '2026-09-25T00:00:00Z' },
+            [PSCustomObject]@{ id = 16; status = 'running'; workflow_id = 'image.yml'; commit_sha = $shaB; created = '2026-09-26T00:00:00Z' }
+        ) }
+    }
+    Assert-Throws 'forgejo: no successful run on the branch -> fails' {
+        Resolve-ForgejoBuild -BaseUrl $fjBase -Repo $fjRepo -Headers $hdr -Branch 'arm64'
+    } 'no successful image.yml run'
+    function Invoke-ForgejoApi { param([string] $Uri, [hashtable] $Headers) return [PSCustomObject]@{ total_count = 0; workflow_runs = $null } }
+    Assert-Throws 'forgejo: empty run list -> fails' {
+        Resolve-ForgejoBuild -BaseUrl $fjBase -Repo $fjRepo -Headers $hdr -Branch 'arm64'
+    } 'no successful image.yml run'
+
+    function Invoke-ForgejoApi {
+        param([string] $Uri, [hashtable] $Headers)
+        if ($Uri -ne "$fjBase/api/v1/repos/$fjRepo/actions/runs/42") { throw "unexpected uri $Uri" }
+        return [PSCustomObject]@{ id = 42; status = 'success'; workflow_id = 'image.yml'; commit_sha = $shaA; prettyref = 'feat/x'; created = '2026-09-24T00:00:00Z' }
+    }
+    $r = Resolve-ForgejoBuild -BaseUrl $fjBase -Repo $fjRepo -Headers $hdr -RunId '42' -Branch 'ignored'
+    Assert-True 'forgejo: -RunId reads that run' ($r.run_id -eq 42 -and $r.sha -eq $shaA)
+    function Invoke-ForgejoApi { param([string] $Uri, [hashtable] $Headers) return [PSCustomObject]@{ id = 42; status = 'success'; workflow_id = 'lint.yml'; commit_sha = $shaA } }
+    Assert-Throws 'forgejo: -RunId of a non-image workflow -> fails' {
+        Resolve-ForgejoBuild -BaseUrl $fjBase -Repo $fjRepo -Headers $hdr -RunId '42'
+    } "not 'image.yml'"
+
+    function Invoke-ForgejoApi { throw 'test: -Sha must not call the API' }
+    $s = Resolve-ForgejoBuild -BaseUrl $fjBase -Repo $fjRepo -Headers $hdr -Sha $shaA.ToUpperInvariant()
+    Assert-True 'forgejo: -Sha needs no API call, and is lowercased' ($s.sha -eq $shaA)
+    Assert-Throws 'forgejo: a short -Sha is refused (the package version is the FULL sha)' {
+        Resolve-ForgejoBuild -BaseUrl $fjBase -Repo $fjRepo -Headers $hdr -Sha 'abc1234'
+    } 'not a full 40-hex'
+
+    # -- package file selection -----------------------------------------------
+    $h64 = 'f' * 64
+    $imgEntry = [PSCustomObject]@{ id = 1; Size = 1000; name = 'image_2026-09-26-elspi-arm64.img.xz'; sha256 = $h64 }
+    $infoEntry = [PSCustomObject]@{ id = 2; Size = 10; name = 'image_2026-09-26-elspi-arm64.info'; sha256 = $h64 }
+    $logEntry = [PSCustomObject]@{ id = 3; Size = 10; name = 'build.log'; sha256 = $h64 }
+    $pick = Select-ForgejoImageFile -Files @($logEntry, $imgEntry, $infoEntry) -Sha $shaA
+    Assert-True 'forgejo: picks the one image_*.img.xz among .info and build.log' ($pick.name -eq $imgEntry.name -and $pick.size -eq 1000)
+    Assert-Throws 'forgejo: no image in the package version -> fails' { Select-ForgejoImageFile -Files @($logEntry, $infoEntry) -Sha $shaA } 'no image_*.img.xz'
+    Assert-Throws 'forgejo: empty package version -> fails' { Select-ForgejoImageFile -Files @() -Sha $shaA } 'no image_*.img.xz'
+    $img2 = [PSCustomObject]@{ id = 4; Size = 5; name = 'image_other.img.xz'; sha256 = $h64 }
+    Assert-Throws 'forgejo: two images -> fails' { Select-ForgejoImageFile -Files @($imgEntry, $img2) -Sha $shaA } 'expected exactly one'
+    $noHash = [PSCustomObject]@{ id = 1; Size = 1000; name = 'image_x.img.xz'; sha256 = '' }
+    Assert-Throws 'forgejo: image listed without a sha256 -> fails' { Select-ForgejoImageFile -Files @($noHash) } 'no sha256'
+    $noSize = [PSCustomObject]@{ id = 1; name = 'image_x.img.xz'; sha256 = $h64 }
+    Assert-Throws 'forgejo: image listed without a size -> fails' { Select-ForgejoImageFile -Files @($noSize) } 'no size'
+    $evil = [PSCustomObject]@{ id = 1; Size = 1; name = 'image_..\..\x.img.xz'; sha256 = $h64 }
+    Assert-Throws 'forgejo: a file name with path characters is refused' { Select-ForgejoImageFile -Files @($evil) } 'not a plain file name'
+
+    # -- download verification ------------------------------------------------
+    $payload = New-Object byte[] 4096
+    (New-Object System.Random(7)).NextBytes($payload)
+    $payloadHash = [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($payload)).Replace('-', '').ToLowerInvariant()
+    $dl = Join-Path $fjDir 'dl.img.xz'
+    [System.IO.File]::WriteAllBytes($dl, $payload)
+    $goodInfo = [PSCustomObject]@{ name = 'image_t.img.xz'; size = [int64] 4096; sha256 = $payloadHash }
+    try { Confirm-DownloadedForgejoFile -Path $dl -FileInfo $goodInfo; Assert-True 'forgejo: matching size+sha256 -> accepted' $true }
+    catch { Assert-True 'forgejo: matching size+sha256 -> accepted' $false "(threw: $($_.Exception.Message))" }
+    Assert-Throws 'forgejo: size mismatch -> refused' {
+        Confirm-DownloadedForgejoFile -Path $dl -FileInfo ([PSCustomObject]@{ name = 'image_t.img.xz'; size = [int64] 4097; sha256 = $payloadHash })
+    } 'not caching this as complete'
+    Assert-Throws 'forgejo: sha256 mismatch with the right size -> refused' {
+        Confirm-DownloadedForgejoFile -Path $dl -FileInfo ([PSCustomObject]@{ name = 'image_t.img.xz'; size = [int64] 4096; sha256 = ('0' * 64) })
+    } 'does not match the package API'
+
+    # -- commit availability --------------------------------------------------
+    $script:catFileCalls = 0
+    function git {
+        param([Parameter(ValueFromRemainingArguments)] [string[]] $Arguments)
+        if ($Arguments[2] -eq 'cat-file') { $script:catFileCalls++; $global:LASTEXITCODE = 1; return 'fatal: Not a valid object name' }
+        if ($Arguments[2] -eq 'fetch') { $global:LASTEXITCODE = 128; return 'fatal: remote error' }
+        throw "unexpected git call: $($Arguments -join ' ')"
+    }
+    Assert-Throws 'forgejo: sha not in this checkout even after fetch -> refuses to download' {
+        Assert-CommitAvailable -RepoRoot 'C:\fake\repo' -Sha $shaA
+    } 'Refusing to download'
+    Assert-True 'forgejo: the commit check fetched and re-checked' ($script:catFileCalls -eq 2) "(cat-file calls: $script:catFileCalls)"
+
+    # -- end to end through Invoke-FlashTestBuild -Source forgejo -------------
+    function Assert-WslAvailable { }
+    function Assert-ImagerReady { param($RepoRoot) }
+    function Get-MakeOsListScriptForCommit { param($RepoRoot, $Sha, $OutDir) $script:osListSha = $Sha }
+    function wsl { $global:LASTEXITCODE = 0 }
+    function Read-Host { param($Prompt) 'y' }
+    function git {
+        param([Parameter(ValueFromRemainingArguments)] [string[]] $Arguments)
+        if ($Arguments[2] -eq 'cat-file') { $global:LASTEXITCODE = 0; return }
+        throw "unexpected git call: $($Arguments -join ' ')"
+    }
+    $e2eFile = [PSCustomObject]@{ id = 1; Size = 4096; name = 'image_e2e.img.xz'; sha256 = $payloadHash }
+    $script:fjCalls = @()
+    $script:fjHeaders = @()
+    function Invoke-ForgejoApi {
+        param([string] $Uri, [hashtable] $Headers)
+        $script:fjCalls += $Uri; $script:fjHeaders += $Headers.Authorization
+        if ($Uri -like '*/actions/runs?*') {
+            return [PSCustomObject]@{ workflow_runs = @([PSCustomObject]@{ id = 77; status = 'success'; workflow_id = 'image.yml'; commit_sha = $shaA; prettyref = 'arm64'; created = '2026-09-26T00:00:00Z' }) }
+        }
+        if ($Uri -eq "$fjBase/api/v1/packages/pkgowner/generic/pkgname/$shaA/files") { return @($logEntry, $e2eFile) }
+        throw "unexpected uri $Uri"
+    }
+    $script:downloadBytes = $payload
+    $script:downloads = @()
+    function Invoke-ForgejoDownload {
+        param([string] $Uri, [hashtable] $Headers, [string] $OutFile)
+        $script:downloads += $Uri; $script:fjHeaders += $Headers.Authorization
+        [System.IO.File]::WriteAllBytes($OutFile, $script:downloadBytes)
+    }
+    $fjArgs = @{
+        Source = 'forgejo'; Branch = 'arm64'; RepoRoot = 'C:\fake\repo'
+        ForgejoUrl = $fjBase; ForgejoRepo = $fjRepo; ForgejoPackage = $fjPkg; ForgejoTokenFile = $tokenFile
+    }
+    $expectedDownload = "$fjBase/api/packages/pkgowner/generic/pkgname/$shaA/image_e2e.img.xz"
+
+    # Dry run: resolves and prints every URL, downloads nothing.
+    $dryDest = Join-Path $fjDir 'dry'
+    $dryOut = (& { Invoke-FlashTestBuild @fjArgs -Dest $dryDest -DryRun } 6>&1 | Out-String)
+    Assert-True 'forgejo dry run: prints the resolved download URL' ($dryOut -match [regex]::Escape($expectedDownload)) "(output: $dryOut)"
+    Assert-True 'forgejo dry run: downloads nothing, creates no cache dir' ($script:downloads.Count -eq 0 -and -not (Test-Path -LiteralPath $dryDest))
+    Assert-True 'forgejo dry run: never prints the token' ($dryOut -notmatch [regex]::Escape($fakeToken))
+
+    # Corrupt download (same size, different bytes): refused, nothing cached.
+    $badDest = Join-Path $fjDir 'bad'
+    $corrupt = [byte[]] $payload.Clone(); $corrupt[100] = $corrupt[100] -bxor 0xFF
+    $script:downloadBytes = $corrupt
+    Assert-Throws 'forgejo e2e: corrupt download -> refused' { Invoke-FlashTestBuild @fjArgs -Dest $badDest -NoLaunch 6>$null } 'does not match the package API'
+    $badCache = Join-Path $badDest "forgejo-$shaA"
+    Assert-True 'forgejo e2e: corrupt download leaves no marker, no image, no .partial' `
+        (-not (Test-Path (Join-Path $badCache '.forgejo-package-info.json')) -and -not (Test-Path (Join-Path $badCache 'image_e2e.img.xz')) -and -not (Test-Path (Join-Path $badCache 'image_e2e.img.xz.partial')))
+
+    # Good download: verified, renamed into place, marker written, os_list built from the build's sha.
+    $goodDest = Join-Path $fjDir 'good'
+    $script:downloadBytes = $payload
+    $script:downloads = @()
+    $script:osListSha = $null
+    $runOut = (& { Invoke-FlashTestBuild @fjArgs -Dest $goodDest -NoLaunch } 6>&1 | Out-String)
+    $goodCache = Join-Path $goodDest "forgejo-$shaA"
+    Assert-True 'forgejo e2e: good download cached with its marker' `
+        ((Test-Path (Join-Path $goodCache 'image_e2e.img.xz')) -and (Test-Path (Join-Path $goodCache '.forgejo-package-info.json')) -and -not (Test-Path (Join-Path $goodCache 'image_e2e.img.xz.partial')))
+    Assert-True 'forgejo e2e: downloaded from the package registry URL' ($script:downloads.Count -eq 1 -and $script:downloads[0] -eq $expectedDownload) "(got $($script:downloads -join ', '))"
+    Assert-True 'forgejo e2e: make-os-list.sh comes from the BUILD''s sha' ($script:osListSha -eq $shaA)
+    Assert-True 'forgejo e2e: cache reused on the next run' (Test-CachedForgejoImage -CacheDir $goodCache -FileInfo (Select-ForgejoImageFile -Files @($e2eFile)) -Sha $shaA)
+    $script:downloads = @()
+    $null = (& { Invoke-FlashTestBuild @fjArgs -Dest $goodDest -NoLaunch } 6>&1 | Out-String)
+    Assert-True 'forgejo e2e: second run downloads nothing' ($script:downloads.Count -eq 0)
+    $changed = Select-ForgejoImageFile -Files @([PSCustomObject]@{ Size = 4096; name = 'image_e2e.img.xz'; sha256 = ('1' * 64) })
+    Assert-True 'forgejo: cache NOT reused when the listed sha256 changed' (-not (Test-CachedForgejoImage -CacheDir $goodCache -FileInfo $changed -Sha $shaA))
+    Assert-True 'forgejo: cache NOT reused for another sha' (-not (Test-CachedForgejoImage -CacheDir $goodCache -FileInfo (Select-ForgejoImageFile -Files @($e2eFile)) -Sha $shaB))
+
+    # The token went only into Authorization headers.
+    Assert-True 'forgejo: every request carried "Authorization: token <t>"' (@($script:fjHeaders | Where-Object { $_ -ne "token $fakeToken" }).Count -eq 0 -and $script:fjHeaders.Count -gt 0)
+    Assert-True 'forgejo: the token is in no URL' (@($script:fjCalls + $script:downloads | Where-Object { $_ -match [regex]::Escape($fakeToken) }).Count -eq 0)
+    Assert-True 'forgejo: the token is in no printed output' ($runOut -notmatch [regex]::Escape($fakeToken))
+
+    # Missing token file stops the run in preflight, before any API call.
+    $script:fjCalls = @()
+    $noTok = $fjArgs.Clone(); $noTok.ForgejoTokenFile = (Join-Path $fjDir 'absent-token')
+    Assert-Throws 'forgejo e2e: missing token file -> stops before any API call' { Invoke-FlashTestBuild @noTok -Dest $goodDest -DryRun 6>$null } 'Generate New Token'
+    Assert-True 'forgejo e2e: ... and no API call was made' ($script:fjCalls.Count -eq 0)
+
+    # -Sha is Forgejo-only: the GitHub path refuses it rather than ignoring it.
+    Assert-Throws 'github: -Sha is refused (Forgejo-only)' { Invoke-FlashTestBuild -Sha $shaA -Branch 'arm64' -Dest $goodDest -RepoRoot 'C:\fake\repo' -DryRun } 'Forgejo only'
+
+    foreach ($f in 'Assert-WslAvailable', 'Assert-ImagerReady', 'Get-MakeOsListScriptForCommit', 'wsl', 'Read-Host', 'git', 'Invoke-ForgejoApi', 'Invoke-ForgejoDownload') {
+        Remove-Item "Function:\$f" -ErrorAction SilentlyContinue
+    }
+} finally {
+    Remove-Item -LiteralPath $fjDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# =============================================================================
 
 Write-Host ""
 Write-Host "$($script:total - $script:failures) / $($script:total) passed"

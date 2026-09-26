@@ -361,6 +361,23 @@ again. **Nothing is tagged, released, or otherwise published by this
 command** — it only downloads a workflow artifact GitHub already built and
 flashes it locally.
 
+The same build can come from a Forgejo instance running this repo's `image`
+workflow, which uploads the image to that instance's generic package registry
+instead of keeping it as an artifact. Point the script at it with three
+settings and an access token (scopes `read:package` and `read:repository`)
+saved to `%LOCALAPPDATA%\elspi\forgejo-token`:
+
+```
+$env:ELSPI_FORGEJO_URL     = 'https://forgejo.example'
+$env:ELSPI_FORGEJO_REPO    = 'owner/repo'
+$env:ELSPI_FORGEJO_PACKAGE = 'pkgowner/pkgname'
+tools\flash-test-build.ps1 -Source forgejo -Branch <branch>
+```
+
+`-RunId <id>` and `-Sha <full commit sha>` work there too. The download is
+checked against the package registry's own size and sha256 before it is
+cached. The script's header explains each check.
+
 
 
 **Imager says “Source file not found”, or shows its normal OS catalogue instead

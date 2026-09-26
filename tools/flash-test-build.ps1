@@ -6,6 +6,15 @@
 #   tools\flash-test-build.ps1 -Branch arm64 -Dest D:\cards\test-builds
 #   tools\flash-test-build.ps1 -Branch feat/first-boot-ui -DryRun
 #
+#   # Same thing from a Forgejo instance's CI instead of GitHub's (see FORGEJO
+#   # SOURCE below). Nothing about the instance is hard-coded in this file:
+#   $env:ELSPI_FORGEJO_URL     = 'https://forgejo.example'
+#   $env:ELSPI_FORGEJO_REPO    = 'owner/repo'
+#   $env:ELSPI_FORGEJO_PACKAGE = 'pkgowner/pkgname'
+#   tools\flash-test-build.ps1 -Source forgejo -Branch arm64
+#   tools\flash-test-build.ps1 -Source forgejo -RunId 42
+#   tools\flash-test-build.ps1 -Source forgejo -Sha <40-hex commit sha> -DryRun
+#
 # WHAT THIS IS FOR, AND WHAT IT ISN'T
 #
 # .github/workflows/image.yml's build job runs on every workflow_dispatch and
@@ -76,6 +85,50 @@
 # artifact's own head_sha via `git show`, so the script used always matches
 # the image being described, regardless of which branch this checkout is on.
 #
+# FORGEJO SOURCE (-Source forgejo)
+#
+# A Forgejo instance can run the same image.yml against a snapshot of this
+# repo. Forgejo (v15) has no workflow-artifact API, so that workflow uploads
+# the image to the instance's GENERIC PACKAGE REGISTRY instead, one package
+# version per full commit sha:
+#
+#   {url}/api/packages/{pkgowner}/generic/{pkgname}/{sha}/image_*.img.xz
+#
+# (plus the *.info and build.log beside it). The flow mirrors the GitHub one,
+# gate for gate:
+#
+#   run    -Branch: GET {url}/api/v1/repos/{repo}/actions/runs?ref=refs/heads/
+#          <branch>&workflow_id=image.yml&status=success -- and the result is
+#          filtered AGAIN here (status, workflow_id, newest `created` wins), so
+#          a server that ignored a query filter still cannot hand back a failed
+#          run. -RunId reads that one run; -Sha skips the run lookup entirely.
+#   commit the sha must exist in THIS checkout (git cat-file, fetching origin
+#          once if not) BEFORE anything is downloaded, because make-os-list.sh
+#          comes from `git show <sha>:...` exactly as for GitHub -- the Forgejo
+#          repo is a snapshot of this one, so its commits are this repo's.
+#   files  GET {url}/api/v1/packages/{pkgowner}/generic/{pkgname}/{sha}/files
+#          lists every file of that package version with its size and sha256.
+#          Exactly one image_*.img.xz must be there, with a 64-hex sha256.
+#   verify the download (an uncompressed .img.xz, not a zip) goes to
+#          <name>.partial, is checked for size AND sha256 against that listing,
+#          and only then is renamed into place and given its
+#          .forgejo-package-info.json marker. A failed check deletes the
+#          .partial: nothing unverified is ever left looking cached.
+#   cache  <Dest>\forgejo-<sha>\ -- keyed by commit, since that is what the
+#          package version is keyed by; separate from GitHub's <Dest>\<run-id>\.
+#
+# AUTH. Every Forgejo call sends `Authorization: token <t>` as a request
+# header, never in a URL and never on a command line. The token is read at
+# run time from -ForgejoTokenFile (default %LOCALAPPDATA%\elspi\forgejo-token)
+# and never printed. Mint one in the Forgejo web UI: Settings > Applications >
+# Generate New Token, scopes read:package and read:repository, and save just
+# the token to that file.
+#
+# CONFIG. -ForgejoUrl / -ForgejoRepo / -ForgejoPackage default to
+# $env:ELSPI_FORGEJO_URL / $env:ELSPI_FORGEJO_REPO / $env:ELSPI_FORGEJO_PACKAGE.
+# They are parameters rather than constants because this repository is
+# public and the instance is not.
+#
 # TESTING
 #
 #   pwsh tests\test-flash-test-build.ps1
@@ -86,17 +139,44 @@
 # Get-MakeOsListScriptForCommit and Assert-CommandAvailable directly, with
 # gh/git calls replaced by fake functions of the same name (Invoke-GhDownloadZip
 # included -- see its own comment). No network, no download, no Imager launch.
+# The Forgejo side is faked the same way, through Invoke-ForgejoApi and
+# Invoke-ForgejoDownload, the only two functions that touch the network.
 
 [CmdletBinding()]
 param(
     # Branch to search for the newest successful image.yml run. Ignored if
-    # -RunId is given.
+    # -RunId (or, for Forgejo, -Sha) is given.
     [string] $Branch,
 
     # A specific run id -- bypasses the branch search entirely, including the
     # "must have succeeded" filter (you asked for this run by number; a
     # warning is printed if it did not succeed, but the run is still used).
+    # A GitHub run id, or a Forgejo one with -Source forgejo.
     [string] $RunId,
+
+    # Where the build comes from: GitHub Actions artifacts (the default, and
+    # the only source before Forgejo was added) or a Forgejo instance's
+    # generic package registry. See FORGEJO SOURCE in the header.
+    [ValidateSet('github', 'forgejo')]
+    [string] $Source = 'github',
+
+    # Forgejo only: a full 40-hex commit sha -- the package version to flash,
+    # with no run lookup at all.
+    [string] $Sha,
+
+    # Forgejo only: base URL, e.g. https://forgejo.example (no trailing /api).
+    [string] $ForgejoUrl = $env:ELSPI_FORGEJO_URL,
+
+    # Forgejo only: owner/repo whose image.yml runs are searched.
+    [string] $ForgejoRepo = $env:ELSPI_FORGEJO_REPO,
+
+    # Forgejo only: pkgowner/pkgname of the generic package the workflow
+    # uploads the image to.
+    [string] $ForgejoPackage = $env:ELSPI_FORGEJO_PACKAGE,
+
+    # Forgejo only: file holding an access token (read:package +
+    # read:repository). Read at run time, never printed.
+    [string] $ForgejoTokenFile = $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'elspi\forgejo-token' } else { '' }),
 
     # Base cache directory. The actual download goes to $Dest\<run-id>\. Fixed
     # per Evan's approval of this tool's design -- override with -Dest for a
@@ -400,8 +480,402 @@ function Test-CachedArtifact {
 }
 
 # =============================================================================
+# Forgejo source -- see FORGEJO SOURCE in the header. Invoke-ForgejoApi and
+# Invoke-ForgejoDownload are the only functions here that touch the network;
+# a test redefines them, the same way it redefines `gh` and `git`.
+# =============================================================================
+
+$ForgejoWorkflow = 'image.yml'
+
+function Invoke-ForgejoApi {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Uri,
+        [Parameter(Mandatory)] [hashtable] $Headers
+    )
+    try {
+        return Invoke-RestMethod -Uri $Uri -Headers $Headers -Method Get -UseBasicParsing -ErrorAction Stop
+    } catch {
+        # The message names the URL (which never carries the token) and the
+        # HTTP status; it never includes the request headers.
+        $status = $null
+        if ($_.Exception.Response) { $status = [int] $_.Exception.Response.StatusCode }
+        throw "[forgejo] GET $Uri failed$(if ($status) { " (HTTP $status)" }): $($_.Exception.Message)"
+    }
+}
+
+# Streams the response body straight to $OutFile (Invoke-WebRequest -OutFile
+# does not buffer the ~1 GB body in memory). Progress is silenced: on Windows
+# PowerShell 5.1 the progress bar alone slows a download like this by an
+# order of magnitude.
+function Invoke-ForgejoDownload {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $Uri,
+        [Parameter(Mandatory)] [hashtable] $Headers,
+        [Parameter(Mandatory)] [string] $OutFile
+    )
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        Invoke-WebRequest -Uri $Uri -Headers $Headers -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+    } catch {
+        throw "[forgejo] downloading $Uri failed: $($_.Exception.Message)"
+    }
+}
+
+# Checks the Forgejo settings are present and shaped right, and returns the
+# base URL without a trailing slash. Names the parameter AND the environment
+# variable for anything missing.
+function Assert-ForgejoConfig {
+    param([string] $Url, [string] $Repo, [string] $Package)
+    if (-not $Url) {
+        throw "[forgejo config] no Forgejo URL -- pass -ForgejoUrl https://forgejo.example or set `$env:ELSPI_FORGEJO_URL"
+    }
+    if ($Url -notmatch '^https?://[^/\s?#]+(/[^\s?#]*)?$') {
+        throw "[forgejo config] -ForgejoUrl '$Url' is not an http(s) base URL like https://forgejo.example"
+    }
+    if ($Url -match '^http://') {
+        Write-Warning "-ForgejoUrl is plain http: the access token will cross the network unencrypted."
+    }
+    if ($Repo -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
+        throw "[forgejo config] -ForgejoRepo '$Repo' is not owner/repo -- pass -ForgejoRepo owner/repo or set `$env:ELSPI_FORGEJO_REPO"
+    }
+    if ($Package -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._+-]+$') {
+        throw "[forgejo config] -ForgejoPackage '$Package' is not pkgowner/pkgname -- pass -ForgejoPackage pkgowner/pkgname or set `$env:ELSPI_FORGEJO_PACKAGE"
+    }
+    return $Url.TrimEnd('/')
+}
+
+# Reads the token file and returns the request headers. The token goes into
+# the header value and nowhere else; no message here ever includes it.
+function Get-ForgejoAuthHeader {
+    param([string] $TokenFile)
+    $mint = "Mint one in the Forgejo web UI: Settings > Applications > Generate New Token, with scopes read:package and read:repository, and save just the token to that file (or pass -ForgejoTokenFile <path>)."
+    if (-not $TokenFile -or -not (Test-Path -LiteralPath $TokenFile -PathType Leaf)) {
+        throw "[forgejo auth] no token file at '$TokenFile'. $mint"
+    }
+    $token = (Get-Content -LiteralPath $TokenFile -Raw -ErrorAction Stop)
+    if ($null -ne $token) { $token = $token.Trim() }
+    if (-not $token) {
+        throw "[forgejo auth] token file '$TokenFile' is empty. $mint"
+    }
+    if ($token -match '\s') {
+        throw "[forgejo auth] token file '$TokenFile' holds more than one word -- it must contain only the token. $mint"
+    }
+    return @{ Authorization = "token $token"; Accept = 'application/json' }
+}
+
+function Get-ForgejoRunsUri {
+    param([Parameter(Mandatory)] [string] $BaseUrl, [Parameter(Mandatory)] [string] $Repo, [Parameter(Mandatory)] [string] $Branch)
+    $ref = [uri]::EscapeDataString("refs/heads/$Branch")
+    return "$BaseUrl/api/v1/repos/$Repo/actions/runs?ref=$ref&workflow_id=$script:ForgejoWorkflow&status=success&limit=20"
+}
+
+function Get-ForgejoPackageFilesUri {
+    param([Parameter(Mandatory)] [string] $BaseUrl, [Parameter(Mandatory)] [string] $Package, [Parameter(Mandatory)] [string] $Sha)
+    $owner, $name = $Package -split '/', 2
+    return "$BaseUrl/api/v1/packages/$([uri]::EscapeDataString($owner))/generic/$([uri]::EscapeDataString($name))/$Sha/files"
+}
+
+function Get-ForgejoPackageFileUri {
+    param([Parameter(Mandatory)] [string] $BaseUrl, [Parameter(Mandatory)] [string] $Package, [Parameter(Mandatory)] [string] $Sha, [Parameter(Mandatory)] [string] $FileName)
+    $owner, $name = $Package -split '/', 2
+    return "$BaseUrl/api/packages/$([uri]::EscapeDataString($owner))/generic/$([uri]::EscapeDataString($name))/$Sha/$([uri]::EscapeDataString($FileName))"
+}
+
+# Resolve which build to use, as an object with .sha, .run_id, .ref, .created.
+#   -Sha given    -> that commit, no API call (the package version IS the sha).
+#   -RunId given  -> that run (must be an image.yml run; a warning, not an
+#                    error, if it did not succeed -- same as GitHub's -RunId).
+#   -Branch given -> newest successful image.yml run on refs/heads/<branch>.
+#                    The query asks the server to filter, and the answer is
+#                    filtered again here, so a failed or running run is never
+#                    picked even if the server ignored a filter.
+function Resolve-ForgejoBuild {
+    param(
+        [Parameter(Mandatory)] [string] $BaseUrl,
+        [Parameter(Mandatory)] [string] $Repo,
+        [Parameter(Mandatory)] [hashtable] $Headers,
+        [string] $Branch,
+        [string] $RunId,
+        [string] $Sha
+    )
+    if ($Sha) {
+        if ($Sha -notmatch '^[0-9a-fA-F]{40}$') {
+            throw "Resolve-ForgejoBuild: -Sha '$Sha' is not a full 40-hex commit sha (the package version is the FULL sha)"
+        }
+        return [PSCustomObject]@{ sha = $Sha.ToLowerInvariant(); run_id = $null; ref = '(explicit -Sha)'; created = $null }
+    }
+
+    if ($RunId) {
+        if ($RunId -notmatch '^[0-9]+$') { throw "Resolve-ForgejoBuild: -RunId '$RunId' is not a number" }
+        $run = Invoke-ForgejoApi -Uri "$BaseUrl/api/v1/repos/$Repo/actions/runs/$RunId" -Headers $Headers
+        if ($run.workflow_id -ne $script:ForgejoWorkflow) {
+            throw "Resolve-ForgejoBuild: run $RunId is a '$($run.workflow_id)' run, not '$script:ForgejoWorkflow'"
+        }
+        if ($run.status -ne 'success') {
+            Write-Warning "run $RunId did not succeed (status: $($run.status)) -- using it anyway, you asked for it by id"
+        }
+    } else {
+        if (-not $Branch) { throw "Resolve-ForgejoBuild: pass -Branch <name>, -RunId <id> or -Sha <sha>" }
+        $resp = Invoke-ForgejoApi -Uri (Get-ForgejoRunsUri -BaseUrl $BaseUrl -Repo $Repo -Branch $Branch) -Headers $Headers
+        $runs = @($resp.workflow_runs | Where-Object { $_ })
+        $successful = @($runs | Where-Object { $_.status -eq 'success' -and $_.workflow_id -eq $script:ForgejoWorkflow })
+        if ($successful.Count -eq 0) {
+            throw "Resolve-ForgejoBuild: no successful $script:ForgejoWorkflow run found on branch '$Branch' (the API returned $($runs.Count) run(s))"
+        }
+        $run = $successful | Sort-Object -Property { [datetime] $_.created }, { [int64] $_.id } -Descending | Select-Object -First 1
+    }
+
+    if ("$($run.commit_sha)" -notmatch '^[0-9a-fA-F]{40}$') {
+        throw "Resolve-ForgejoBuild: run $($run.id) has no usable commit_sha ('$($run.commit_sha)')"
+    }
+    return [PSCustomObject]@{ sha = "$($run.commit_sha)".ToLowerInvariant(); run_id = $run.id; ref = $run.prettyref; created = $run.created }
+}
+
+# The sha must be a commit THIS checkout has, because make-os-list.sh is read
+# from it with `git show` (see WHY THE BUILD'S OWN make-os-list.sh). Checked
+# before the download, so a sha that cannot be described never costs 1 GB.
+function Assert-CommitAvailable {
+    param([Parameter(Mandatory)] [string] $RepoRoot, [Parameter(Mandatory)] [string] $Sha)
+    $spec = "${Sha}^{commit}"
+    if ((Invoke-Git '-C' $RepoRoot 'cat-file' '-e' $spec).ExitCode -eq 0) { return }
+    Write-Host "commit $Sha not found locally -- fetching from origin ..."
+    $fetch = Invoke-Git '-C' $RepoRoot 'fetch' 'origin' $Sha
+    if ((Invoke-Git '-C' $RepoRoot 'cat-file' '-e' $spec).ExitCode -ne 0) {
+        throw "[commit] $Sha is not in this checkout even after 'git fetch origin $Sha' (fetch exit $($fetch.ExitCode)). The Forgejo build must be of a commit this repo has -- its tools/make-os-list.sh describes the image. Refusing to download."
+    }
+}
+
+# Picks the one image_*.img.xz out of a package version's file list (the
+# /files endpoint's PackageFile objects: name, Size, sha256, ...). Throws if
+# there is not exactly one, or if it lacks a size or a sha256 to verify the
+# download against. The name also becomes a local file name, so anything
+# that is not a plain file name is refused.
+#
+# Note the size key: Forgejo's PackageFile struct has no json tag on Size, so
+# the JSON key is "Size" -- PowerShell property access is case-insensitive,
+# so .Size reads it either way.
+function Select-ForgejoImageFile {
+    param([Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Files, [string] $Sha = '')
+    $images = @($Files | Where-Object { $_ -and $_.name -like 'image_*.img.xz' })
+    if ($images.Count -eq 0) {
+        $names = @($Files | ForEach-Object { $_.name }) -join ', '
+        throw "[forgejo package] no image_*.img.xz in package version $Sha (files: $(if ($names) { $names } else { 'none' }))"
+    }
+    if ($images.Count -gt 1) {
+        throw "[forgejo package] $($images.Count) image_*.img.xz files in package version $Sha ($(@($images | ForEach-Object { $_.name }) -join ', ')) -- expected exactly one"
+    }
+    $f = $images[0]
+    if ($f.name -notmatch '^[A-Za-z0-9._+-]+$') {
+        throw "[forgejo package] refusing file name '$($f.name)' -- not a plain file name"
+    }
+    if (-not ($f.Size -as [int64]) -or [int64] $f.Size -le 0) {
+        throw "[forgejo package] $($f.name) has no size in the package file list -- cannot verify a download"
+    }
+    if ("$($f.sha256)" -notmatch '^[0-9a-fA-F]{64}$') {
+        throw "[forgejo package] $($f.name) has no sha256 in the package file list -- cannot verify a download"
+    }
+    return [PSCustomObject]@{ name = $f.name; size = [int64] $f.Size; sha256 = "$($f.sha256)".ToLowerInvariant() }
+}
+
+# Verifies a downloaded package file against the package API's own listing:
+# byte size, then sha256. Throws on either mismatch.
+function Confirm-DownloadedForgejoFile {
+    param([Parameter(Mandatory)] [string] $Path, [Parameter(Mandatory)] $FileInfo)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "[forgejo download] $Path not found after download"
+    }
+    $actualSize = (Get-Item -LiteralPath $Path).Length
+    if ($actualSize -ne $FileInfo.size) {
+        throw "[forgejo download] $Path is $actualSize bytes but the package API lists $($FileInfo.size) for $($FileInfo.name) -- not caching this as complete"
+    }
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $FileInfo.sha256) {
+        throw "[forgejo download] $Path sha256 $actual does not match the package API's sha256 $($FileInfo.sha256) -- not caching this as complete"
+    }
+    Write-Host "verified: $actualSize bytes, sha256:$actual matches the package API."
+}
+
+# True if $CacheDir holds a verified download of exactly $FileInfo for $Sha:
+# the marker written after verification agrees with the API's listing, and
+# the image file is present at the recorded size. Never re-hashes 1 GB.
+function Test-CachedForgejoImage {
+    param([Parameter(Mandatory)] [string] $CacheDir, [Parameter(Mandatory)] $FileInfo, [Parameter(Mandatory)] [string] $Sha)
+    $marker = Join-Path $CacheDir '.forgejo-package-info.json'
+    if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) { return $false }
+    try { $recorded = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json } catch { return $false }
+    if ($recorded.commit_sha -ne $Sha) { return $false }
+    if ($recorded.name -ne $FileInfo.name) { return $false }
+    if ([int64] $recorded.size -ne $FileInfo.size) { return $false }
+    if ($recorded.sha256 -ne $FileInfo.sha256) { return $false }
+    $img = Join-Path $CacheDir $FileInfo.name
+    if (-not (Test-Path -LiteralPath $img -PathType Leaf)) { return $false }
+    if ((Get-Item -LiteralPath $img).Length -ne $FileInfo.size) { return $false }
+    return $true
+}
+
+# =============================================================================
+# Shared tail: build os_list.json with the build's own make-os-list.sh, then
+# hand it to Imager. Used by both sources.
+# =============================================================================
+
+function Write-DryRunTail {
+    param(
+        [Parameter(Mandatory)] [string] $RepoRoot,
+        [Parameter(Mandatory)] [string] $CacheDir,
+        [Parameter(Mandatory)] [string] $Sha,
+        [Parameter(Mandatory)] [string] $ImagePath
+    )
+    $osList = "$CacheDir\os_list.json"
+    $makeOsList = "$CacheDir\make-os-list.sh"
+    $wslScript = ConvertTo-WslPath $makeOsList
+    $wslImg = ConvertTo-WslPath $ImagePath
+    $wslOut = ConvertTo-WslPath $osList
+    $fileUrl = "file:///" + ($ImagePath -replace '\\', '/')
+    Write-Host "would run: git -C `"$RepoRoot`" show ${Sha}:tools/make-os-list.sh > `"$makeOsList`"  (the BUILD's own copy, not this checkout's)"
+    Write-Host "would run: git -C `"$RepoRoot`" show ${Sha}:tools/os_list.imager-block.json > `"$CacheDir\os_list.imager-block.json`"  (its sibling, same commit)"
+    Write-Host "would run: wsl bash -lc `"'$wslScript' '$wslImg' --url '$fileUrl' --out '$wslOut'`""
+    Write-Host "  (Windows path -> WSL path: $ImagePath -> $wslImg)"
+    Write-Host "would run: tools\flash-elspi.ps1 `"$osList`""
+}
+
+function Invoke-OsListAndFlash {
+    param(
+        [Parameter(Mandatory)] [string] $RepoRoot,
+        [Parameter(Mandatory)] [string] $CacheDir,
+        [Parameter(Mandatory)] [string] $Sha,
+        [Parameter(Mandatory)] [string] $ImagePath,
+        [switch] $NoLaunch
+    )
+    $osListPath = Join-Path $CacheDir 'os_list.json'
+    $fileUrl = "file:///" + ($ImagePath -replace '\\', '/')
+    $makeOsListPath = Join-Path $CacheDir 'make-os-list.sh'
+    Get-MakeOsListScriptForCommit -RepoRoot $RepoRoot -Sha $Sha -OutDir $CacheDir
+    $wslScript = ConvertTo-WslPath $makeOsListPath
+    $wslImg = ConvertTo-WslPath $ImagePath
+    $wslOut = ConvertTo-WslPath $osListPath
+
+    Write-Host ""
+    Write-Host "building os_list.json (using tools/make-os-list.sh from commit $Sha, not this checkout) ..."
+    $bashCmd = "'$wslScript' '$wslImg' --url '$fileUrl' --out '$wslOut'"
+    & wsl bash -lc $bashCmd
+    if ($LASTEXITCODE -ne 0) { throw "[make-os-list.sh] failed (exit $LASTEXITCODE)" }
+
+    Write-Host ""
+    if ($NoLaunch) {
+        Write-Host "-NoLaunch: skipping Imager. os_list.json is ready at $osListPath"
+        return
+    }
+    Write-Host "launching Imager ..."
+    & (Join-Path $RepoRoot 'tools\flash-elspi.ps1') $osListPath
+    if ($LASTEXITCODE -ne 0) { throw "[flash-elspi.ps1] failed (exit $LASTEXITCODE)" }
+}
+
+# =============================================================================
 # Main
 # =============================================================================
+
+function Invoke-FlashTestBuildForgejo {
+    [CmdletBinding()]
+    param(
+        [string] $Branch,
+        [string] $RunId,
+        [string] $Sha,
+        [Parameter(Mandatory)] [string] $Dest,
+        [switch] $DryRun,
+        [switch] $NoLaunch,
+        [Parameter(Mandatory)] [string] $RepoRoot,
+        [string] $ForgejoUrl,
+        [string] $ForgejoRepo,
+        [string] $ForgejoPackage,
+        [string] $ForgejoTokenFile
+    )
+    if (-not $Branch -and -not $RunId -and -not $Sha) {
+        throw "flash-test-build: pass -Branch <name>, -RunId <id> or -Sha <sha>"
+    }
+
+    Write-Host "== preflight (forgejo) =="
+    $base = Assert-ForgejoConfig -Url $ForgejoUrl -Repo $ForgejoRepo -Package $ForgejoPackage
+    $headers = Get-ForgejoAuthHeader -TokenFile $ForgejoTokenFile
+    Assert-WslAvailable
+    Assert-ImagerReady -RepoRoot $RepoRoot
+    Write-Host "Forgejo settings, token file, wsl and Imager 2.x are all present."
+    Write-Host ""
+
+    Write-Host "== resolving build =="
+    if (-not $Sha -and -not $RunId) {
+        Write-Host ("runs:     GET {0}" -f (Get-ForgejoRunsUri -BaseUrl $base -Repo $ForgejoRepo -Branch $Branch))
+    }
+    $build = Resolve-ForgejoBuild -BaseUrl $base -Repo $ForgejoRepo -Headers $headers -Branch $Branch -RunId $RunId -Sha $Sha
+    $sha = $build.sha
+    Write-Host ("ref:      {0}" -f $build.ref)
+    Write-Host ("sha:      {0}" -f $sha)
+    Write-Host ("run id:   {0}" -f $(if ($build.run_id) { $build.run_id } else { '(none)' }))
+    Write-Host ("date:     {0}" -f $build.created)
+    Assert-CommitAvailable -RepoRoot $RepoRoot -Sha $sha
+
+    $filesUri = Get-ForgejoPackageFilesUri -BaseUrl $base -Package $ForgejoPackage -Sha $sha
+    Write-Host ("files:    GET {0}" -f $filesUri)
+    $fileInfo = Select-ForgejoImageFile -Files @(Invoke-ForgejoApi -Uri $filesUri -Headers $headers) -Sha $sha
+    $downloadUri = Get-ForgejoPackageFileUri -BaseUrl $base -Package $ForgejoPackage -Sha $sha -FileName $fileInfo.name
+    Write-Host ("image:    {0} ({1} bytes, sha256 {2})" -f $fileInfo.name, $fileInfo.size, $fileInfo.sha256)
+    Write-Host ("download: GET {0}" -f $downloadUri)
+    Write-Host ""
+
+    $cacheDir = Join-Path $Dest "forgejo-$sha"
+    $imgPath = Join-Path $cacheDir $fileInfo.name
+    $sizeMb = [math]::Round($fileInfo.size / 1MB)
+    $reuse = Test-CachedForgejoImage -CacheDir $cacheDir -FileInfo $fileInfo -Sha $sha
+    if ($reuse) {
+        Write-Host "cache:    reusing $cacheDir (already downloaded, ~$sizeMb MB, verified by size+sha256 against the package API)"
+    } else {
+        Write-Host "cache:    $cacheDir (not cached yet -- would download ~$sizeMb MB)"
+    }
+    Write-Host ""
+
+    if ($DryRun) {
+        Write-Host "== DRY RUN: stopping before the download and the Imager launch =="
+        if ($reuse) {
+            Write-Host "would reuse the cached image above; no download"
+        } else {
+            Write-Host "would download: $downloadUri -> `"$imgPath.partial`", verify size+sha256, then rename to `"$imgPath`""
+        }
+        Write-DryRunTail -RepoRoot $RepoRoot -CacheDir $cacheDir -Sha $sha -ImagePath $imgPath
+        return
+    }
+
+    if (-not $reuse) {
+        $answer = Read-Host "Download ~$sizeMb MB of $($fileInfo.name) ($($build.ref) @ $sha)? [y/N]"
+        if ($answer -notmatch '^[Yy]') {
+            Write-Host "Aborted -- nothing downloaded."
+            return
+        }
+        New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+        $marker = Join-Path $cacheDir '.forgejo-package-info.json'
+        Remove-Item -LiteralPath $marker -ErrorAction SilentlyContinue
+        $partial = "$imgPath.partial"
+        Write-Host "downloading $($fileInfo.name) to $partial ..."
+        try {
+            Invoke-ForgejoDownload -Uri $downloadUri -Headers $headers -OutFile $partial
+            Confirm-DownloadedForgejoFile -Path $partial -FileInfo $fileInfo
+        } catch {
+            Remove-Item -LiteralPath $partial -ErrorAction SilentlyContinue
+            throw
+        }
+        Move-Item -LiteralPath $partial -Destination $imgPath -Force
+        [PSCustomObject]@{
+            name       = $fileInfo.name
+            size       = $fileInfo.size
+            sha256     = $fileInfo.sha256
+            commit_sha = $sha
+            run_id     = $build.run_id
+        } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding utf8
+        Write-Host "downloaded and verified."
+    }
+
+    Invoke-OsListAndFlash -RepoRoot $RepoRoot -CacheDir $cacheDir -Sha $sha -ImagePath $imgPath -NoLaunch:$NoLaunch
+}
 
 function Invoke-FlashTestBuild {
     [CmdletBinding()]
@@ -412,8 +886,25 @@ function Invoke-FlashTestBuild {
         [switch] $DryRun,
         [switch] $NoLaunch,
         [Parameter(Mandatory)] [string] $RepoRoot,
-        [string] $Repo = $script:Repo
+        [string] $Repo = $script:Repo,
+        [ValidateSet('github', 'forgejo')] [string] $Source = 'github',
+        [string] $Sha,
+        [string] $ForgejoUrl,
+        [string] $ForgejoRepo,
+        [string] $ForgejoPackage,
+        [string] $ForgejoTokenFile
     )
+
+    if ($Source -eq 'forgejo') {
+        Invoke-FlashTestBuildForgejo -Branch $Branch -RunId $RunId -Sha $Sha -Dest $Dest `
+            -DryRun:$DryRun -NoLaunch:$NoLaunch -RepoRoot $RepoRoot `
+            -ForgejoUrl $ForgejoUrl -ForgejoRepo $ForgejoRepo -ForgejoPackage $ForgejoPackage `
+            -ForgejoTokenFile $ForgejoTokenFile
+        return
+    }
+    if ($Sha) {
+        throw "flash-test-build: -Sha is for -Source forgejo only; for GitHub pass -Branch <name> or -RunId <id>"
+    }
 
     if (-not $Branch -and -not $RunId) {
         throw "flash-test-build: pass -Branch <name> or -RunId <id>"
@@ -456,18 +947,7 @@ function Invoke-FlashTestBuild {
         } else {
             Write-Host "would run: gh api repos/$Repo/actions/artifacts/$($artifactInfo.id)/zip > `"$cacheDir\$artifactName.zip`""
         }
-        $img = "$cacheDir\<image>.img.xz"
-        $osList = "$cacheDir\os_list.json"
-        $makeOsList = "$cacheDir\make-os-list.sh"
-        $wslScript = ConvertTo-WslPath $makeOsList
-        $wslImg = ConvertTo-WslPath $img
-        $wslOut = ConvertTo-WslPath $osList
-        $fileUrl = "file:///" + ($img -replace '\\', '/')
-        Write-Host "would run: git -C `"$RepoRoot`" show ${sha}:tools/make-os-list.sh > `"$makeOsList`"  (the BUILD's own copy, not this checkout's)"
-        Write-Host "would run: git -C `"$RepoRoot`" show ${sha}:tools/os_list.imager-block.json > `"$cacheDir\os_list.imager-block.json`"  (its sibling, same commit)"
-        Write-Host "would run: wsl bash -lc `"'$wslScript' '$wslImg' --url '$fileUrl' --out '$wslOut'`""
-        Write-Host "  (Windows path -> WSL path: $img -> $wslImg)"
-        Write-Host "would run: tools\flash-elspi.ps1 `"$osList`""
+        Write-DryRunTail -RepoRoot $RepoRoot -CacheDir $cacheDir -Sha $sha -ImagePath "$cacheDir\<image>.img.xz"
         return
     }
 
@@ -498,28 +978,7 @@ function Invoke-FlashTestBuild {
     $img = Get-ChildItem -LiteralPath $cacheDir -Filter '*.img.xz' -Recurse | Select-Object -First 1
     if (-not $img) { throw "[make-os-list] no *.img.xz found under $cacheDir" }
 
-    $osListPath = Join-Path $cacheDir 'os_list.json'
-    $fileUrl = "file:///" + ($img.FullName -replace '\\', '/')
-    $makeOsListPath = Join-Path $cacheDir 'make-os-list.sh'
-    Get-MakeOsListScriptForCommit -RepoRoot $RepoRoot -Sha $sha -OutDir $cacheDir
-    $wslScript = ConvertTo-WslPath $makeOsListPath
-    $wslImg = ConvertTo-WslPath $img.FullName
-    $wslOut = ConvertTo-WslPath $osListPath
-
-    Write-Host ""
-    Write-Host "building os_list.json (using tools/make-os-list.sh from commit $sha, not this checkout) ..."
-    $bashCmd = "'$wslScript' '$wslImg' --url '$fileUrl' --out '$wslOut'"
-    & wsl bash -lc $bashCmd
-    if ($LASTEXITCODE -ne 0) { throw "[make-os-list.sh] failed (exit $LASTEXITCODE)" }
-
-    Write-Host ""
-    if ($NoLaunch) {
-        Write-Host "-NoLaunch: skipping Imager. os_list.json is ready at $osListPath"
-        return
-    }
-    Write-Host "launching Imager ..."
-    & (Join-Path $RepoRoot 'tools\flash-elspi.ps1') $osListPath
-    if ($LASTEXITCODE -ne 0) { throw "[flash-elspi.ps1] failed (exit $LASTEXITCODE)" }
+    Invoke-OsListAndFlash -RepoRoot $RepoRoot -CacheDir $cacheDir -Sha $sha -ImagePath $img.FullName -NoLaunch:$NoLaunch
 }
 
 # Run Main only when this file is executed directly -- not when a test
@@ -527,5 +986,7 @@ function Invoke-FlashTestBuild {
 # above without triggering gh/wsl/Imager calls or the confirmation prompt.
 if ($MyInvocation.InvocationName -ne '.') {
     Invoke-FlashTestBuild -Branch $Branch -RunId $RunId -Dest $Dest -DryRun:$DryRun -NoLaunch:$NoLaunch `
-        -RepoRoot (Split-Path -Parent $PSScriptRoot) -Repo $Repo
+        -RepoRoot (Split-Path -Parent $PSScriptRoot) -Repo $Repo `
+        -Source $Source -Sha $Sha -ForgejoUrl $ForgejoUrl -ForgejoRepo $ForgejoRepo `
+        -ForgejoPackage $ForgejoPackage -ForgejoTokenFile $ForgejoTokenFile
 }
