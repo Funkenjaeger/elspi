@@ -242,7 +242,7 @@ imager = json.loads(pathlib.Path(block).read_text(encoding="utf-8"),
 entry = collections.OrderedDict((
     ("name", name),
     ("description",
-     "Reflex ELS appliance image, Debian trixie armhf. On the next pages: "
+     "Reflex ELS appliance image, Debian trixie arm64. On the next pages: "
      "user 'default', a password and/or an SSH key (at least one), Wi-Fi and its country."),
     ("url", url),
     ("release_date", date),
@@ -253,9 +253,11 @@ entry = collections.OrderedDict((
     # The one key this whole file exists for: it is what makes Imager 2.x
     # show the customisation pages at all.
     ("init_format", "cloudinit-rpi"),
-    # 32-bit only. This is an armhf image; a 64bit tag here would offer it for
-    # a Pi the kernel cannot run.
-    ("devices", ["pi5-32bit", "pi4-32bit", "pi3-32bit", "pi2-32bit", "pi1-32bit"]),
+    # 64-bit only, on the arm64 branch (the branch is the architecture,
+    # docs/design/fork.md). This is an arm64 image: a 32bit tag here would
+    # offer it for a Pi 1/2/Zero whose CPU cannot run it. Same three tags
+    # Raspberry Pi OS (64-bit) carries.
+    ("devices", ["pi5-64bit", "pi4-64bit", "pi3-64bit"]),
 ))
 
 doc = collections.OrderedDict((("imager", imager), ("os_list", [entry])))

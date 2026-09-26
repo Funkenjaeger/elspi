@@ -121,8 +121,9 @@ eq "extract_sha256"        "${EXP_RAW_SHA}"  "$(jget "${OUT}" os_list.0.extract_
 
 # The key the whole --repo path exists for.
 eq "init_format" "cloudinit-rpi" "$(jget "${OUT}" os_list.0.init_format)"
-# armhf: 32-bit tags only, or Imager offers the image for a kernel it cannot run.
-eq "devices" '["pi5-32bit", "pi4-32bit", "pi3-32bit", "pi2-32bit", "pi1-32bit"]' \
+# arm64 branch: 64-bit tags only, or Imager offers the image for a Pi whose CPU
+# cannot run it.
+eq "devices" '["pi5-64bit", "pi4-64bit", "pi3-64bit"]' \
              "$(jget "${OUT}" os_list.0.devices)"
 eq "release_date" "2026-09-13" "$(jget "${OUT}" os_list.0.release_date)"
 # Default url is the image where it sits, as a file:// URL.
