@@ -120,7 +120,7 @@ function New-ForgejoFixture {
     (New-Object System.Random 7).NextBytes($bytes)
     $img = Join-Path $dir 'image_2026-09-26-elspi.img.xz'
     [System.IO.File]::WriteAllBytes($img, $bytes)
-    $m = [ordered]@{ name = 'image_2026-09-26-elspi.img.xz'; size = [int64] 4096; sha256 = (Get-FixHash $img); commit_sha = $SnapSha; elspi_sha = $FixSha; run_id = 42 }
+    $m = [ordered]@{ name = 'image_2026-09-26-elspi.img.xz'; size = [int64] 4096; sha256 = (Get-FixHash $img); info_name = '2026-09-26-elspi.info'; package_sha = $SnapSha; elspi_sha = $FixSha; elspi_sha_source = 'elspi-commit.txt'; run_id = 42 }
     if ($NoElspiSha) { $m.Remove('elspi_sha') }
     $m | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $dir '.forgejo-package-info.json') -Encoding utf8
     $global:FjSources = @{
@@ -203,7 +203,7 @@ function git {
             $ref = $a2[-1]
             return "$('f' * 40)`t$ref"
         }
-        'cat-file' { return '' }
+        'cat-file' { if ($a2 -contains '-t') { return 'commit' }; return '' }
         'fetch' { return '' }
         'merge-base' { $global:LASTEXITCODE = $global:MergeBaseExit; return '' }
         'show' {
@@ -390,6 +390,11 @@ try {
     Reset-Fakes
     $global:FjDir = New-ForgejoFixture -NoElspiSha
     Assert-Throws 'red: forgejo marker without elspi_sha is refused' { Invoke-Case -Dir $global:FjDir -Dry } 'has no elspi_sha'
+
+    Reset-Fakes
+    $global:FjDir = New-ForgejoFixture
+    [System.IO.File]::WriteAllText($global:FjSources['2026-09-26-elspi.info'], (New-InfoText -Sha $SnapSha -Arch 'arm64'))
+    Assert-Throws 'red: forgejo .info stamped with the SNAPSHOT sha (a legacy build) is refused' { Invoke-Case -Dir $global:FjDir -Dry } '[build sha]'
 
     Reset-Fakes
     $global:FjDir = New-ForgejoFixture

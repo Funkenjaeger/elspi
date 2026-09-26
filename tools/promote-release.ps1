@@ -285,7 +285,7 @@ function Resolve-PromoteCacheDir {
             $g = Join-Path $_.FullName '.artifact-info.json'
             $f = Join-Path $_.FullName '.forgejo-package-info.json'
             ((Test-Path -LiteralPath $g) -and ((Get-Content -LiteralPath $g -Raw | ConvertFrom-Json).name -eq "elspi-image-$s")) -or
-            ((Test-Path -LiteralPath $f) -and ($s -in @((Get-Content -LiteralPath $f -Raw | ConvertFrom-Json) | ForEach-Object { $_.elspi_sha; $_.package_sha; $_.commit_sha })))
+            ((Test-Path -LiteralPath $f) -and ($s -in @((Get-Content -LiteralPath $f -Raw | ConvertFrom-Json) | ForEach-Object { $_.elspi_sha; $_.package_sha })))
         })
         if ($hits.Count -ne 1) { throw "promote-release: $($hits.Count) cache directories under $Dest hold commit $s, expected one -- pass -CacheDir" }
         $dir = $hits[0].FullName
@@ -349,15 +349,15 @@ function Assert-ExtractedMatchesZip {
 # SNAPSHOT commit, which is not in elspi; the elspi commit is its parent.
 # Everything elspi-side -- the tag's --target, the branch check, build.sh's
 # ARCH, make-os-list.sh and release-notes.sh -- uses the ELSPI commit, which
-# the marker must record as `elspi_sha`. The package sha is `package_sha`, or
-# `commit_sha` in markers written before the two were split. A marker with no
-# elspi_sha is refused rather than guessed at.
+# the marker records as `elspi_sha` (flash-test-build.ps1 since 085ccfe; the
+# package sha is `package_sha`). A marker without both -- one written before
+# 085ccfe -- is refused rather than guessed at: re-run flash-test-build.
 function Read-ForgejoMarker {
     param([Parameter(Mandatory)] [string] $CacheDir)
     $m = Get-Content -LiteralPath (Join-Path $CacheDir '.forgejo-package-info.json') -Raw | ConvertFrom-Json
     if ("$($m.elspi_sha)" -notmatch '^[0-9a-f]{40}$') { throw "[marker] .forgejo-package-info.json has no elspi_sha (got '$($m.elspi_sha)') -- a Forgejo build's package sha is a snapshot commit that is not in elspi, so the elspi commit must be recorded; re-download with a flash-test-build.ps1 that writes it" }
-    $pkg = if ($m.package_sha) { "$($m.package_sha)" } else { "$($m.commit_sha)" }
-    if ($pkg -notmatch '^[0-9a-f]{40}$') { throw "[marker] .forgejo-package-info.json has no 40-hex package sha (package_sha / commit_sha)" }
+    $pkg = "$($m.package_sha)"
+    if ($pkg -notmatch '^[0-9a-f]{40}$') { throw "[marker] .forgejo-package-info.json has no 40-hex package_sha" }
     if ("$($m.name)" -notmatch '^image_[A-Za-z0-9._+-]+\.img\.xz$') { throw "[marker] .forgejo-package-info.json name '$($m.name)' is not image_*.img.xz" }
     if ("$($m.sha256)" -notmatch '^[0-9a-f]{64}$') { throw "[marker] .forgejo-package-info.json has no sha256" }
     return [PSCustomObject]@{ name = $m.name; sha = "$($m.elspi_sha)"; package_sha = $pkg; size = [int64] $m.size; sha256 = $m.sha256; run_id = "$($m.run_id)" }
@@ -451,10 +451,11 @@ function Get-CommitArch {
 }
 
 function Assert-BuildShaConsistent {
-    # $PackageSha: a Forgejo build's snapshot commit, whose pi-gen GIT_HASH
-    # may be either commit.
-    param([Parameter(Mandatory)] [string] $MarkerSha, [Parameter(Mandatory)] [string] $InfoSha, $Run, [string] $PackageSha)
-    if ($InfoSha -ne $MarkerSha -and (-not $PackageSha -or $InfoSha -ne $PackageSha)) { throw "[build sha] the .info says the image was built from $InfoSha, the marker says $MarkerSha$(if ($PackageSha) { " (package $PackageSha)" })" }
+    # For a Forgejo build $MarkerSha is the ELSPI sha. A .info stamped with
+    # the snapshot (package) sha is a legacy build and is refused, as
+    # flash-test-build.ps1 refuses it.
+    param([Parameter(Mandatory)] [string] $MarkerSha, [Parameter(Mandatory)] [string] $InfoSha, $Run)
+    if ($InfoSha -ne $MarkerSha) { throw "[build sha] the .info says the image was built from $InfoSha, the marker says $MarkerSha" }
     if ($Run) {
         if ($Run.workflowName -ne 'image') { throw "[build sha] run $($Run.databaseId) is a '$($Run.workflowName)' run, not 'image'" }
         if ($Run.conclusion -ne 'success') { throw "[build sha] run $($Run.databaseId) concluded '$($Run.conclusion)', not success" }
@@ -489,7 +490,7 @@ function Assert-OnBranch {
     $tip = @($ls.Output | ForEach-Object { "$_" } | Where-Object { $_ -match "^[0-9a-f]{40}\s+refs/heads/$([regex]::Escape($Branch))$" } | ForEach-Object { ($_ -split '\s+')[0] })
     if ($ls.ExitCode -ne 0 -or $tip.Count -ne 1) { throw "[branch] could not read GitHub's $Branch tip (git ls-remote exit $($ls.ExitCode))" }
     $tip = $tip[0]
-    if ((Invoke-Git '-C' $RepoRoot 'cat-file' '-e' "${tip}^{commit}").ExitCode -ne 0) {
+    if ("$(@((Invoke-Git '-C' $RepoRoot 'cat-file' '-t' $tip).Output) -join '')".Trim() -ne 'commit') {
         $null = Invoke-Git '-C' $RepoRoot 'fetch' '--no-tags' $GitUrl "refs/heads/$Branch"
     }
     $r = Invoke-Git '-C' $RepoRoot 'merge-base' '--is-ancestor' $Sha $tip
@@ -704,7 +705,7 @@ function Invoke-PromoteRelease {
     }
     $sha = $marker.sha
     Assert-XzIntegrity -ImagePath $imagePath
-    Assert-BuildShaConsistent -MarkerSha $sha -InfoSha (Get-InfoBuildSha -InfoPath $infoPath) -Run $run -PackageSha $marker.package_sha
+    Assert-BuildShaConsistent -MarkerSha $sha -InfoSha (Get-InfoBuildSha -InfoPath $infoPath) -Run $run
     Assert-CommitAvailable -RepoRoot $RepoRoot -Sha $sha
     $arch = Get-InfoArch -InfoPath $infoPath
     Assert-ArchConsistent -InfoArch $arch -CommitArch (Get-CommitArch -RepoRoot $RepoRoot -Sha $sha)
