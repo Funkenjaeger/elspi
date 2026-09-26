@@ -60,13 +60,61 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    # Pinned rather than ubuntu-latest: the qemu shim step below unpacks a
-    # specific package layout (noble's qemu-user-static ships
-    # /usr/bin/qemu-arm-static and qemu-aarch64-static), and a 46-minute build should not have its
-    # host OS change underneath it on a day nobody touched this repo. The
-    # shim step gates on that layout, so drift fails loudly either way.
+  # THE RUNNER FOLLOWS build.sh's ARCH (2026-09-26). The branch is the
+  # architecture (docs/design/fork.md): build.sh carries a bare
+  # `export ARCH=armhf` on master and `export ARCH=arm64` on the arm64 branch.
+  # This job reads that one line from a sparse checkout of build.sh -- never
+  # the branch name -- and hands the build job its runner label and the qemu
+  # name that ARCH would need under emulation.
+  #   armhf -> ubuntu-24.04      (x86_64, emulated; qemu-arm)
+  #   arm64 -> ubuntu-24.04-arm  (native aarch64; qemu-aarch64 only if ever
+  #                               routed to x86 again)
+  # armhf deliberately stays on x86 + qemu: GitHub's arm64 runners do not
+  # reliably execute 32-bit ARM code (DECISIONS.md, 2026-09-26). A build.sh
+  # whose ARCH line is missing, duplicated or unknown fails here, in seconds,
+  # rather than 40 minutes into a build.
+  #
+  # Both labels are pinned rather than *-latest: the qemu shim step below
+  # unpacks a specific package layout (noble's qemu-user-static ships
+  # /usr/bin/qemu-arm-static and qemu-aarch64-static), and a long build
+  # should not have its host OS change underneath it on a day nobody touched
+  # this repo. The shim step gates on that layout, so drift fails loudly
+  # either way. ubuntu-24.04-arm is GitHub's arm64 label for public
+  # repositories (free there, like the x86 standard runners).
+  arch:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      arch: ${{ steps.pick.outputs.arch }}
+      runner: ${{ steps.pick.outputs.runner }}
+      qemu: ${{ steps.pick.outputs.qemu }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: build.sh
+          sparse-checkout-cone-mode: false
+
+      - name: pick the runner for build.sh's ARCH
+        id: pick
+        run: |
+          set -euo pipefail
+          arch_lines="$(grep -E '^export ARCH=' build.sh || true)"
+          test "$(printf '%s\n' "${arch_lines}" | grep -c .)" -eq 1 \
+            || { echo "::error::expected exactly one 'export ARCH=' line in build.sh, found:"; printf '%s\n' "${arch_lines}"; exit 1; }
+          ARCH="${arch_lines#export ARCH=}"
+          case "${ARCH}" in
+            armhf) RUNNER=ubuntu-24.04;     QEMU=qemu-arm ;;
+            arm64) RUNNER=ubuntu-24.04-arm; QEMU=qemu-aarch64 ;;
+            *) echo "::error::build.sh ARCH='${ARCH}' has no runner mapping here"; exit 1 ;;
+          esac
+          echo "build.sh ARCH=${ARCH} -> runs-on ${RUNNER} (qemu name if emulated: ${QEMU})"
+          { echo "arch=${ARCH}"; echo "runner=${RUNNER}"; echo "qemu=${QEMU}"; } >> "${GITHUB_OUTPUT}"
+
+  build:
+    needs: arch
+    runs-on: ${{ needs.arch.outputs.runner }}
     # ~46 min on a local x86_64 build host; a 4-vCPU hosted runner compiling Kivy under
     # emulated armhf will be slower. 180 leaves room without letting a hung
     # build burn the job's 6-hour ceiling.
@@ -75,6 +123,32 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v5
+
+      # NATIVE OR EMULATED is MEASURED on this host, not assumed from the
+      # label: `uname -m` against build.sh's ARCH. Only aarch64 building arm64
+      # is native; every other pairing stages qemu and registers binfmt, as
+      # before. Upstream's build-docker.sh and scripts/dependencies_check
+      # make the same call on `uname -m` and skip their qemu/binfmt checks on
+      # an aarch64 host, and build.sh's `arch-test -n arm64` passes natively.
+      # The full checkout's build.sh is re-read and must agree with the arch
+      # job's, so the two checkouts cannot silently disagree.
+      - name: measure the host against build.sh's ARCH
+        id: host
+        env:
+          ARCH: ${{ needs.arch.outputs.arch }}
+        run: |
+          set -euo pipefail
+          here="$(grep -E '^export ARCH=' build.sh)"
+          test "${here}" = "export ARCH=${ARCH}" \
+            || { echo "::error::build.sh here says '${here}', the arch job read ARCH=${ARCH}"; exit 1; }
+          HOST="$(uname -m)"
+          case "${ARCH}:${HOST}" in
+            arm64:aarch64) EMULATE=false ;;
+            *)             EMULATE=true ;;
+          esac
+          echo "emulate=${EMULATE}" >> "${GITHUB_OUTPUT}"
+          if [ "${EMULATE}" = true ]; then how="EMULATED under qemu"; else how="NATIVE, no qemu"; fi
+          echo "::notice title=build host::${RUNNER_NAME} is ${HOST}, building ARCH=${ARCH}: ${how}"
 
       # ospi's proven shape: the hosted runner is tight on disk and a pi-gen
       # work tree is not small.
@@ -99,27 +173,22 @@ jobs:
       # the path already proven by a real build. STATIC because a registered
       # interpreter has to work inside the target chroot.
       #
-      # ARCH-AWARE (2026-09-26). The branch is the architecture (FORK.md):
-      # build.sh carries a bare `export ARCH=armhf` on master and
-      # `export ARCH=arm64` on the arm64 branch, and build-docker.sh's lookup
-      # follows it -- `which qemu-arm` on master, `which qemu-aarch64` on
-      # arm64. So the name to stage is READ from this checkout's build.sh,
-      # never guessed from the branch name, and a build.sh whose ARCH line is
-      # missing, duplicated or unknown fails here rather than 40 minutes in.
+      # ARCH-AWARE (2026-09-26). build-docker.sh's lookup follows build.sh's
+      # ARCH -- `which qemu-arm` on master, `which qemu-aarch64` on arm64 --
+      # so the name to stage comes from the arch job, which READ it from
+      # build.sh (never from the branch name):
       #   armhf -> qemu-arm      (-> qemu-arm-static)
       #   arm64 -> qemu-aarch64  (-> qemu-aarch64-static)
+      # EMULATED HOSTS ONLY: on a native host build-docker.sh looks up no
+      # qemu at all, so this step and setup-qemu-action below are skipped.
       - name: stage a static qemu for build.sh's ARCH on PATH
+        if: steps.host.outputs.emulate == 'true'
+        env:
+          ARCH: ${{ needs.arch.outputs.arch }}
+          QEMU: ${{ needs.arch.outputs.qemu }}
         run: |
           set -euo pipefail
-          arch_lines="$(grep -E '^export ARCH=' build.sh || true)"
-          test "$(printf '%s\n' "${arch_lines}" | grep -c .)" -eq 1 \
-            || { echo "::error::expected exactly one 'export ARCH=' line in build.sh, found:"; printf '%s\n' "${arch_lines}"; exit 1; }
-          ARCH="${arch_lines#export ARCH=}"
-          case "${ARCH}" in
-            armhf) QEMU=qemu-arm ;;
-            arm64) QEMU=qemu-aarch64 ;;
-            *) echo "::error::build.sh ARCH='${ARCH}' has no qemu mapping here"; exit 1 ;;
-          esac
+          test -n "${QEMU}" || { echo "::error::the arch job gave no qemu name for ARCH=${ARCH}"; exit 1; }
           echo "build.sh ARCH=${ARCH} -> staging ${QEMU} (${QEMU}-static)"
           SHIM="${RUNNER_TEMP}/qemu-shim"
           mkdir -p "${SHIM}/deb" "${SHIM}/root" "${SHIM}/bin"
@@ -137,8 +206,9 @@ jobs:
 
       # ospi's proven shape. Registers binfmt handlers (with the F flag, so
       # they keep working inside the privileged build container) for the
-      # emulated armhf chroot.
+      # emulated chroot. Emulated hosts only, like the shim step above.
       - uses: docker/setup-qemu-action@v4
+        if: steps.host.outputs.emulate == 'true'
 
       # build-docker.sh DIRECTLY, not build-elspi.sh: the wrapper hardcodes
       # `-c elspi.conf`, while CI needs ci.conf. ci.conf sources elspi.conf,
