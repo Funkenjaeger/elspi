@@ -42,9 +42,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
@@ -61,7 +61,7 @@ jobs:
       # mkdocs.yml sets site_dir: deploy/site, so the output lands under the
       # directory upstream pi-gen's .gitignore already ignores. Keep this path
       # and site_dir in step.
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         if: github.ref == 'refs/heads/master'
         with:
           path: deploy/site
@@ -78,4 +78,4 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
