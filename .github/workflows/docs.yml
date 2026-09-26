@@ -1,7 +1,7 @@
 name: docs
 
 # The published site. Builds on every push and PR so a broken internal link
-# fails here rather than on the site; deploys to GitHub Pages from master.
+# fails here rather than on the site; deploys to GitHub Pages from arm64.
 #
 # Mirrors the pattern the reflex repo uses (.github/workflows/docs.yml there):
 # a build job that always runs and uploads the artifact only on the publishing
@@ -9,17 +9,17 @@ name: docs
 # the github-pages environment. Two jobs rather than one because
 # actions/deploy-pages needs write permissions that the build must not have.
 #
-# PAGES IS NOT ENABLED ON THIS REPOSITORY YET. That is a repository setting --
-# Settings -> Pages -> Source: GitHub Actions -- and no workflow can turn it
-# on. Until someone does, the BUILD job passes and the DEPLOY job fails; the
-# site at the site_url in mkdocs.yml does not exist.
+# Pages is enabled on this repository (Settings -> Pages -> Source: GitHub
+# Actions) and the github-pages environment's deployment branch policy
+# includes arm64 (decision D6).
 #
-# Publishes from master, unlike reflex, which publishes from integration.
-# elspi has no branch ladder: master is the only line, and the recovery
-# instructions on the site should describe the image the tags were cut from.
+# Publishes from arm64, unlike reflex, which publishes from integration.
+# elspi has no branch ladder: arm64 is the main line (master is a frozen
+# legacy armhf line that does not publish), and the recovery instructions on
+# the site should describe the image the tags were cut from.
 on:
   push:
-    branches: [master]
+    branches: [arm64]
     paths:
       - "docs/**"
       - "mkdocs.yml"
@@ -62,12 +62,12 @@ jobs:
       # directory upstream pi-gen's .gitignore already ignores. Keep this path
       # and site_dir in step.
       - uses: actions/upload-pages-artifact@v5
-        if: github.ref == 'refs/heads/master'
+        if: github.ref == 'refs/heads/arm64'
         with:
           path: deploy/site
 
   deploy:
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/arm64'
     needs: build
     runs-on: ubuntu-latest
     permissions:

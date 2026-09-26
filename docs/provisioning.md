@@ -367,7 +367,7 @@ one: `ELSPI_RESTORE_MIN_YAML` raises phase 2's content bar. Run
 `--site-hooks` is optional and this repository ships no hooks. Without it,
 `provision.sh` says `no site hooks (none given)` and carries on. The full
 contract, for anyone writing one, is in
-[`deltas/README.md`](https://github.com/Funkenjaeger/elspi/blob/master/deltas/README.md).
+[`deltas/README.md`](https://github.com/Funkenjaeger/elspi/blob/arm64/deltas/README.md).
 
 ## A site build config
 

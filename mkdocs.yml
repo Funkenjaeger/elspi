@@ -2,7 +2,7 @@ site_name: elspi
 site_description: The SD-card image for the Raspberry Pi that runs Reflex on a lathe
 repo_url: https://github.com/Funkenjaeger/elspi
 repo_name: Funkenjaeger/elspi
-edit_uri: edit/master/docs/
+edit_uri: edit/arm64/docs/
 # Two licenses, and the footer says which is which: this is a fork, and the
 # additions are not under upstream's terms. LICENSE-elspi names the split.
 copyright: "elspi additions: MIT (LICENSE-elspi) &middot; upstream pi-gen: BSD 3-Clause (LICENSE)"
