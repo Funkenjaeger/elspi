@@ -215,6 +215,10 @@ jobs:
       # `-c elspi.conf`, while CI needs ci.conf. ci.conf sources elspi.conf,
       # so the only differences are ci.conf's own (xz -9).
       #
+      # A workflow_dispatch TEST build uses ci-test.conf instead: ci.conf with
+      # xz -1 (see its header for the measurement). A pushed v-tag, the only
+      # thing that publishes, keeps ci.conf at xz -9.
+      #
       # NO KEY IS PASSED IN, and none is needed: the image is keyless
       # (elspi.conf's SSH block), so nothing is forwarded into the container
       # beyond what build-docker.sh forwards itself (GIT_HASH,
@@ -229,8 +233,12 @@ jobs:
       # preserved rootfs matters for Tier 2 verification on a local build host, and it
       # dies with the runner here anyway. deploy/ is copied out before the
       # container is removed (build-docker.sh:163 then :172).
-      - name: build the image (build-docker.sh -c ci.conf)
-        run: ./build-docker.sh -c ci.conf
+      - name: build the image (build-docker.sh -c ci.conf, or ci-test.conf for a dispatch)
+        run: |
+          CONF=ci.conf
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then CONF=ci-test.conf; fi
+          echo "config: ${CONF}"
+          ./build-docker.sh -c "${CONF}"
 
       # Gate rather than trust the upload's glob: if-no-files-found only
       # fails when NOTHING matches, so a build that exported no image but left
@@ -251,7 +259,8 @@ jobs:
       # build has no such place; generate one next to the downloaded image with
       # tools/make-os-list.sh, which needs no root and no network.
       #
-      # compression-level 0: the image is already xz -9, so zipping it again
+      # compression-level 0: the image is already xz (-1 for a dispatch, -9
+      # for a tag), so zipping it again
       # costs minutes and saves nothing.
       - uses: actions/upload-artifact@v6
         with:

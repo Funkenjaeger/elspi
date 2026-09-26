@@ -93,7 +93,7 @@ sync, forever) or leaving a public repository whose front page describes a
 different project.
 
 Everything else we add lives in new files: `stage-elspi/`, `elspi.conf`,
-`ci.conf`, `build-elspi.sh`, `tests/`, `docs/`.
+`ci.conf`, `ci-test.conf`, `build-elspi.sh`, `tests/`, `docs/`.
 
 #### A case that would have made it two, and did not (2026-09-12)
 
