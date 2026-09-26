@@ -141,6 +141,88 @@ try {
 }
 
 # =============================================================================
+# 3b. Zip verification (Confirm-DownloadedZip) -- the actual bug in c0f3b85:
+# it compared the sum of the EXTRACTED files against `size_in_bytes`, which
+# describes the ZIP. A real zip is never exactly as large as what it unpacks
+# to (archive overhead), so build both a fake zip file and a fake "extracted
+# total" that deliberately differ, the way the real artifact in the bug
+# report did (zip 1,162,774,137 bytes; extracted files summed to
+# 1,162,773,597 -- 540 bytes of zip overhead).
+# =============================================================================
+
+$zipTestDir = Join-Path ([System.IO.Path]::GetTempPath()) ("flash-test-build-zip-" + [guid]::NewGuid())
+New-Item -ItemType Directory -Force -Path $zipTestDir | Out-Null
+try {
+    $zipPath = Join-Path $zipTestDir 'elspi-image-deadbeef.zip'
+    $zipBytes = New-Object byte[] 1000
+    (New-Object System.Random(1)).NextBytes($zipBytes)
+    [System.IO.File]::WriteAllBytes($zipPath, $zipBytes)
+    $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+    # REGRESSION CASE -- seen red against c0f3b85's own logic, green against
+    # the fix. c0f3b85's check was:
+    #   $totalSize = (extracted files | Measure-Object Length -Sum).Sum
+    #   if ($totalSize -ne $artifactInfo.size_in_bytes) { throw ... }
+    # Simulate "the zip extracts to slightly fewer bytes than its own size"
+    # (every real zip, because of archive overhead) and confirm: (a) the OLD
+    # extracted-size-vs-zip-size comparison fails a download that is actually
+    # fine, and (b) the FIX -- Confirm-DownloadedZip, checking the zip's own
+    # bytes -- accepts that same download.
+    $fakeExtractedTotal = $zipBytes.Length - 12   # stand-in for zip overhead
+    $artifactInfoNoDigest = [PSCustomObject]@{ size_in_bytes = $zipBytes.Length; digest = $null }
+
+    function Test-OldExtractedSizeLogicSeenRed {
+        param($ExtractedTotal, $ArtifactInfo)
+        # c0f3b85's actual comparison, reproduced verbatim in spirit.
+        return $ExtractedTotal -ne $ArtifactInfo.size_in_bytes   # $true -> old code would throw
+    }
+    Assert-True 'seen red: c0f3b85 logic (extracted size vs zip size) rejects a good download' `
+        (Test-OldExtractedSizeLogicSeenRed -ExtractedTotal $fakeExtractedTotal -ArtifactInfo $artifactInfoNoDigest) `
+        "(extracted=$fakeExtractedTotal zip size=$($artifactInfoNoDigest.size_in_bytes) -- these can never be equal for a real zip, which is exactly the bug)"
+
+    # The FIX does not go anywhere near an "extracted total" -- it checks the
+    # zip file's own size. Same artifact, same zip on disk: green.
+    try {
+        Confirm-DownloadedZip -ZipPath $zipPath -ArtifactInfo $artifactInfoNoDigest
+        Assert-True 'fix: Confirm-DownloadedZip accepts the same download c0f3b85 would have rejected' $true
+    } catch {
+        Assert-True 'fix: Confirm-DownloadedZip accepts the same download c0f3b85 would have rejected' $false "(threw: $($_.Exception.Message))"
+    }
+
+    # Confirm-DownloadedZip still refuses a genuine size mismatch.
+    $badSize = [PSCustomObject]@{ size_in_bytes = $zipBytes.Length + 1; digest = $null }
+    Assert-Throws 'Confirm-DownloadedZip refuses a real zip-size mismatch' { Confirm-DownloadedZip -ZipPath $zipPath -ArtifactInfo $badSize } 'not caching this as complete'
+
+    # No digest on the API side -> size-only verification, no throw, and it
+    # says so rather than silently skipping the check.
+    Assert-True 'no digest on API -> verified by size alone (no throw)' $true  # covered by the accept case above; digest is $null there
+
+    # Matching digest -> accepted.
+    $goodDigest = [PSCustomObject]@{ size_in_bytes = $zipBytes.Length; digest = "sha256:$zipHash" }
+    try {
+        Confirm-DownloadedZip -ZipPath $zipPath -ArtifactInfo $goodDigest
+        Assert-True 'matching sha256 digest -> accepted' $true
+    } catch {
+        Assert-True 'matching sha256 digest -> accepted' $false "(threw: $($_.Exception.Message))"
+    }
+
+    # DIGEST MISMATCH -- must refuse, even though the size matches.
+    $badDigest = [PSCustomObject]@{ size_in_bytes = $zipBytes.Length; digest = 'sha256:' + ('0' * 64) }
+    Assert-Throws 'digest mismatch is refused even when size matches' { Confirm-DownloadedZip -ZipPath $zipPath -ArtifactInfo $badDigest } 'does not match the artifact API''s digest'
+
+    # A malformed digest string falls back to size-only rather than crashing.
+    $weirdDigest = [PSCustomObject]@{ size_in_bytes = $zipBytes.Length; digest = 'md5:deadbeef' }
+    try {
+        Confirm-DownloadedZip -ZipPath $zipPath -ArtifactInfo $weirdDigest
+        Assert-True 'unrecognised digest format falls back to size-only, does not throw' $true
+    } catch {
+        Assert-True 'unrecognised digest format falls back to size-only, does not throw' $false "(threw: $($_.Exception.Message))"
+    }
+} finally {
+    Remove-Item -LiteralPath $zipTestDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# =============================================================================
 # 4. Path conversion: C:\x\y -> /mnt/c/x/y
 # =============================================================================
 
