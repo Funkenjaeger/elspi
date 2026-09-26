@@ -295,7 +295,7 @@ cat > "${MANIFEST}" <<- JSON
 	    "runs_once": true,
 	    "restores_config": false,
 	    "status": "${FBUI_STATUS}",
-	    "verified_on_hardware": false
+	    "verified_on_hardware": true
 	  },
 
 	  "delta_layer_owns": [
@@ -314,7 +314,7 @@ cat > "${MANIFEST}" <<- JSON
 	    "anything config.txt or a dtoverlay actually DOES (firmware level)",
 	    "whether usb_max_current_enable (off unless a site build turns it on) prevents a USB touchscreen's brownouts",
 	    "audio output on card 0",
-	    "the first-boot-ui hook (stage-elspi/14-first-boot-ui): its branches are exercised offline (tests/test-first-boot-ui.sh) and 10b-app-install proves the offline re-sync at build time, but converge-then-start of the baked app at first boot has not yet run on a real card, and the UNCOMMISSIONED strip is the application's to show",
+	    "the first-boot-ui hook (stage-elspi/14-first-boot-ui): its branches are exercised offline (tests/test-first-boot-ui.sh) and 10b-app-install proves the offline re-sync at build time, but this offline harness cannot itself run converge-then-start of the baked app on a real card (verified once by hand, see first_boot_ui.verified_on_hardware), and the UNCOMMISSIONED strip is the application's to show",
 	    "SSH login on a real card with the key or password typed into Imager (the image is keyless since 2026-09-23; the seed unit's key install is verified offline only)"
 	  ]
 	}

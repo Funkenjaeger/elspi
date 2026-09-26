@@ -93,6 +93,11 @@ systemd delete the seed unit's job on 2026-09-13. `00-run.sh` and
 
 Whether the whole chain works on a real card — seed, Plymouth, converge on the
 real venv, the unit starting, the application drawing its UNCOMMISSIONED strip
-— has not been seen on hardware yet. `/etc/elspi-image.json`'s
-`cannot_be_verified_without_hardware` says so, and `first_boot_ui.
-verified_on_hardware` stays `false` until a card has done it.
+— was closed 2026-09-26: a CI image (run 36244494844, tip 5ef03b0) flashed onto
+a spare card and booted on the lathe's Pi 5 came up UNCOMMISSIONED, with SSH
+confirming `verdict=STARTED` and `baked_app.started_on_first_boot: true` in
+`/etc/elspi-image.json`. `first_boot_ui.verified_on_hardware` is now `true` in
+the manifest this stage writes. The automated harness still cannot reproduce
+this itself — no GPU or real card in CI — so `cannot_be_verified_without_hardware`
+keeps declaring the hook as a standing limit of the offline harness, not as a
+claim that it is unverified.

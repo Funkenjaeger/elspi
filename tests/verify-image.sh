@@ -1157,7 +1157,7 @@ fi
 # IMPLICIT: that the whole chain -- seed, Plymouth, converge on the real venv,
 # the unit starting, the application showing its UNCOMMISSIONED strip --
 # works on a real card.
-unknown "The first-boot-ui hook has not been verified on a real card: its branches are exercised offline (tests/test-first-boot-ui.sh), 10b-app-install proves the offline re-sync at build time, and the checks above prove the hook, its payload and the manifest agree. Whether a fresh card's touchscreen actually shows the UI, UNCOMMISSIONED, needs the card in the Pi."
+unknown "This offline harness cannot verify the first-boot-ui hook on a real card: its branches are exercised offline (tests/test-first-boot-ui.sh), 10b-app-install proves the offline re-sync at build time, and the checks above prove the hook, its payload and the manifest agree. Whether a fresh card's touchscreen actually shows the UI, UNCOMMISSIONED, needs the card in the Pi (done once, 2026-09-26; see first_boot_ui.verified_on_hardware)."
 
 # ---------------------------------------------------------------------------
 section "Artifact integrity"

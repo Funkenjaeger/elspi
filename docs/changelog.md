@@ -6,7 +6,13 @@ says what is in it.
 
 ## Unreleased — a fresh card boots straight into the UI
 
-On branch `feat/first-boot-ui`, not yet released or verified on hardware.
+On `master` (merged from `feat/first-boot-ui`), not yet released as an image.
+**Verified on hardware 2026-09-26:** the CI image from run 36244494844 (tip
+`5ef03b0`, docs `da421ef`) flashed onto a spare card and booted on the lathe's
+Pi 5 came up UNCOMMISSIONED; SSH showed `verdict=STARTED`,
+`/etc/elspi/reflex-app-release` = v1.2.0, `reflex-ui` active, the delta
+scripts present, dpkg arch armhf, and `baked_app.started_on_first_boot: true`
+in `/etc/elspi-image.json`.
 
 * **First boot lands in the UI, UNCOMMISSIONED.** `stage-elspi/14-first-boot-ui`
   runs phase 1 of the delta layer (converge) against the baked reflex release,

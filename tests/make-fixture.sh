@@ -109,7 +109,7 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
     "runs_once": true,
     "restores_config": false,
     "status": "fixture: converges the baked checkout offline and starts reflex-ui, once",
-    "verified_on_hardware": false
+    "verified_on_hardware": true
   },
   "baked_app": {
     "release": "v1.0.0",
@@ -135,7 +135,7 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
     "DRM master acquisition (no GPU in the harness)",
     "the touchscreen",
     "SPI, I2C and the UART link to the STM32",
-    "the first-boot-ui hook (stage-elspi/14-first-boot-ui): converge-then-start at first boot has not yet run on a real card"
+    "the first-boot-ui hook (stage-elspi/14-first-boot-ui): this offline harness cannot itself run converge-then-start at first boot on a real card"
   ]
 }
 JSON
