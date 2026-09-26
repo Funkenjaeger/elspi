@@ -44,6 +44,7 @@ jobs:
             'tests/*.sh' \
             'tools/*.sh' \
             'build-elspi.sh' \
+            'elspi-base-reuse.sh' \
             'stage-elspi/**/files/elspi-*' \
             ':(exclude)*.service')
           echo "syntax-checked $n scripts"
@@ -96,6 +97,11 @@ jobs:
       # not covered).
       - name: first-boot UI hook
         run: bash tests/test-first-boot-ui.sh
+
+      # The stage0-2 base-reuse decision (elspi-base-reuse.sh), every branch,
+      # in fake BASE_DIR trees. Its header says what only a real build proves.
+      - name: base-reuse decision
+        run: bash tests/test-base-reuse.sh
 
       # deltas/tests/*.sh, driven by the glob rather than by a list, so a new
       # contract test runs here the day it lands. The loop asserts it found
