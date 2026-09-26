@@ -13,7 +13,8 @@
 #   $env:ELSPI_FORGEJO_PACKAGE = 'pkgowner/pkgname'
 #   tools\flash-test-build.ps1 -Source forgejo -Branch arm64
 #   tools\flash-test-build.ps1 -Source forgejo -RunId 42
-#   tools\flash-test-build.ps1 -Source forgejo -Sha <40-hex commit sha> -DryRun
+#   tools\flash-test-build.ps1 -Source forgejo -Sha <40-hex package sha> -DryRun
+#   tools\flash-test-build.ps1 -Source forgejo -RunId 5 -ElspiSha <40-hex elspi sha>
 #
 # WHAT THIS IS FOR, AND WHAT IT ISN'T
 #
@@ -87,35 +88,57 @@
 #
 # FORGEJO SOURCE (-Source forgejo)
 #
-# A Forgejo instance can run the same image.yml against a snapshot of this
-# repo. Forgejo (v15) has no workflow-artifact API, so that workflow uploads
-# the image to the instance's GENERIC PACKAGE REGISTRY instead, one package
-# version per full commit sha:
+# A Forgejo instance can run the same image.yml against a SNAPSHOT of this
+# repo: an elspi commit plus one commit on top that touches only the Forgejo
+# workflow file. Forgejo (v15) has no workflow-artifact API, so that workflow
+# uploads the image to the instance's GENERIC PACKAGE REGISTRY instead, one
+# package version per run commit:
 #
-#   {url}/api/packages/{pkgowner}/generic/{pkgname}/{sha}/image_*.img.xz
+#   {url}/api/packages/{pkgowner}/generic/{pkgname}/{package sha}/<file>
 #
-# (plus the *.info and build.log beside it). The flow mirrors the GitHub one,
-# gate for gate:
+# TWO SHAS, NEVER MIXED UP:
+#
+#   package sha  the run's commit_sha: the SNAPSHOT commit. It is the package
+#                version, so it builds the package URLs and keys the cache.
+#                It does NOT exist in this repo.
+#   elspi sha    the snapshot's parent, i.e. the elspi commit that was built.
+#                It is what this checkout is asked about: the cat-file gate
+#                and `git show <sha>:tools/make-os-list.sh` both use it.
+#
+# Each package version holds image_<date>-elspi.img.xz, <date>-elspi.info,
+# build.log (and sometimes build-docker.log), and elspi-commit.txt with the
+# full elspi sha. Versions built before elspi-commit.txt existed have none,
+# and their .info stamps the SNAPSHOT sha: those stop with a message, and
+# -ElspiSha <sha> supplies the elspi sha by hand (still cross-checked, below).
+#
+# The flow mirrors the GitHub one, gate for gate:
 #
 #   run    -Branch: GET {url}/api/v1/repos/{repo}/actions/runs?ref=refs/heads/
 #          <branch>&workflow_id=image.yml&status=success -- and the result is
 #          filtered AGAIN here (status, workflow_id, newest `created` wins), so
 #          a server that ignored a query filter still cannot hand back a failed
-#          run. -RunId reads that one run; -Sha skips the run lookup entirely.
-#   commit the sha must exist in THIS checkout (git cat-file, fetching origin
-#          once if not) BEFORE anything is downloaded, because make-os-list.sh
-#          comes from `git show <sha>:...` exactly as for GitHub -- the Forgejo
-#          repo is a snapshot of this one, so its commits are this repo's.
+#          run. -RunId reads that one run; -Sha <package sha> skips the lookup.
 #   files  GET {url}/api/v1/packages/{pkgowner}/generic/{pkgname}/{sha}/files
 #          lists every file of that package version with its size and sha256.
-#          Exactly one image_*.img.xz must be there, with a 64-hex sha256.
-#   verify the download (an uncompressed .img.xz, not a zip) goes to
-#          <name>.partial, is checked for size AND sha256 against that listing,
-#          and only then is renamed into place and given its
+#          Exactly one image_*.img.xz must be there, its <date>-elspi.info
+#          beside it, each with a 64-hex sha256.
+#   elspi  BEFORE the image: elspi-commit.txt (tiny) is downloaded, verified
+#          against the listing, and must hold exactly 40 hex characters. Then
+#          the .info (small) is downloaded and verified the same way; line 2's
+#          GIT_HASH field (see tools/make-os-list.sh) must EQUAL that elspi
+#          sha. With -ElspiSha the same equality is required, so a legacy
+#          .info that names the snapshot sha is refused.
+#   commit the elspi sha must exist in THIS checkout (git cat-file, fetching
+#          origin once if not), still before the image download.
+#   verify the image (an uncompressed .img.xz, not a zip) goes to
+#          <name>.partial, is checked for size AND sha256 against the listing,
+#          and only then is renamed into place, next to its .info (where
+#          make-os-list.sh looks for it), and given its
 #          .forgejo-package-info.json marker. A failed check deletes the
 #          .partial: nothing unverified is ever left looking cached.
-#   cache  <Dest>\forgejo-<sha>\ -- keyed by commit, since that is what the
-#          package version is keyed by; separate from GitHub's <Dest>\<run-id>\.
+#   cache  <Dest>\forgejo-<package sha>\, separate from GitHub's
+#          <Dest>\<run-id>\. The marker records BOTH shas (package_sha,
+#          elspi_sha), so a later tool can target the elspi commit.
 #
 # AUTH. Every Forgejo call sends `Authorization: token <t>` as a request
 # header, never in a URL and never on a command line. The token is read at
@@ -160,9 +183,15 @@ param(
     [ValidateSet('github', 'forgejo')]
     [string] $Source = 'github',
 
-    # Forgejo only: a full 40-hex commit sha -- the package version to flash,
-    # with no run lookup at all.
+    # Forgejo only: the full 40-hex PACKAGE sha (the Forgejo run's snapshot
+    # commit, which is the package version) -- flashes that version with no
+    # run lookup at all. Not the elspi commit: see -ElspiSha.
     [string] $Sha,
+
+    # Forgejo only: the full 40-hex ELSPI commit the image was built from, for
+    # a package version that has no elspi-commit.txt. It must still match the
+    # image's .info header and exist in this checkout.
+    [string] $ElspiSha,
 
     # Forgejo only: base URL, e.g. https://forgejo.example (no trailing /api).
     [string] $ForgejoUrl = $env:ELSPI_FORGEJO_URL,
@@ -633,29 +662,51 @@ function Resolve-ForgejoBuild {
     return [PSCustomObject]@{ sha = "$($run.commit_sha)".ToLowerInvariant(); run_id = $run.id; ref = $run.prettyref; created = $run.created }
 }
 
-# The sha must be a commit THIS checkout has, because make-os-list.sh is read
-# from it with `git show` (see WHY THE BUILD'S OWN make-os-list.sh). Checked
-# before the download, so a sha that cannot be described never costs 1 GB.
+# The ELSPI sha must be a commit THIS checkout has, because make-os-list.sh
+# is read from it with `git show` (see WHY THE BUILD'S OWN make-os-list.sh).
+# Checked before the image download, so a build that cannot be described
+# never costs 1 GB. Never called with the package sha: that is a Forgejo
+# snapshot commit and does not exist here.
 function Assert-CommitAvailable {
     param([Parameter(Mandatory)] [string] $RepoRoot, [Parameter(Mandatory)] [string] $Sha)
-    $spec = "${Sha}^{commit}"
-    if ((Invoke-Git '-C' $RepoRoot 'cat-file' '-e' $spec).ExitCode -eq 0) { return }
+    # `cat-file -t` and an exact 'commit' answer, rather than `-e <sha>^{commit}`:
+    # no peel syntax to survive quoting, and a blob or tree is not a commit.
+    $isCommit = {
+        $r = Invoke-Git '-C' $RepoRoot 'cat-file' '-t' $Sha
+        return ($r.ExitCode -eq 0 -and "$(@($r.Output) -join '')".Trim() -eq 'commit')
+    }
+    if (& $isCommit) { return }
     Write-Host "commit $Sha not found locally -- fetching from origin ..."
     $fetch = Invoke-Git '-C' $RepoRoot 'fetch' 'origin' $Sha
-    if ((Invoke-Git '-C' $RepoRoot 'cat-file' '-e' $spec).ExitCode -ne 0) {
-        throw "[commit] $Sha is not in this checkout even after 'git fetch origin $Sha' (fetch exit $($fetch.ExitCode)). The Forgejo build must be of a commit this repo has -- its tools/make-os-list.sh describes the image. Refusing to download."
+    if (-not (& $isCommit)) {
+        throw "[commit] elspi commit $Sha is not in this checkout even after 'git fetch origin $Sha' (fetch exit $($fetch.ExitCode)). Its tools/make-os-list.sh is what describes the image. Refusing to download."
     }
 }
 
-# Picks the one image_*.img.xz out of a package version's file list (the
-# /files endpoint's PackageFile objects: name, Size, sha256, ...). Throws if
-# there is not exactly one, or if it lacks a size or a sha256 to verify the
-# download against. The name also becomes a local file name, so anything
-# that is not a plain file name is refused.
+# One package file's listing entry, validated: a plain file name (it becomes
+# a local file name), a positive size, and a 64-hex sha256 to verify the
+# download against.
 #
 # Note the size key: Forgejo's PackageFile struct has no json tag on Size, so
 # the JSON key is "Size" -- PowerShell property access is case-insensitive,
 # so .Size reads it either way.
+function ConvertTo-ForgejoFileInfo {
+    param([Parameter(Mandatory)] $File)
+    if ("$($File.name)" -notmatch '^[A-Za-z0-9._+-]+$') {
+        throw "[forgejo package] refusing file name '$($File.name)' -- not a plain file name"
+    }
+    if (-not ($File.Size -as [int64]) -or [int64] $File.Size -le 0) {
+        throw "[forgejo package] $($File.name) has no size in the package file list -- cannot verify a download"
+    }
+    if ("$($File.sha256)" -notmatch '^[0-9a-fA-F]{64}$') {
+        throw "[forgejo package] $($File.name) has no sha256 in the package file list -- cannot verify a download"
+    }
+    return [PSCustomObject]@{ name = $File.name; size = [int64] $File.Size; sha256 = "$($File.sha256)".ToLowerInvariant() }
+}
+
+# Picks the one image_*.img.xz out of a package version's file list (the
+# /files endpoint's PackageFile objects: name, Size, sha256, ...). Throws if
+# there is not exactly one.
 function Select-ForgejoImageFile {
     param([Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Files, [string] $Sha = '')
     $images = @($Files | Where-Object { $_ -and $_.name -like 'image_*.img.xz' })
@@ -666,17 +717,126 @@ function Select-ForgejoImageFile {
     if ($images.Count -gt 1) {
         throw "[forgejo package] $($images.Count) image_*.img.xz files in package version $Sha ($(@($images | ForEach-Object { $_.name }) -join ', ')) -- expected exactly one"
     }
-    $f = $images[0]
-    if ($f.name -notmatch '^[A-Za-z0-9._+-]+$') {
-        throw "[forgejo package] refusing file name '$($f.name)' -- not a plain file name"
+    return ConvertTo-ForgejoFileInfo -File $images[0]
+}
+
+# The file named exactly $Name in the listing, validated -- or $null when it
+# is absent and -Optional was given.
+function Select-ForgejoPackageFile {
+    param([Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Files, [Parameter(Mandatory)] [string] $Name, [string] $Sha = '', [switch] $Optional)
+    $match = @($Files | Where-Object { $_ -and $_.name -eq $Name })
+    if ($match.Count -eq 0) {
+        if ($Optional) { return $null }
+        throw "[forgejo package] no $Name in package version $Sha"
     }
-    if (-not ($f.Size -as [int64]) -or [int64] $f.Size -le 0) {
-        throw "[forgejo package] $($f.name) has no size in the package file list -- cannot verify a download"
+    return ConvertTo-ForgejoFileInfo -File $match[0]
+}
+
+# The .info that belongs to an image, named the way tools/make-os-list.sh
+# looks it up next to the image: image_<date>-elspi.img.xz -> <date>-elspi.info
+function Get-ForgejoInfoName {
+    param([Parameter(Mandatory)] [string] $ImageName)
+    return ($ImageName -replace '^image_', '' -replace '\.img\.xz$', '') + '.info'
+}
+
+# elspi-commit.txt must hold exactly 40 hex characters (one trailing newline
+# allowed, nothing else).
+function Read-ElspiCommitFile {
+    param([Parameter(Mandatory)] [string] $Path)
+    $raw = [System.IO.File]::ReadAllText($Path)
+    $body = $raw -replace '\r?\n\z', ''
+    if ($body -notmatch '\A[0-9a-fA-F]{40}\z') {
+        $shown = if ($body.Length -gt 60) { $body.Substring(0, 60) + '...' } else { $body }
+        throw "[elspi sha] elspi-commit.txt does not hold exactly 40 hex characters (got '$shown') -- refusing"
     }
-    if ("$($f.sha256)" -notmatch '^[0-9a-fA-F]{64}$') {
-        throw "[forgejo package] $($f.name) has no sha256 in the package file list -- cannot verify a download"
+    return $body.ToLowerInvariant()
+}
+
+# The GIT_HASH an image's .info was stamped with: line 2 is pi-gen's
+#   Generated using <PI_GEN>, <PI_GEN_REPO>, <GIT_HASH>, <stage>
+# (the same field tools/make-os-list.sh reads). Returns '' if there is none.
+function Get-InfoGitHash {
+    param([Parameter(Mandatory)] [string] $Path)
+    $lines = @(Get-Content -LiteralPath $Path -TotalCount 2)
+    if ($lines.Count -lt 2) { return '' }
+    $fields = $lines[1] -split ',\s*'
+    if ($fields.Count -lt 3) { return '' }
+    return $fields[2].Trim().ToLowerInvariant()
+}
+
+# Downloads one small package file into $StageDir and verifies it against
+# the listing. Returns its local path.
+function Get-VerifiedForgejoSmallFile {
+    param(
+        [Parameter(Mandatory)] [string] $BaseUrl,
+        [Parameter(Mandatory)] [string] $Package,
+        [Parameter(Mandatory)] [string] $PackageSha,
+        [Parameter(Mandatory)] [hashtable] $Headers,
+        [Parameter(Mandatory)] $FileInfo,
+        [Parameter(Mandatory)] [string] $StageDir
+    )
+    $uri = Get-ForgejoPackageFileUri -BaseUrl $BaseUrl -Package $Package -Sha $PackageSha -FileName $FileInfo.name
+    $path = Join-Path $StageDir $FileInfo.name
+    Write-Host ("fetching: {0} ({1} bytes)" -f $FileInfo.name, $FileInfo.size)
+    Invoke-ForgejoDownload -Uri $uri -Headers $Headers -OutFile $path
+    Confirm-DownloadedForgejoFile -Path $path -FileInfo $FileInfo
+    return $path
+}
+
+# Works out the ELSPI commit a package version was built from, BEFORE the
+# image download (see FORGEJO SOURCE in the header):
+#   1. elspi-commit.txt -> exactly 40 hex. Absent (a legacy version) -> stop,
+#      unless -ElspiSha supplies it. Both given -> they must agree.
+#   2. the image's .info -> its GIT_HASH must EQUAL that sha. A legacy .info
+#      stamps the snapshot sha, which is not an elspi commit: refused.
+#   3. the sha must be a commit in this checkout.
+# Returns .elspi_sha, .source and .info_path (the verified .info, staged).
+function Resolve-ForgejoElspiSha {
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Files,
+        [Parameter(Mandatory)] $InfoFile,
+        [Parameter(Mandatory)] [string] $BaseUrl,
+        [Parameter(Mandatory)] [string] $Package,
+        [Parameter(Mandatory)] [string] $PackageSha,
+        [Parameter(Mandatory)] [hashtable] $Headers,
+        [Parameter(Mandatory)] [string] $StageDir,
+        [Parameter(Mandatory)] [string] $RepoRoot,
+        [string] $ElspiSha
+    )
+    if ($ElspiSha) {
+        if ($ElspiSha -notmatch '^[0-9a-fA-F]{40}$') {
+            throw "[elspi sha] -ElspiSha '$ElspiSha' is not a full 40-hex commit sha"
+        }
+        $ElspiSha = $ElspiSha.ToLowerInvariant()
     }
-    return [PSCustomObject]@{ name = $f.name; size = [int64] $f.Size; sha256 = "$($f.sha256)".ToLowerInvariant() }
+    $fetch = @{ BaseUrl = $BaseUrl; Package = $Package; PackageSha = $PackageSha; Headers = $Headers; StageDir = $StageDir }
+
+    $commitFile = Select-ForgejoPackageFile -Files $Files -Name 'elspi-commit.txt' -Sha $PackageSha -Optional
+    if ($commitFile) {
+        $fromFile = Read-ElspiCommitFile -Path (Get-VerifiedForgejoSmallFile @fetch -FileInfo $commitFile)
+        if ($ElspiSha -and $ElspiSha -ne $fromFile) {
+            throw "[elspi sha] -ElspiSha $ElspiSha disagrees with the package's elspi-commit.txt ($fromFile) -- refusing"
+        }
+        $elspi = $fromFile
+        $source = 'elspi-commit.txt'
+    } elseif ($ElspiSha) {
+        $elspi = $ElspiSha
+        $source = '-ElspiSha'
+    } else {
+        throw "[elspi sha] package version $PackageSha has no elspi-commit.txt (a build from before it was added), so the elspi commit it was built from is unknown. Pass -ElspiSha <full elspi sha> to name it; it must still match the image's .info header."
+    }
+
+    $infoPath = Get-VerifiedForgejoSmallFile @fetch -FileInfo $InfoFile
+    $stamped = Get-InfoGitHash -Path $infoPath
+    if ($stamped -notmatch '^[0-9a-f]{40}$') {
+        throw "[elspi sha] $($InfoFile.name) line 2 carries no 40-hex GIT_HASH (got '$stamped') -- cannot cross-check the elspi sha, refusing"
+    }
+    if ($stamped -ne $elspi) {
+        $why = if ($stamped -eq $PackageSha) { ' -- it names the Forgejo SNAPSHOT commit, which is not an elspi commit (a legacy build)' } else { '' }
+        throw "[elspi sha] $($InfoFile.name) was stamped with $stamped, but the elspi sha (from $source) is $elspi$why. Refusing."
+    }
+    Assert-CommitAvailable -RepoRoot $RepoRoot -Sha $elspi
+    return [PSCustomObject]@{ elspi_sha = $elspi; source = $source; info_path = $infoPath }
 }
 
 # Verifies a downloaded package file against the package API's own listing:
@@ -694,21 +854,31 @@ function Confirm-DownloadedForgejoFile {
     if ($actual -ne $FileInfo.sha256) {
         throw "[forgejo download] $Path sha256 $actual does not match the package API's sha256 $($FileInfo.sha256) -- not caching this as complete"
     }
-    Write-Host "verified: $actualSize bytes, sha256:$actual matches the package API."
+    Write-Host "verified: $($FileInfo.name), $actualSize bytes, sha256:$actual matches the package API."
 }
 
-# True if $CacheDir holds a verified download of exactly $FileInfo for $Sha:
-# the marker written after verification agrees with the API's listing, and
-# the image file is present at the recorded size. Never re-hashes 1 GB.
+# True if $CacheDir holds a verified download of exactly $FileInfo, built
+# from $ElspiSha and published as package version $PackageSha: the marker
+# written after verification agrees on all of it, and the image (at its
+# recorded size) and its .info are both present. Never re-hashes 1 GB.
 function Test-CachedForgejoImage {
-    param([Parameter(Mandatory)] [string] $CacheDir, [Parameter(Mandatory)] $FileInfo, [Parameter(Mandatory)] [string] $Sha)
+    param(
+        [Parameter(Mandatory)] [string] $CacheDir,
+        [Parameter(Mandatory)] $FileInfo,
+        [Parameter(Mandatory)] [string] $PackageSha,
+        [Parameter(Mandatory)] [string] $ElspiSha,
+        [Parameter(Mandatory)] [string] $InfoName
+    )
     $marker = Join-Path $CacheDir '.forgejo-package-info.json'
     if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) { return $false }
     try { $recorded = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json } catch { return $false }
-    if ($recorded.commit_sha -ne $Sha) { return $false }
+    if ($recorded.package_sha -ne $PackageSha) { return $false }
+    if ($recorded.elspi_sha -ne $ElspiSha) { return $false }
     if ($recorded.name -ne $FileInfo.name) { return $false }
     if ([int64] $recorded.size -ne $FileInfo.size) { return $false }
     if ($recorded.sha256 -ne $FileInfo.sha256) { return $false }
+    if ($recorded.info_name -ne $InfoName) { return $false }
+    if (-not (Test-Path -LiteralPath (Join-Path $CacheDir $InfoName) -PathType Leaf)) { return $false }
     $img = Join-Path $CacheDir $FileInfo.name
     if (-not (Test-Path -LiteralPath $img -PathType Leaf)) { return $false }
     if ((Get-Item -LiteralPath $img).Length -ne $FileInfo.size) { return $false }
@@ -782,6 +952,7 @@ function Invoke-FlashTestBuildForgejo {
         [string] $Branch,
         [string] $RunId,
         [string] $Sha,
+        [string] $ElspiSha,
         [Parameter(Mandatory)] [string] $Dest,
         [switch] $DryRun,
         [switch] $NoLaunch,
@@ -792,7 +963,7 @@ function Invoke-FlashTestBuildForgejo {
         [string] $ForgejoTokenFile
     )
     if (-not $Branch -and -not $RunId -and -not $Sha) {
-        throw "flash-test-build: pass -Branch <name>, -RunId <id> or -Sha <sha>"
+        throw "flash-test-build: pass -Branch <name>, -RunId <id> or -Sha <package sha>"
     }
 
     Write-Host "== preflight (forgejo) =="
@@ -808,73 +979,93 @@ function Invoke-FlashTestBuildForgejo {
         Write-Host ("runs:     GET {0}" -f (Get-ForgejoRunsUri -BaseUrl $base -Repo $ForgejoRepo -Branch $Branch))
     }
     $build = Resolve-ForgejoBuild -BaseUrl $base -Repo $ForgejoRepo -Headers $headers -Branch $Branch -RunId $RunId -Sha $Sha
-    $sha = $build.sha
-    Write-Host ("ref:      {0}" -f $build.ref)
-    Write-Host ("sha:      {0}" -f $sha)
-    Write-Host ("run id:   {0}" -f $(if ($build.run_id) { $build.run_id } else { '(none)' }))
-    Write-Host ("date:     {0}" -f $build.created)
-    Assert-CommitAvailable -RepoRoot $RepoRoot -Sha $sha
+    $packageSha = $build.sha
+    Write-Host ("ref:         {0}" -f $build.ref)
+    Write-Host ("package sha: {0}  (the Forgejo run's snapshot commit)" -f $packageSha)
+    Write-Host ("run id:      {0}" -f $(if ($build.run_id) { $build.run_id } else { '(none)' }))
+    Write-Host ("date:        {0}" -f $build.created)
 
-    $filesUri = Get-ForgejoPackageFilesUri -BaseUrl $base -Package $ForgejoPackage -Sha $sha
-    Write-Host ("files:    GET {0}" -f $filesUri)
-    $fileInfo = Select-ForgejoImageFile -Files @(Invoke-ForgejoApi -Uri $filesUri -Headers $headers) -Sha $sha
-    $downloadUri = Get-ForgejoPackageFileUri -BaseUrl $base -Package $ForgejoPackage -Sha $sha -FileName $fileInfo.name
-    Write-Host ("image:    {0} ({1} bytes, sha256 {2})" -f $fileInfo.name, $fileInfo.size, $fileInfo.sha256)
-    Write-Host ("download: GET {0}" -f $downloadUri)
-    Write-Host ""
+    $filesUri = Get-ForgejoPackageFilesUri -BaseUrl $base -Package $ForgejoPackage -Sha $packageSha
+    Write-Host ("files:       GET {0}" -f $filesUri)
+    $files = @(Invoke-ForgejoApi -Uri $filesUri -Headers $headers)
+    $fileInfo = Select-ForgejoImageFile -Files $files -Sha $packageSha
+    $infoFile = Select-ForgejoPackageFile -Files $files -Name (Get-ForgejoInfoName -ImageName $fileInfo.name) -Sha $packageSha
 
-    $cacheDir = Join-Path $Dest "forgejo-$sha"
-    $imgPath = Join-Path $cacheDir $fileInfo.name
-    $sizeMb = [math]::Round($fileInfo.size / 1MB)
-    $reuse = Test-CachedForgejoImage -CacheDir $cacheDir -FileInfo $fileInfo -Sha $sha
-    if ($reuse) {
-        Write-Host "cache:    reusing $cacheDir (already downloaded, ~$sizeMb MB, verified by size+sha256 against the package API)"
-    } else {
-        Write-Host "cache:    $cacheDir (not cached yet -- would download ~$sizeMb MB)"
-    }
-    Write-Host ""
+    # The small files are staged outside the cache, so a dry run or a refused
+    # build leaves nothing behind in <Dest>.
+    $stageDir = Join-Path ([System.IO.Path]::GetTempPath()) ("elspi-forgejo-stage-" + [guid]::NewGuid())
+    New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+    try {
+        $elspi = Resolve-ForgejoElspiSha -Files $files -InfoFile $infoFile -BaseUrl $base -Package $ForgejoPackage `
+            -PackageSha $packageSha -Headers $headers -StageDir $stageDir -RepoRoot $RepoRoot -ElspiSha $ElspiSha
+        $elspiSha = $elspi.elspi_sha
+        Write-Host ("elspi sha:   {0}  (from {1}; matches {2})" -f $elspiSha, $elspi.source, $infoFile.name)
 
-    if ($DryRun) {
-        Write-Host "== DRY RUN: stopping before the download and the Imager launch =="
+        $downloadUri = Get-ForgejoPackageFileUri -BaseUrl $base -Package $ForgejoPackage -Sha $packageSha -FileName $fileInfo.name
+        Write-Host ("image:       {0} ({1} bytes, sha256 {2})" -f $fileInfo.name, $fileInfo.size, $fileInfo.sha256)
+        Write-Host ("download:    GET {0}" -f $downloadUri)
+        Write-Host ""
+
+        $cacheDir = Join-Path $Dest "forgejo-$packageSha"
+        $imgPath = Join-Path $cacheDir $fileInfo.name
+        $sizeMb = [math]::Round($fileInfo.size / 1MB)
+        $reuse = Test-CachedForgejoImage -CacheDir $cacheDir -FileInfo $fileInfo -PackageSha $packageSha -ElspiSha $elspiSha -InfoName $infoFile.name
         if ($reuse) {
-            Write-Host "would reuse the cached image above; no download"
+            Write-Host "cache:    reusing $cacheDir (already downloaded, ~$sizeMb MB, verified by size+sha256 against the package API)"
         } else {
-            Write-Host "would download: $downloadUri -> `"$imgPath.partial`", verify size+sha256, then rename to `"$imgPath`""
+            Write-Host "cache:    $cacheDir (not cached yet -- would download ~$sizeMb MB)"
         }
-        Write-DryRunTail -RepoRoot $RepoRoot -CacheDir $cacheDir -Sha $sha -ImagePath $imgPath
-        return
-    }
+        Write-Host ""
 
-    if (-not $reuse) {
-        $answer = Read-Host "Download ~$sizeMb MB of $($fileInfo.name) ($($build.ref) @ $sha)? [y/N]"
-        if ($answer -notmatch '^[Yy]') {
-            Write-Host "Aborted -- nothing downloaded."
+        if ($DryRun) {
+            Write-Host "== DRY RUN: stopping before the download and the Imager launch =="
+            if ($reuse) {
+                Write-Host "would reuse the cached image above; no download"
+            } else {
+                Write-Host "would download: $downloadUri -> `"$imgPath.partial`", verify size+sha256, then rename to `"$imgPath`""
+            }
+            Write-DryRunTail -RepoRoot $RepoRoot -CacheDir $cacheDir -Sha $elspiSha -ImagePath $imgPath
             return
         }
-        New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
-        $marker = Join-Path $cacheDir '.forgejo-package-info.json'
-        Remove-Item -LiteralPath $marker -ErrorAction SilentlyContinue
-        $partial = "$imgPath.partial"
-        Write-Host "downloading $($fileInfo.name) to $partial ..."
-        try {
-            Invoke-ForgejoDownload -Uri $downloadUri -Headers $headers -OutFile $partial
-            Confirm-DownloadedForgejoFile -Path $partial -FileInfo $fileInfo
-        } catch {
-            Remove-Item -LiteralPath $partial -ErrorAction SilentlyContinue
-            throw
+
+        if (-not $reuse) {
+            $answer = Read-Host "Download ~$sizeMb MB of $($fileInfo.name) ($($build.ref), elspi $elspiSha)? [y/N]"
+            if ($answer -notmatch '^[Yy]') {
+                Write-Host "Aborted -- nothing downloaded."
+                return
+            }
+            New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+            $marker = Join-Path $cacheDir '.forgejo-package-info.json'
+            Remove-Item -LiteralPath $marker -ErrorAction SilentlyContinue
+            $partial = "$imgPath.partial"
+            Write-Host "downloading $($fileInfo.name) to $partial ..."
+            try {
+                Invoke-ForgejoDownload -Uri $downloadUri -Headers $headers -OutFile $partial
+                Confirm-DownloadedForgejoFile -Path $partial -FileInfo $fileInfo
+            } catch {
+                Remove-Item -LiteralPath $partial -ErrorAction SilentlyContinue
+                throw
+            }
+            Move-Item -LiteralPath $partial -Destination $imgPath -Force
+            # Beside the image, under the name make-os-list.sh looks for.
+            Copy-Item -LiteralPath $elspi.info_path -Destination (Join-Path $cacheDir $infoFile.name) -Force
+            [PSCustomObject]@{
+                name             = $fileInfo.name
+                size             = $fileInfo.size
+                sha256           = $fileInfo.sha256
+                info_name        = $infoFile.name
+                package_sha      = $packageSha
+                elspi_sha        = $elspiSha
+                elspi_sha_source = $elspi.source
+                run_id           = $build.run_id
+            } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding utf8
+            Write-Host "downloaded and verified."
         }
-        Move-Item -LiteralPath $partial -Destination $imgPath -Force
-        [PSCustomObject]@{
-            name       = $fileInfo.name
-            size       = $fileInfo.size
-            sha256     = $fileInfo.sha256
-            commit_sha = $sha
-            run_id     = $build.run_id
-        } | ConvertTo-Json | Set-Content -LiteralPath $marker -Encoding utf8
-        Write-Host "downloaded and verified."
+    } finally {
+        Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    Invoke-OsListAndFlash -RepoRoot $RepoRoot -CacheDir $cacheDir -Sha $sha -ImagePath $imgPath -NoLaunch:$NoLaunch
+    Invoke-OsListAndFlash -RepoRoot $RepoRoot -CacheDir $cacheDir -Sha $elspiSha -ImagePath $imgPath -NoLaunch:$NoLaunch
 }
 
 function Invoke-FlashTestBuild {
@@ -889,6 +1080,7 @@ function Invoke-FlashTestBuild {
         [string] $Repo = $script:Repo,
         [ValidateSet('github', 'forgejo')] [string] $Source = 'github',
         [string] $Sha,
+        [string] $ElspiSha,
         [string] $ForgejoUrl,
         [string] $ForgejoRepo,
         [string] $ForgejoPackage,
@@ -896,14 +1088,14 @@ function Invoke-FlashTestBuild {
     )
 
     if ($Source -eq 'forgejo') {
-        Invoke-FlashTestBuildForgejo -Branch $Branch -RunId $RunId -Sha $Sha -Dest $Dest `
+        Invoke-FlashTestBuildForgejo -Branch $Branch -RunId $RunId -Sha $Sha -ElspiSha $ElspiSha -Dest $Dest `
             -DryRun:$DryRun -NoLaunch:$NoLaunch -RepoRoot $RepoRoot `
             -ForgejoUrl $ForgejoUrl -ForgejoRepo $ForgejoRepo -ForgejoPackage $ForgejoPackage `
             -ForgejoTokenFile $ForgejoTokenFile
         return
     }
-    if ($Sha) {
-        throw "flash-test-build: -Sha is for -Source forgejo only; for GitHub pass -Branch <name> or -RunId <id>"
+    if ($Sha -or $ElspiSha) {
+        throw "flash-test-build: -Sha and -ElspiSha are for -Source forgejo only; for GitHub pass -Branch <name> or -RunId <id>"
     }
 
     if (-not $Branch -and -not $RunId) {
@@ -987,6 +1179,6 @@ function Invoke-FlashTestBuild {
 if ($MyInvocation.InvocationName -ne '.') {
     Invoke-FlashTestBuild -Branch $Branch -RunId $RunId -Dest $Dest -DryRun:$DryRun -NoLaunch:$NoLaunch `
         -RepoRoot (Split-Path -Parent $PSScriptRoot) -Repo $Repo `
-        -Source $Source -Sha $Sha -ForgejoUrl $ForgejoUrl -ForgejoRepo $ForgejoRepo `
+        -Source $Source -Sha $Sha -ElspiSha $ElspiSha -ForgejoUrl $ForgejoUrl -ForgejoRepo $ForgejoRepo `
         -ForgejoPackage $ForgejoPackage -ForgejoTokenFile $ForgejoTokenFile
 }

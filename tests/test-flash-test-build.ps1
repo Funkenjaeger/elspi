@@ -380,6 +380,10 @@ Remove-Item Function:\gh -ErrorAction SilentlyContinue
 # Invoke-ForgejoDownload; git, wsl, Read-Host and the preflight checks are
 # faked the same way. The token is a made-up string in a temp file, and the
 # tests assert it never appears in a URL or in anything the script prints.
+#
+# Two shas are in play and must never be swapped: $pkgSha is the Forgejo run's
+# SNAPSHOT commit (the package version; not in elspi), $elspiSha is the elspi
+# commit it was built from (the only one git is ever asked about).
 # =============================================================================
 
 $fjDir = Join-Path ([System.IO.Path]::GetTempPath()) ("flash-test-build-forgejo-" + [guid]::NewGuid())
@@ -393,6 +397,8 @@ try {
     Set-Content -LiteralPath $tokenFile -Value $fakeToken -NoNewline
     $shaA = 'a' * 40
     $shaB = 'b' * 40
+    $pkgSha = '5' * 40     # snapshot commit = package version
+    $elspiSha = 'e' * 40   # the elspi commit it was built from
 
     # -- auth: the token file gate ------------------------------------------
     Assert-Throws 'forgejo: missing token file -> fails, telling Evan how to mint one' {
@@ -470,11 +476,12 @@ try {
 
     # -- package file selection -----------------------------------------------
     $h64 = 'f' * 64
-    $imgEntry = [PSCustomObject]@{ id = 1; Size = 1000; name = 'image_2026-09-26-elspi-arm64.img.xz'; sha256 = $h64 }
-    $infoEntry = [PSCustomObject]@{ id = 2; Size = 10; name = 'image_2026-09-26-elspi-arm64.info'; sha256 = $h64 }
+    $imgEntry = [PSCustomObject]@{ id = 1; Size = 1000; name = 'image_2026-09-26-elspi.img.xz'; sha256 = $h64 }
+    $infoEntry = [PSCustomObject]@{ id = 2; Size = 10; name = '2026-09-26-elspi.info'; sha256 = $h64 }
     $logEntry = [PSCustomObject]@{ id = 3; Size = 10; name = 'build.log'; sha256 = $h64 }
     $pick = Select-ForgejoImageFile -Files @($logEntry, $imgEntry, $infoEntry) -Sha $shaA
     Assert-True 'forgejo: picks the one image_*.img.xz among .info and build.log' ($pick.name -eq $imgEntry.name -and $pick.size -eq 1000)
+    Assert-True 'forgejo: the .info name is the one make-os-list.sh looks for' ((Get-ForgejoInfoName -ImageName 'image_2026-09-26-elspi.img.xz') -eq '2026-09-26-elspi.info')
     Assert-Throws 'forgejo: no image in the package version -> fails' { Select-ForgejoImageFile -Files @($logEntry, $infoEntry) -Sha $shaA } 'no image_*.img.xz'
     Assert-Throws 'forgejo: empty package version -> fails' { Select-ForgejoImageFile -Files @() -Sha $shaA } 'no image_*.img.xz'
     $img2 = [PSCustomObject]@{ id = 4; Size = 5; name = 'image_other.img.xz'; sha256 = $h64 }
@@ -485,11 +492,14 @@ try {
     Assert-Throws 'forgejo: image listed without a size -> fails' { Select-ForgejoImageFile -Files @($noSize) } 'no size'
     $evil = [PSCustomObject]@{ id = 1; Size = 1; name = 'image_..\..\x.img.xz'; sha256 = $h64 }
     Assert-Throws 'forgejo: a file name with path characters is refused' { Select-ForgejoImageFile -Files @($evil) } 'not a plain file name'
+    Assert-True 'forgejo: an absent optional file is $null' ($null -eq (Select-ForgejoPackageFile -Files @($imgEntry) -Name 'elspi-commit.txt' -Optional))
+    Assert-Throws 'forgejo: an absent required file fails' { Select-ForgejoPackageFile -Files @($imgEntry) -Name '2026-09-26-elspi.info' } 'no 2026-09-26-elspi.info'
 
     # -- download verification ------------------------------------------------
     $payload = New-Object byte[] 4096
     (New-Object System.Random(7)).NextBytes($payload)
-    $payloadHash = [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($payload)).Replace('-', '').ToLowerInvariant()
+    function Get-Sha256Hex([byte[]] $Bytes) { [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash($Bytes)).Replace('-', '').ToLowerInvariant() }
+    $payloadHash = Get-Sha256Hex $payload
     $dl = Join-Path $fjDir 'dl.img.xz'
     [System.IO.File]::WriteAllBytes($dl, $payload)
     $goodInfo = [PSCustomObject]@{ name = 'image_t.img.xz'; size = [int64] 4096; sha256 = $payloadHash }
@@ -502,18 +512,117 @@ try {
         Confirm-DownloadedForgejoFile -Path $dl -FileInfo ([PSCustomObject]@{ name = 'image_t.img.xz'; size = [int64] 4096; sha256 = ('0' * 64) })
     } 'does not match the package API'
 
-    # -- commit availability --------------------------------------------------
-    $script:catFileCalls = 0
+    # -- elspi-commit.txt and the .info header, as parsers ---------------------
+    $ec = Join-Path $fjDir 'elspi-commit.txt'
+    [System.IO.File]::WriteAllText($ec, $elspiSha.ToUpperInvariant() + "`n")
+    Assert-True 'forgejo: elspi-commit.txt with one trailing newline -> the sha, lowercased' ((Read-ElspiCommitFile -Path $ec) -eq $elspiSha)
+    foreach ($bad in @(('e' * 39), ('e' * 41), ('g' * 40), (' ' + ('e' * 40)), ('e' * 40 + "`n`n"), '', 'refs/heads/arm64')) {
+        [System.IO.File]::WriteAllText($ec, $bad)
+        Assert-Throws "forgejo: malformed elspi-commit.txt '$($bad.Replace("`n", '\n'))' -> refused" { Read-ElspiCommitFile -Path $ec } 'exactly 40 hex'
+    }
+    $inf = Join-Path $fjDir 'x.info'
+    [System.IO.File]::WriteAllText($inf, "elspi 2026-09-26`nGenerated using pi-gen, https://github.com/RPi-Distro/pi-gen, $elspiSha, stage-elspi`n`nFirmware: x`n")
+    Assert-True 'forgejo: .info GIT_HASH read from line 2 field 3' ((Get-InfoGitHash -Path $inf) -eq $elspiSha)
+
+    # -- the fake package registry used from here on --------------------------
+    # $script:served maps file name -> bytes; the listing is computed from it,
+    # so a test changes what is served (or listed) and nothing else.
+    function New-InfoBytes([string] $Stamp) {
+        [System.Text.Encoding]::UTF8.GetBytes("elspi 2026-09-26`nGenerated using pi-gen, https://github.com/RPi-Distro/pi-gen, $Stamp, stage-elspi`n`nFirmware: x`n")
+    }
+    function Reset-Served {
+        $script:served = [ordered]@{
+            'image_2026-09-26-elspi.img.xz' = $script:payload
+            '2026-09-26-elspi.info'         = (New-InfoBytes $script:elspiSha)
+            'build.log'                     = [System.Text.Encoding]::UTF8.GetBytes('log')
+            'elspi-commit.txt'              = [System.Text.Encoding]::UTF8.GetBytes("$script:elspiSha`n")
+        }
+        $script:listingOverride = $null
+    }
+    function Get-Listing {
+        @($script:served.Keys | ForEach-Object { [PSCustomObject]@{ Size = $script:served[$_].Length; name = $_; sha256 = (Get-Sha256Hex $script:served[$_]) } })
+    }
+    $script:fjCalls = @(); $script:fjHeaders = @(); $script:downloads = @()
+    function Invoke-ForgejoApi {
+        param([string] $Uri, [hashtable] $Headers)
+        $script:fjCalls += $Uri; $script:fjHeaders += $Headers.Authorization
+        if ($Uri -like '*/actions/runs?*') {
+            return [PSCustomObject]@{ workflow_runs = @([PSCustomObject]@{ id = 77; status = 'success'; workflow_id = 'image.yml'; commit_sha = $script:pkgSha; prettyref = 'arm64'; created = '2026-09-26T00:00:00Z' }) }
+        }
+        if ($Uri -eq "$script:fjBase/api/v1/packages/pkgowner/generic/pkgname/$script:pkgSha/files") {
+            if ($script:listingOverride) { return $script:listingOverride }
+            return (Get-Listing)
+        }
+        throw "unexpected uri $Uri"
+    }
+    function Invoke-ForgejoDownload {
+        param([string] $Uri, [hashtable] $Headers, [string] $OutFile)
+        $script:downloads += $Uri; $script:fjHeaders += $Headers.Authorization
+        $prefix = "$script:fjBase/api/packages/pkgowner/generic/pkgname/$script:pkgSha/"
+        if (-not $Uri.StartsWith($prefix)) { throw "download from the wrong package version: $Uri" }
+        $name = [uri]::UnescapeDataString($Uri.Substring($prefix.Length))
+        if (-not $script:served.Contains($name)) { throw "404 $name" }
+        $bytes = if ($script:corrupt -and $script:corrupt.Contains($name)) { $script:corrupt[$name] } else { $script:served[$name] }
+        [System.IO.File]::WriteAllBytes($OutFile, $bytes)
+    }
+    $script:gitSpecs = @()
+    $script:elspiInCheckout = $true
     function git {
         param([Parameter(ValueFromRemainingArguments)] [string[]] $Arguments)
-        if ($Arguments[2] -eq 'cat-file') { $script:catFileCalls++; $global:LASTEXITCODE = 1; return 'fatal: Not a valid object name' }
-        if ($Arguments[2] -eq 'fetch') { $global:LASTEXITCODE = 128; return 'fatal: remote error' }
+        if ($Arguments[2] -eq 'cat-file') {
+            $script:gitSpecs += $Arguments[4]
+            if ($Arguments[3] -ne '-t') { throw "unexpected cat-file form: $($Arguments -join ' ')" }
+            if ($script:elspiInCheckout -and $Arguments[4] -eq $script:elspiSha) { $global:LASTEXITCODE = 0; return 'commit' }
+            $global:LASTEXITCODE = 128
+            return "fatal: Not a valid object name $($Arguments[4])"
+        }
+        if ($Arguments[2] -eq 'fetch') { $script:gitSpecs += "fetch $($Arguments[4])"; $global:LASTEXITCODE = 1; return 'fatal: remote error' }
         throw "unexpected git call: $($Arguments -join ' ')"
     }
-    Assert-Throws 'forgejo: sha not in this checkout even after fetch -> refuses to download' {
-        Assert-CommitAvailable -RepoRoot 'C:\fake\repo' -Sha $shaA
-    } 'Refusing to download'
-    Assert-True 'forgejo: the commit check fetched and re-checked' ($script:catFileCalls -eq 2) "(cat-file calls: $script:catFileCalls)"
+    $imageUrl = "$script:fjBase/api/packages/pkgowner/generic/pkgname/$script:pkgSha/image_2026-09-26-elspi.img.xz"
+
+    # -- Resolve-ForgejoElspiSha, case by case --------------------------------
+    $stage = Join-Path $fjDir 'stage'; New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    function Invoke-Resolve([string] $Override = '') {
+        $files = @(Invoke-ForgejoApi -Uri "$fjBase/api/v1/packages/pkgowner/generic/pkgname/$pkgSha/files" -Headers $hdr)
+        $info = Select-ForgejoPackageFile -Files $files -Name '2026-09-26-elspi.info'
+        Resolve-ForgejoElspiSha -Files $files -InfoFile $info -BaseUrl $fjBase -Package $fjPkg -PackageSha $pkgSha `
+            -Headers $hdr -StageDir $stage -RepoRoot 'C:\fake\repo' -ElspiSha $Override
+    }
+
+    Reset-Served; $script:gitSpecs = @()
+    try { $res = Invoke-Resolve } catch { $res = $null; Write-Host "  (happy-path resolve threw: $($_.Exception.Message))" }
+    Assert-True 'forgejo: elspi sha comes from elspi-commit.txt' ($res.elspi_sha -eq $elspiSha -and $res.source -eq 'elspi-commit.txt') "(got $($res.elspi_sha) from $($res.source))"
+    Assert-True 'forgejo: git is asked about the ELSPI sha only, never the package sha' `
+        (@($script:gitSpecs | Where-Object { $_ -match $pkgSha }).Count -eq 0 -and @($script:gitSpecs | Where-Object { $_ -match $elspiSha }).Count -ge 1) "(git saw: $($script:gitSpecs -join ', '))"
+
+    Reset-Served; $script:served.Remove('elspi-commit.txt')
+    Assert-Throws 'forgejo red: no elspi-commit.txt and no -ElspiSha -> stops, naming -ElspiSha' { Invoke-Resolve } 'Pass -ElspiSha'
+
+    Reset-Served; $script:served['elspi-commit.txt'] = [System.Text.Encoding]::UTF8.GetBytes('e' * 12)
+    Assert-Throws 'forgejo red: malformed elspi-commit.txt -> refused' { Invoke-Resolve } 'exactly 40 hex'
+
+    Reset-Served; $script:served['2026-09-26-elspi.info'] = (New-InfoBytes ('9' * 40))
+    Assert-Throws 'forgejo red: .info GIT_HASH differs from elspi-commit.txt -> refused' { Invoke-Resolve } 'was stamped with'
+
+    Reset-Served; $script:served['2026-09-26-elspi.info'] = [System.Text.Encoding]::UTF8.GetBytes("elspi`nno header here`n")
+    Assert-Throws 'forgejo red: .info without a GIT_HASH -> refused' { Invoke-Resolve } 'no 40-hex GIT_HASH'
+
+    Reset-Served; $script:elspiInCheckout = $false; $script:gitSpecs = @()
+    Assert-Throws 'forgejo red: elspi sha not in this checkout (even after fetch) -> refused' { Invoke-Resolve } 'not in this checkout'
+    Assert-True 'forgejo: ... and it fetched the ELSPI sha, not the package sha' ($script:gitSpecs -contains "fetch $elspiSha") "(git saw: $($script:gitSpecs -join ', '))"
+    $script:elspiInCheckout = $true
+
+    # Legacy version: no elspi-commit.txt, .info stamped with the SNAPSHOT sha.
+    Reset-Served; $script:served.Remove('elspi-commit.txt'); $script:served['2026-09-26-elspi.info'] = (New-InfoBytes $pkgSha)
+    Assert-Throws 'forgejo red: legacy version + -ElspiSha, .info names the snapshot sha -> refused' { Invoke-Resolve -Override $elspiSha } 'SNAPSHOT'
+    # A version without elspi-commit.txt whose .info names the elspi commit.
+    Reset-Served; $script:served.Remove('elspi-commit.txt')
+    try { $ov = Invoke-Resolve -Override $elspiSha.ToUpperInvariant() } catch { $ov = $null; Write-Host "  (-ElspiSha resolve threw: $($_.Exception.Message))" }
+    Assert-True 'forgejo: -ElspiSha accepted when the .info header agrees' ($ov.elspi_sha -eq $elspiSha -and $ov.source -eq '-ElspiSha')
+    Assert-Throws 'forgejo red: -ElspiSha that is not 40 hex -> refused' { Invoke-Resolve -Override 'abc123' } 'not a full 40-hex'
+    Reset-Served
+    Assert-Throws 'forgejo red: -ElspiSha disagreeing with elspi-commit.txt -> refused' { Invoke-Resolve -Override ('9' * 40) } 'disagrees'
 
     # -- end to end through Invoke-FlashTestBuild -Source forgejo -------------
     function Assert-WslAvailable { }
@@ -521,70 +630,72 @@ try {
     function Get-MakeOsListScriptForCommit { param($RepoRoot, $Sha, $OutDir) $script:osListSha = $Sha }
     function wsl { $global:LASTEXITCODE = 0 }
     function Read-Host { param($Prompt) 'y' }
-    function git {
-        param([Parameter(ValueFromRemainingArguments)] [string[]] $Arguments)
-        if ($Arguments[2] -eq 'cat-file') { $global:LASTEXITCODE = 0; return }
-        throw "unexpected git call: $($Arguments -join ' ')"
-    }
-    $e2eFile = [PSCustomObject]@{ id = 1; Size = 4096; name = 'image_e2e.img.xz'; sha256 = $payloadHash }
-    $script:fjCalls = @()
-    $script:fjHeaders = @()
-    function Invoke-ForgejoApi {
-        param([string] $Uri, [hashtable] $Headers)
-        $script:fjCalls += $Uri; $script:fjHeaders += $Headers.Authorization
-        if ($Uri -like '*/actions/runs?*') {
-            return [PSCustomObject]@{ workflow_runs = @([PSCustomObject]@{ id = 77; status = 'success'; workflow_id = 'image.yml'; commit_sha = $shaA; prettyref = 'arm64'; created = '2026-09-26T00:00:00Z' }) }
-        }
-        if ($Uri -eq "$fjBase/api/v1/packages/pkgowner/generic/pkgname/$shaA/files") { return @($logEntry, $e2eFile) }
-        throw "unexpected uri $Uri"
-    }
-    $script:downloadBytes = $payload
-    $script:downloads = @()
-    function Invoke-ForgejoDownload {
-        param([string] $Uri, [hashtable] $Headers, [string] $OutFile)
-        $script:downloads += $Uri; $script:fjHeaders += $Headers.Authorization
-        [System.IO.File]::WriteAllBytes($OutFile, $script:downloadBytes)
-    }
     $fjArgs = @{
         Source = 'forgejo'; Branch = 'arm64'; RepoRoot = 'C:\fake\repo'
         ForgejoUrl = $fjBase; ForgejoRepo = $fjRepo; ForgejoPackage = $fjPkg; ForgejoTokenFile = $tokenFile
     }
-    $expectedDownload = "$fjBase/api/packages/pkgowner/generic/pkgname/$shaA/image_e2e.img.xz"
+    $stageGlob = Join-Path ([System.IO.Path]::GetTempPath()) 'elspi-forgejo-stage-*'
+    $stagesBefore = @(Get-ChildItem -Path $stageGlob -Directory -ErrorAction SilentlyContinue).Count
 
-    # Dry run: resolves and prints every URL, downloads nothing.
+    # Dry run: resolves both shas and prints every URL, downloads no image.
+    Reset-Served; $script:downloads = @(); $script:fjHeaders = @(); $script:fjCalls = @()
     $dryDest = Join-Path $fjDir 'dry'
-    $dryOut = (& { Invoke-FlashTestBuild @fjArgs -Dest $dryDest -DryRun } 6>&1 | Out-String)
-    Assert-True 'forgejo dry run: prints the resolved download URL' ($dryOut -match [regex]::Escape($expectedDownload)) "(output: $dryOut)"
-    Assert-True 'forgejo dry run: downloads nothing, creates no cache dir' ($script:downloads.Count -eq 0 -and -not (Test-Path -LiteralPath $dryDest))
+    $dryOut = (& { Invoke-FlashTestBuild @fjArgs -Dest $dryDest -DryRun } 6>&1 | Out-String -Width 4096)
+    Assert-True 'forgejo dry run: prints the image URL under the PACKAGE sha' ($dryOut -match [regex]::Escape($imageUrl)) "(output: $dryOut)"
+    Assert-True 'forgejo dry run: prints both shas' ($dryOut -match "package sha: $pkgSha" -and $dryOut -match "elspi sha:   $elspiSha")
+    Assert-True 'forgejo dry run: the make-os-list step uses the ELSPI sha' ($dryOut -match [regex]::Escape("show ${elspiSha}:tools/make-os-list.sh")) "(output: $dryOut)"
+    Assert-True 'forgejo dry run: no image download, no cache dir' (@($script:downloads | Where-Object { $_ -eq $imageUrl }).Count -eq 0 -and -not (Test-Path -LiteralPath $dryDest))
     Assert-True 'forgejo dry run: never prints the token' ($dryOut -notmatch [regex]::Escape($fakeToken))
 
-    # Corrupt download (same size, different bytes): refused, nothing cached.
-    $badDest = Join-Path $fjDir 'bad'
-    $corrupt = [byte[]] $payload.Clone(); $corrupt[100] = $corrupt[100] -bxor 0xFF
-    $script:downloadBytes = $corrupt
-    Assert-Throws 'forgejo e2e: corrupt download -> refused' { Invoke-FlashTestBuild @fjArgs -Dest $badDest -NoLaunch 6>$null } 'does not match the package API'
-    $badCache = Join-Path $badDest "forgejo-$shaA"
-    Assert-True 'forgejo e2e: corrupt download leaves no marker, no image, no .partial' `
-        (-not (Test-Path (Join-Path $badCache '.forgejo-package-info.json')) -and -not (Test-Path (Join-Path $badCache 'image_e2e.img.xz')) -and -not (Test-Path (Join-Path $badCache 'image_e2e.img.xz.partial')))
+    # Missing elspi-commit.txt stops before the image is fetched.
+    Reset-Served; $script:served.Remove('elspi-commit.txt'); $script:downloads = @()
+    Assert-Throws 'forgejo e2e red: legacy version -> stops' { Invoke-FlashTestBuild @fjArgs -Dest (Join-Path $fjDir 'legacy') -NoLaunch 6>$null } 'no elspi-commit.txt'
+    Assert-True 'forgejo e2e: ... before downloading the image' (@($script:downloads | Where-Object { $_ -eq $imageUrl }).Count -eq 0)
 
-    # Good download: verified, renamed into place, marker written, os_list built from the build's sha.
+    # elspi sha absent from the checkout stops before the image is fetched.
+    Reset-Served; $script:elspiInCheckout = $false; $script:downloads = @()
+    Assert-Throws 'forgejo e2e red: elspi sha not in checkout -> stops' { Invoke-FlashTestBuild @fjArgs -Dest (Join-Path $fjDir 'absent') -NoLaunch 6>$null } 'not in this checkout'
+    Assert-True 'forgejo e2e: ... before downloading the image' (@($script:downloads | Where-Object { $_ -eq $imageUrl }).Count -eq 0)
+    $script:elspiInCheckout = $true
+
+    # Corrupt image (same size, different bytes): refused, nothing cached.
+    Reset-Served
+    $corruptBytes = [byte[]] $payload.Clone(); $corruptBytes[100] = $corruptBytes[100] -bxor 0xFF
+    $script:corrupt = @{ 'image_2026-09-26-elspi.img.xz' = $corruptBytes }
+    $badDest = Join-Path $fjDir 'bad'
+    Assert-Throws 'forgejo e2e: corrupt download -> refused' { Invoke-FlashTestBuild @fjArgs -Dest $badDest -NoLaunch 6>$null } 'does not match the package API'
+    $badCache = Join-Path $badDest "forgejo-$pkgSha"
+    Assert-True 'forgejo e2e: corrupt download leaves no marker, no image, no .partial' `
+        (-not (Test-Path (Join-Path $badCache '.forgejo-package-info.json')) -and -not (Test-Path (Join-Path $badCache 'image_2026-09-26-elspi.img.xz')) -and -not (Test-Path (Join-Path $badCache 'image_2026-09-26-elspi.img.xz.partial')))
+    $script:corrupt = $null
+
+    # Good download: verified, renamed into place beside its .info, marker
+    # with both shas, os_list built from the ELSPI sha.
+    Reset-Served; $script:downloads = @(); $script:osListSha = $null
     $goodDest = Join-Path $fjDir 'good'
-    $script:downloadBytes = $payload
+    $runOut = (& { Invoke-FlashTestBuild @fjArgs -Dest $goodDest -NoLaunch } 6>&1 | Out-String -Width 4096)
+    $goodCache = Join-Path $goodDest "forgejo-$pkgSha"
+    Assert-True 'forgejo e2e: cache dir is keyed by the PACKAGE sha' (Test-Path -LiteralPath $goodCache)
+    Assert-True 'forgejo e2e: image and its .info cached side by side, no .partial' `
+        ((Test-Path (Join-Path $goodCache 'image_2026-09-26-elspi.img.xz')) -and (Test-Path (Join-Path $goodCache '2026-09-26-elspi.info')) -and -not (Test-Path (Join-Path $goodCache 'image_2026-09-26-elspi.img.xz.partial')))
+    $mk = Get-Content -LiteralPath (Join-Path $goodCache '.forgejo-package-info.json') -Raw | ConvertFrom-Json
+    Assert-True 'forgejo e2e: marker records package_sha AND elspi_sha, and where the elspi sha came from' `
+        ($mk.package_sha -eq $pkgSha -and $mk.elspi_sha -eq $elspiSha -and $mk.elspi_sha_source -eq 'elspi-commit.txt' -and $mk.info_name -eq '2026-09-26-elspi.info' -and $mk.run_id -eq 77) "(marker: $($mk | ConvertTo-Json -Compress))"
+    $order = @($script:downloads | ForEach-Object { $_.Substring($_.LastIndexOf('/') + 1) })
+    Assert-True 'forgejo e2e: elspi-commit.txt, then the .info, then the image' (($order -join ',') -eq 'elspi-commit.txt,2026-09-26-elspi.info,image_2026-09-26-elspi.img.xz') "(order: $($order -join ', '))"
+    Assert-True 'forgejo e2e: make-os-list.sh comes from the ELSPI sha' ($script:osListSha -eq $elspiSha) "(got $script:osListSha)"
+    $imgFI = Select-ForgejoImageFile -Files (Get-Listing)
+    Assert-True 'forgejo e2e: cache reused on the next run' (Test-CachedForgejoImage -CacheDir $goodCache -FileInfo $imgFI -PackageSha $pkgSha -ElspiSha $elspiSha -InfoName '2026-09-26-elspi.info')
     $script:downloads = @()
-    $script:osListSha = $null
-    $runOut = (& { Invoke-FlashTestBuild @fjArgs -Dest $goodDest -NoLaunch } 6>&1 | Out-String)
-    $goodCache = Join-Path $goodDest "forgejo-$shaA"
-    Assert-True 'forgejo e2e: good download cached with its marker' `
-        ((Test-Path (Join-Path $goodCache 'image_e2e.img.xz')) -and (Test-Path (Join-Path $goodCache '.forgejo-package-info.json')) -and -not (Test-Path (Join-Path $goodCache 'image_e2e.img.xz.partial')))
-    Assert-True 'forgejo e2e: downloaded from the package registry URL' ($script:downloads.Count -eq 1 -and $script:downloads[0] -eq $expectedDownload) "(got $($script:downloads -join ', '))"
-    Assert-True 'forgejo e2e: make-os-list.sh comes from the BUILD''s sha' ($script:osListSha -eq $shaA)
-    Assert-True 'forgejo e2e: cache reused on the next run' (Test-CachedForgejoImage -CacheDir $goodCache -FileInfo (Select-ForgejoImageFile -Files @($e2eFile)) -Sha $shaA)
-    $script:downloads = @()
-    $null = (& { Invoke-FlashTestBuild @fjArgs -Dest $goodDest -NoLaunch } 6>&1 | Out-String)
-    Assert-True 'forgejo e2e: second run downloads nothing' ($script:downloads.Count -eq 0)
-    $changed = Select-ForgejoImageFile -Files @([PSCustomObject]@{ Size = 4096; name = 'image_e2e.img.xz'; sha256 = ('1' * 64) })
-    Assert-True 'forgejo: cache NOT reused when the listed sha256 changed' (-not (Test-CachedForgejoImage -CacheDir $goodCache -FileInfo $changed -Sha $shaA))
-    Assert-True 'forgejo: cache NOT reused for another sha' (-not (Test-CachedForgejoImage -CacheDir $goodCache -FileInfo (Select-ForgejoImageFile -Files @($e2eFile)) -Sha $shaB))
+    $null = (& { Invoke-FlashTestBuild @fjArgs -Dest $goodDest -NoLaunch } 6>&1 | Out-String -Width 4096)
+    Assert-True 'forgejo e2e: second run downloads no image' (@($script:downloads | Where-Object { $_ -eq $imageUrl }).Count -eq 0)
+    $changed = [PSCustomObject]@{ name = $imgFI.name; size = $imgFI.size; sha256 = ('1' * 64) }
+    Assert-True 'forgejo: cache NOT reused when the listed sha256 changed' (-not (Test-CachedForgejoImage -CacheDir $goodCache -FileInfo $changed -PackageSha $pkgSha -ElspiSha $elspiSha -InfoName '2026-09-26-elspi.info'))
+    Assert-True 'forgejo: cache NOT reused for another package sha' (-not (Test-CachedForgejoImage -CacheDir $goodCache -FileInfo $imgFI -PackageSha $shaB -ElspiSha $elspiSha -InfoName '2026-09-26-elspi.info'))
+    Assert-True 'forgejo: cache NOT reused for another elspi sha' (-not (Test-CachedForgejoImage -CacheDir $goodCache -FileInfo $imgFI -PackageSha $pkgSha -ElspiSha $shaB -InfoName '2026-09-26-elspi.info'))
+
+    $stagesAfter = @(Get-ChildItem -Path $stageGlob -Directory -ErrorAction SilentlyContinue).Count
+    Assert-True 'forgejo: every staging dir was removed' ($stagesAfter -eq $stagesBefore) "(before $stagesBefore, after $stagesAfter)"
 
     # The token went only into Authorization headers.
     Assert-True 'forgejo: every request carried "Authorization: token <t>"' (@($script:fjHeaders | Where-Object { $_ -ne "token $fakeToken" }).Count -eq 0 -and $script:fjHeaders.Count -gt 0)
@@ -597,8 +708,9 @@ try {
     Assert-Throws 'forgejo e2e: missing token file -> stops before any API call' { Invoke-FlashTestBuild @noTok -Dest $goodDest -DryRun 6>$null } 'Generate New Token'
     Assert-True 'forgejo e2e: ... and no API call was made' ($script:fjCalls.Count -eq 0)
 
-    # -Sha is Forgejo-only: the GitHub path refuses it rather than ignoring it.
-    Assert-Throws 'github: -Sha is refused (Forgejo-only)' { Invoke-FlashTestBuild -Sha $shaA -Branch 'arm64' -Dest $goodDest -RepoRoot 'C:\fake\repo' -DryRun } 'Forgejo only'
+    # -Sha / -ElspiSha are Forgejo-only: the GitHub path refuses them rather than ignoring them.
+    Assert-Throws 'github: -Sha is refused (Forgejo-only)' { Invoke-FlashTestBuild -Sha $shaA -Branch 'arm64' -Dest $goodDest -RepoRoot 'C:\fake\repo' -DryRun } 'forgejo only'
+    Assert-Throws 'github: -ElspiSha is refused (Forgejo-only)' { Invoke-FlashTestBuild -ElspiSha $shaA -Branch 'arm64' -Dest $goodDest -RepoRoot 'C:\fake\repo' -DryRun } 'forgejo only'
 
     foreach ($f in 'Assert-WslAvailable', 'Assert-ImagerReady', 'Get-MakeOsListScriptForCommit', 'wsl', 'Read-Host', 'git', 'Invoke-ForgejoApi', 'Invoke-ForgejoDownload') {
         Remove-Item "Function:\$f" -ErrorAction SilentlyContinue

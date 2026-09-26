@@ -376,9 +376,14 @@ $env:ELSPI_FORGEJO_PACKAGE = 'pkgowner/pkgname'
 tools\flash-test-build.ps1 -Source forgejo -Branch <branch>
 ```
 
-`-RunId <id>` and `-Sha <full commit sha>` work there too. The download is
-checked against the package registry's own size and sha256 before it is
-cached. The script's header explains each check.
+`-RunId <id>` works there too, and `-Sha <full sha>` names a package version
+directly. That sha is the Forgejo run's snapshot commit, not an elspi commit.
+The elspi commit the image was built from comes from the version's
+`elspi-commit.txt` and must match the image's `.info`. A version from before
+that file existed stops with a message; `-ElspiSha <full elspi sha>` names the
+commit by hand, but it still has to match the `.info`. Every file is checked
+against the package registry's own size and sha256 before it is cached. The
+script's header explains each check.
 
 
 
