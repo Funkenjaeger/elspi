@@ -17,8 +17,9 @@ Two consequences shape everything here:
 
 * **Recovery must not depend on the outside world.** Anything that would need
   PyPI, a package mirror or a working network on the day the card died is baked
-  into the image instead — including the Kivy runtime, which has no prebuilt
-  wheel for this platform and is therefore compiled during the build.
+  into the image instead — including the Kivy runtime, installed from the
+  prebuilt aarch64 wheel the lockfile pins (on the retired armhf line it had to
+  be compiled during the build).
 * **The image carries no machine data and no credentials.** Axis geometry,
   servo polarity and backlash calibration were measured off the physical lathe
   and can only be *restored*, never generated. Passwords and keys arrive at
