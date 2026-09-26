@@ -63,7 +63,7 @@ jobs:
   build:
     # Pinned rather than ubuntu-latest: the qemu shim step below unpacks a
     # specific package layout (noble's qemu-user-static ships
-    # /usr/bin/qemu-arm-static), and a 46-minute build should not have its
+    # /usr/bin/qemu-arm-static and qemu-aarch64-static), and a 46-minute build should not have its
     # host OS change underneath it on a day nobody touched this repo. The
     # shim step gates on that layout, so drift fails loudly either way.
     runs-on: ubuntu-24.04
@@ -97,22 +97,42 @@ jobs:
       # `apt-get download` + dpkg-deb touches no binfmt state and no
       # conflicting package (qemu-user-binfmt vs qemu-user-static), and it is
       # the path already proven by a real build. STATIC because a registered
-      # interpreter has to work inside the armhf chroot.
-      - name: stage a static qemu-arm on PATH
+      # interpreter has to work inside the target chroot.
+      #
+      # ARCH-AWARE (2026-09-26). The branch is the architecture (FORK.md):
+      # build.sh carries a bare `export ARCH=armhf` on master and
+      # `export ARCH=arm64` on the arm64 branch, and build-docker.sh's lookup
+      # follows it -- `which qemu-arm` on master, `which qemu-aarch64` on
+      # arm64. So the name to stage is READ from this checkout's build.sh,
+      # never guessed from the branch name, and a build.sh whose ARCH line is
+      # missing, duplicated or unknown fails here rather than 40 minutes in.
+      #   armhf -> qemu-arm      (-> qemu-arm-static)
+      #   arm64 -> qemu-aarch64  (-> qemu-aarch64-static)
+      - name: stage a static qemu for build.sh's ARCH on PATH
         run: |
           set -euo pipefail
+          arch_lines="$(grep -E '^export ARCH=' build.sh || true)"
+          test "$(printf '%s\n' "${arch_lines}" | grep -c .)" -eq 1 \
+            || { echo "::error::expected exactly one 'export ARCH=' line in build.sh, found:"; printf '%s\n' "${arch_lines}"; exit 1; }
+          ARCH="${arch_lines#export ARCH=}"
+          case "${ARCH}" in
+            armhf) QEMU=qemu-arm ;;
+            arm64) QEMU=qemu-aarch64 ;;
+            *) echo "::error::build.sh ARCH='${ARCH}' has no qemu mapping here"; exit 1 ;;
+          esac
+          echo "build.sh ARCH=${ARCH} -> staging ${QEMU} (${QEMU}-static)"
           SHIM="${RUNNER_TEMP}/qemu-shim"
           mkdir -p "${SHIM}/deb" "${SHIM}/root" "${SHIM}/bin"
           sudo apt-get update -qq
           ( cd "${SHIM}/deb" && apt-get download qemu-user-static )
           dpkg-deb -x "${SHIM}"/deb/*.deb "${SHIM}/root"
-          test -x "${SHIM}/root/usr/bin/qemu-arm-static" \
-            || { echo "::error::qemu-user-static no longer ships usr/bin/qemu-arm-static"; exit 1; }
-          ln -sf "${SHIM}/root/usr/bin/qemu-arm-static" "${SHIM}/bin/qemu-arm"
+          test -x "${SHIM}/root/usr/bin/${QEMU}-static" \
+            || { echo "::error::qemu-user-static no longer ships usr/bin/${QEMU}-static"; exit 1; }
+          ln -sf "${SHIM}/root/usr/bin/${QEMU}-static" "${SHIM}/bin/${QEMU}"
           # Same two spellings build-elspi.sh:95 accepts: Ubuntu builds this
           # as static-PIE, which is still static.
-          file -L "${SHIM}/bin/qemu-arm" | grep -Eq "statically linked|static-pie linked" \
-            || { echo "::error::${SHIM}/bin/qemu-arm is not static"; file -L "${SHIM}/bin/qemu-arm"; exit 1; }
+          file -L "${SHIM}/bin/${QEMU}" | grep -Eq "statically linked|static-pie linked" \
+            || { echo "::error::${SHIM}/bin/${QEMU} is not static"; file -L "${SHIM}/bin/${QEMU}"; exit 1; }
           echo "${SHIM}/bin" >> "${GITHUB_PATH}"
 
       # ospi's proven shape. Registers binfmt handlers (with the F flag, so
