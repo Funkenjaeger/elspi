@@ -21,23 +21,32 @@
 # UAC prompt when it starts. That is Imager, not this script, and it is also why
 # the version is read from the file's VersionInfo rather than by running
 # `rpi-imager --version` -- that would raise UAC just to print a number.
+#
+# -CheckOnly (added for tools/flash-test-build.ps1): run just the "find Imager,
+# check it is 2.x" half below, print what was found, and return -- without
+# touching $Repo or calling Start-Process. That lets a caller fail on a
+# missing/old Imager before it spends a ~1 GB download, while still reusing
+# this file's own detection logic instead of a second copy of it.
 
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [string] $Repo
+    [string] $Repo,
+
+    [switch] $CheckOnly
 )
 
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
-# --- the JSON (or URL) ------------------------------------------------------
-if (-not $Repo) { $Repo = Join-Path $repoRoot 'deploy\os_list.json' }
+if (-not $CheckOnly) {
+    # --- the JSON (or URL) ---------------------------------------------------
+    if (-not $Repo) { $Repo = Join-Path $repoRoot 'deploy\os_list.json' }
 
-if ($Repo -notmatch '^https?://') {
-    if (-not (Test-Path -LiteralPath $Repo -PathType Leaf)) {
-        Write-Host @"
+    if ($Repo -notmatch '^https?://') {
+        if (-not (Test-Path -LiteralPath $Repo -PathType Leaf)) {
+            Write-Host @"
 No OS-list JSON at: $Repo
 
 It is written by the build, next to the image:
@@ -45,9 +54,10 @@ It is written by the build, next to the image:
 or by hand, for an image you already have:
     tools/make-os-list.sh <image.img.xz> --out <path>\os_list.json
 "@
-        exit 1
+            exit 1
+        }
+        $Repo = (Resolve-Path -LiteralPath $Repo).Path
     }
-    $Repo = (Resolve-Path -LiteralPath $Repo).Path
 }
 
 # --- find Imager ------------------------------------------------------------
@@ -108,6 +118,11 @@ no SSH way in at all.
 Install 2.x from https://www.raspberrypi.com/software/
 "@
     exit 1
+}
+
+if ($CheckOnly) {
+    Write-Host "Imager:  $exe ($raw)"
+    exit 0
 }
 
 # --- go ---------------------------------------------------------------------

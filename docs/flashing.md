@@ -261,7 +261,33 @@ have the application or the lathe's commissioned geometry.
 
 **→ [Provisioning](provisioning.md)**
 
-## Troubleshooting
+## Testing an unreleased build
+
+Everything above flashes a *released* image — the last one a human promoted
+from pre-release to release after a card from it provisioned clean
+(`.github/workflows/image.yml`'s header explains why). To try a build that is
+still just a green `image` workflow run — nothing tagged, nothing published —
+from a checkout of this repo:
+
+```
+tools\flash-test-build.ps1 -Branch <branch>
+```
+
+or, to flash a specific run instead of the newest successful one on a branch:
+
+```
+tools\flash-test-build.ps1 -RunId <run-id>
+```
+
+It shows the run's branch, commit and date and asks to confirm before
+downloading the ~1 GB workflow artifact, then builds an `os_list.json` next to
+it and launches Imager on it exactly as `tools\flash-elspi.ps1` does. A repeat
+run against the same run id reuses the cached download instead of fetching it
+again. **Nothing is tagged, released, or otherwise published by this
+command** — it only downloads a workflow artifact GitHub already built and
+flashes it locally.
+
+
 
 **Imager says “Source file not found”, or shows its normal OS catalogue instead
 of one entry.** The `--repo` URL is wrong, or the release it points at has no
