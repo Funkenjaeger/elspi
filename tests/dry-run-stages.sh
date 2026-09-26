@@ -26,6 +26,11 @@
 #                     checkout by tests/verify-image.sh + tests/self-test.sh
 #                     against the fixture. What no offline test can reach is
 #                     the clone itself; that is a Tier-1 build item.
+#   10b-app-install   the uv sync of the baked app into the venv, and the
+#                     offline re-sync that is its gate, both run through
+#                     on_chroot against an armhf uv. Its guard measurement is
+#                     the same script tests/test-first-boot-ui.sh drives; the
+#                     offline proof IS the build (a Tier-1 build item).
 # Those are Tier-1/Tier-2 build items. This script does not pretend otherwise.
 
 set -uo pipefail
@@ -139,6 +144,11 @@ echo "v1.1.0" > "${ROOTFS_DIR}/etc/elspi/reflex-app-release"
 echo "752da5c0aa8c31eed9ec6fc9301638a03d138953" > "${ROOTFS_DIR}/etc/elspi/reflex-app-commit"
 echo "no"  > "${ROOTFS_DIR}/etc/elspi/reflex-app-updater-ready"
 echo "no"  > "${ROOTFS_DIR}/etc/elspi/reflex-app-protocol-readable"
+# ...and what 10b-app-install writes (2026-09-26). "no" for the guard, to
+# match v1.1.0 above (the guard shipped in v1.2.0-rc.5): the manifest must
+# then declare that the app is NOT started on first boot.
+echo "no"  > "${ROOTFS_DIR}/etc/elspi/reflex-app-commissioning-guard"
+echo "yes" > "${ROOTFS_DIR}/etc/elspi/reflex-app-installed-offline-ok"
 run_stage 11-manifest
 
 # THE MANIFEST MUST ACTUALLY CARRY THE BAKED RELEASE. Checked here rather than
@@ -162,6 +172,30 @@ else
 	grep -n 'updater_ready' "${ROOTFS_DIR}/etc/elspi-image.json" | sed 's/^/        /'
 	FAIL=$((FAIL+1))
 fi
+# THE FIRST-BOOT START IS DECLARED FROM THE GUARD, NOT AS A CONSTANT. With
+# the guard fact "no" (v1.1.0), both fields must be the JSON literal false;
+# then a second render with "yes" must flip both to true. A manifest that
+# said true for a release without the guard would be claiming a fresh card
+# comes up UNCOMMISSIONED when it would come up on silent defaults.
+fbui_decl() { python3 -c 'import json,sys; b=json.load(open(sys.argv[1]))["baked_app"]; print(b.get("commissioning_guard"), b.get("started_on_first_boot"))' "${ROOTFS_DIR}/etc/elspi-image.json" 2>/dev/null; }
+if [ "$(fbui_decl)" = "False False" ]; then
+	echo "  ok: guard absent -> baked_app.commissioning_guard=false, started_on_first_boot=false"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: guard absent, but the manifest declares (commissioning_guard started_on_first_boot) = '$(fbui_decl)'"
+	FAIL=$((FAIL+1))
+fi
+echo "yes" > "${ROOTFS_DIR}/etc/elspi/reflex-app-commissioning-guard"
+if ( cd "${REPO}/stage-elspi/11-manifest" && ./00-run.sh >/dev/null 2>&1 ) && [ "$(fbui_decl)" = "True True" ]; then
+	echo "  ok: guard present -> baked_app.commissioning_guard=true, started_on_first_boot=true"
+	PASS=$((PASS+1))
+else
+	echo "  FAIL: guard present, but the manifest declares (commissioning_guard started_on_first_boot) = '$(fbui_decl)'"
+	FAIL=$((FAIL+1))
+fi
+echo "no" > "${ROOTFS_DIR}/etc/elspi/reflex-app-commissioning-guard"
+( cd "${REPO}/stage-elspi/11-manifest" && ./00-run.sh >/dev/null 2>&1 )
+
 # The checkout is no longer the delta layer's, and the manifest must not still
 # claim it is -- one document, one owner per path.
 if grep -q 'reflex monorepo checkout at' "${ROOTFS_DIR}/etc/elspi-image.json"; then
@@ -231,10 +265,9 @@ fi
 run_stage 12-first-boot-seed
 
 # 14-first-boot-ui is the same shape as 12-first-boot-seed and chroot-free for
-# the same reason. It is a SCAFFOLD (stage-elspi/14-first-boot-ui/README.md),
-# not the first-boot-into-the-UI feature -- it ships the trigger, not a
-# converge/start branch: starting the baked app unattended is a separate,
-# still-open decision.
+# the same reason: it installs a unit, its script, the commissioning-guard
+# check and a copy of deltas/, all under ${ROOTFS_DIR}. What the script DOES
+# on a card is tests/test-first-boot-ui.sh's job.
 run_stage 14-first-boot-ui
 
 # WHERE THE SUBSTAGE ENABLES THE UNIT, checked here rather than only in
@@ -264,6 +297,27 @@ if [ -L "${FBS_MU_WANTS}" ] || [ -e "${FBS_MU_WANTS}" ]; then
 else
 	echo "  ok: seed unit is not enabled in multi-user.target.wants (no ordering cycle)"
 	PASS=$((PASS+1))
+fi
+
+# 14-first-boot-ui ALSO BAKES THE DELTA LAYER IN (2026-09-26): the hook runs
+# converge from the image's own copy. Byte-identical to the repository's,
+# executable, and without the contract tests.
+FBUI_DELTAS="${ROOTFS_DIR}/usr/local/lib/elspi/deltas"
+FBUI_DELTAS_OK=1
+for f in lib.sh 01-converge.sh 02-restore.sh 03-interactive.sh provision.sh; do
+	if [ ! -x "${FBUI_DELTAS}/${f}" ] || ! cmp -s "${REPO}/deltas/${f}" "${FBUI_DELTAS}/${f}"; then
+		echo "  FAIL: ${f} is not installed, executable and identical at /usr/local/lib/elspi/deltas"
+		FBUI_DELTAS_OK=0
+	fi
+done
+[ -s "${FBUI_DELTAS}/files/50-reflex-service-user.rules" ] || { echo "  FAIL: converge's polkit template is not in the baked deltas"; FBUI_DELTAS_OK=0; }
+[ -e "${FBUI_DELTAS}/tests" ] && { echo "  FAIL: the baked deltas carry tests/"; FBUI_DELTAS_OK=0; }
+[ -x "${ROOTFS_DIR}/usr/local/lib/elspi/commissioning-guard" ] || { echo "  FAIL: the commissioning-guard check is not installed"; FBUI_DELTAS_OK=0; }
+if [ "${FBUI_DELTAS_OK}" = 1 ]; then
+	echo "  ok: the delta layer and the commissioning-guard check are baked in at /usr/local/lib/elspi"
+	PASS=$((PASS+1))
+else
+	FAIL=$((FAIL+1))
 fi
 
 # Same two checks, same reason, for 14-first-boot-ui's unit.
@@ -534,6 +588,10 @@ echo "v1.2.0-rc.4" > "${NEG6}/etc/elspi/reflex-app-release"
 echo "1dfa05c0000000000000000000000000000000aa" > "${NEG6}/etc/elspi/reflex-app-commit"
 echo "yes" > "${NEG6}/etc/elspi/reflex-app-updater-ready"
 echo "yes" > "${NEG6}/etc/elspi/reflex-app-protocol-readable"
+# The 10b facts too, so the ONLY thing wrong with this tree is the rc tag --
+# otherwise the refusal below could be for a missing fact instead.
+echo "yes" > "${NEG6}/etc/elspi/reflex-app-commissioning-guard"
+echo "yes" > "${NEG6}/etc/elspi/reflex-app-installed-offline-ok"
 if ( cd "${REPO}/stage-elspi/11-manifest" && ROOTFS_DIR="${NEG6}" ./00-run.sh >/dev/null 2>&1 ); then
 	echo "  FAIL: 11-manifest declared a PRE-RELEASE (v1.2.0-rc.4) as the baked release"
 	FAIL=$((FAIL+1))

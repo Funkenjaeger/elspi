@@ -82,3 +82,95 @@ is `segno` (added in reflex 2026-09-17 for the device-flow QR). Why: Evan's gate
 first card is baked from pairs its venv with v1.2.0 — the same release `10a-app-checkout`
 selects as the newest full release — rather than with a pre-release two weeks older.
 `tests/test-lockfile-drift.sh` against a checkout of reflex at `v1.2.0`: `RESULT: in sync`.
+
+### What was already done, and what this branch adds
+
+Before this branch, items 2 (`provision.sh --fresh`, 53f22fb) and 3
+(`docs/swd-first-load.md`, 25e5c75; reflex's `docs/setup/installing.md` already points at
+it) had landed, and item 1 was a scaffold (`14-first-boot-ui` logged
+`verdict=UNIMPLEMENTED`). The choices below are the ones the 2026-09-13 body did not
+settle; each took the conservative option.
+
+### The baked checkout is the newest FULL release, not a separate REFLEX_COMMIT pin
+
+The 2026-09-13 body says "bake the reflex checkout at that same commit"
+(`08-venv/files/REFLEX_COMMIT`). Choice: `10a-app-checkout` is unchanged — it bakes the
+newest full release, which is `v1.2.0`, the same commit REFLEX_COMMIT now names (first
+commit above), so the two agree today by construction rather than by a second pin.
+Alternative: make 10a clone REFLEX_COMMIT itself. Why not: `docs/design/seam.md`'s
+amendment of 2026-09-21, ratified after the 09-13 body was written, says the image
+ships "the latest FULL release … not a development `rc.*`", and `select-release.sh`
+refuses an `rc.*` by name; had REFLEX_COMMIT stayed at `rc.3`, baking it would also have
+baked a release without the commissioning guard (below). If the two ever diverge again
+(a newer full release before a re-vendor), `10b-app-install`'s sync installs the delta
+at build time and the offline gate still holds.
+
+### The start is gated on the commissioning guard, checked twice
+
+Choice: `14-first-boot-ui` starts reflex-ui only when
+`stage-elspi/14-first-boot-ui/files/commissioning-guard.sh` finds reflex's commissioning
+guard in the baked checkout (the three files it lives in: `commissioning_state.py`
+defining `latch()`, `app.py` calling it, the `uncommissioned_banner.kv` strip). It first
+shipped in `v1.2.0-rc.5`; measured against the tags, the check answers `no` for v1.1.0,
+rc.3 and rc.4 and `yes` for rc.5 and v1.2.0. Measured at build time by
+`10b-app-install` (the manifest declares `baked_app.commissioning_guard` and
+`started_on_first_boot` from it), and asked again on the card by the hook. Without it
+the hook logs `verdict=REFUSED_NO_GUARD` and the card is provisioned by hand, as before.
+Alternative: start unconditionally (v1.2.0 has the guard anyway). Why: the seam
+amendment makes the first-boot start conditional on an explicit UNCOMMISSIONED state
+("silent defaults are the one outcome this amendment forbids"), the image picks its
+release at build time, and a site build may pin another; the safety property should not
+depend on which release a build happened to get. A file check rather than a version
+comparison, so there is no second copy of "which release added it" to go stale.
+
+### First boot is OFFLINE; the networked step moves to build time
+
+The 2026-09-13 body names SEAM.md's recovery-without-network rule. Converge's
+`uv sync --no-dev --frozen` needs PyPI on a card straight out of the image even with the
+locks matching: `08-venv` installs everything except the project and deletes its uv
+cache, and the reflex package is installed editable, so its build backend (hatchling)
+is fetched at converge time. Choice: a new substage `10b-app-install` runs that same sync
+at build time and then proves a second sync with an EMPTY cache and `UV_OFFLINE=1`
+succeeds (the build fails otherwise); the hook runs converge with `UV_OFFLINE=1`.
+Alternative: let first-boot converge use the network (fails on a card with no Wi-Fi
+seeded, and is the exact dependency seam.md test 2 removes). The mechanism was measured
+with uv before relying on it: an installed editable project re-syncs offline
+("Audited") while `pyproject.toml`'s mtime is unchanged, and rebuilds (failing offline)
+when it moves; pi-gen's export preserves mtimes and 10b gates that it does not move it.
+
+### The image carries the delta layer
+
+Choice: `14-first-boot-ui` installs `deltas/` (not `tests/`) at
+`/usr/local/lib/elspi/deltas`, and the hook runs `01-converge.sh` from there.
+Alternative: a first-boot-only reimplementation of converge. Why: converge is the one
+place the application wiring is defined and tested (`deltas/tests`), and a second copy
+of it would drift. Side effect, stated: recovery on a card with no network no longer
+needs `git clone elspi` for the scripts; a clone still works and remains the way to run
+a newer delta layer.
+
+### The hook runs once, never restores, and never overrules a human
+
+Choice: success writes `/etc/elspi/first-boot-ui-done`; every later boot is systemd
+starting the enabled unit, and the hook only logs `DONE_EARLIER`. If reflex-ui.service
+is already enabled when the hook first runs, it records `ALREADY_PROVISIONED` and does
+nothing. If converge fails after enabling the unit, the hook disables it again (the
+next boot must not start a half-converged app) and retries next boot. It never runs
+phase 2 or phase 3. Alternative: re-converge every boot. Why: a human who stops or
+disables the UI later must not be overruled at the next power cycle.
+
+### provision.sh: --fresh refused up front on a card that already holds config; a running UI is stopped before phase 2
+
+With first boot starting the UI, `provision.sh` meets a running app, and the app's
+startup snapshot makes `/var/lib/reflex-config` non-empty. Choice, two changes, the
+restore contract itself untouched: (1) the `--fresh` "CONFIG_DIR already holds a file"
+refusal is also taken in provision.sh BEFORE phase 1 (it used to arrive only as phase 2,
+after a root converge, with a closing message calling the running UI "not started");
+02-restore.sh remains the authority on the rule. (2) If reflex-ui is active when phase 1
+finishes, provision.sh stops it (gated on systemd's answer) before phase 2 and does not
+restart it. Alternative: leave provision.sh alone and document "stop the UI first".
+Why: a running app latched uncommissioned keeps its in-memory defaults, and once its
+UNCOMMISSIONED warning is dismissed its write gate is open, so its next save would
+write defaults over the geometry phase 2 just restored — a documentation step is
+exactly what gets skipped at the lathe. `--fresh`'s rule that any file refuses was NOT
+relaxed to ignore the app's own ledger: that would soften a refusal this order did not
+ask to soften.

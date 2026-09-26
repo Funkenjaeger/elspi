@@ -489,11 +489,12 @@ mutate "the manifest is missing entirely" \
 
 # The first-boot UI hook (stage-elspi/14-first-boot-ui)
 #
-# THIS IS A SCAFFOLD, NOT THE FEATURE -- see stage-elspi/14-first-boot-ui/
-# README.md. The mutations below prove the TRIGGER is actually enforced:
-# that it exists, is enabled, and is ordered correctly. They do not and
-# cannot prove anything STARTS, because nothing does yet on any image built
-# by this repo.
+# Since 2026-09-26 it converges the baked checkout offline and starts the UI,
+# once, when the baked release carries the commissioning guard. The mutations
+# below prove the TRIGGER (exists, enabled, ordered), the PAYLOAD (the baked
+# delta layer and the guard check) and the manifest's first-boot claim are
+# each actually enforced. What the script does branch by branch is
+# tests/test-first-boot-ui.sh's; whether it works on a card is hardware's.
 mutate "the first-boot-ui script missing" \
 	"rm -f usr/local/sbin/elspi-first-boot-ui"
 mutate "the first-boot-ui script is not executable" \
@@ -535,6 +536,31 @@ mutate "the manifest does not declare the first-boot-ui hook" \
 	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d.pop('first_boot_ui',None);json.dump(d,open(p,'w'))\""
 mutate "the manifest drops the first-boot-ui blind spot from cannot_be_verified_without_hardware" \
 	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d['cannot_be_verified_without_hardware']=[i for i in d['cannot_be_verified_without_hardware'] if 'first-boot-ui' not in i];json.dump(d,open(p,'w'))\""
+# THE PAYLOAD. The hook runs converge from the image's own copy of the delta
+# layer; a card without it cannot boot into the UI, and a card without the
+# guard check must not start anything at all.
+mutate "the baked delta layer loses 01-converge.sh" \
+	"rm -f usr/local/lib/elspi/deltas/01-converge.sh"
+mutate "the baked delta layer loses lib.sh (converge sources it)" \
+	"rm -f usr/local/lib/elspi/deltas/lib.sh"
+mutate "the baked delta layer loses converge's polkit template" \
+	"rm -f usr/local/lib/elspi/deltas/files/50-reflex-service-user.rules"
+mutate "the baked delta layer ships its tests/" \
+	"mkdir -p usr/local/lib/elspi/deltas/tests && touch usr/local/lib/elspi/deltas/tests/x.sh"
+mutate "the commissioning-guard check is missing" \
+	"rm -f usr/local/lib/elspi/commissioning-guard"
+mutate "the first-boot-ui script no longer runs converge offline" \
+	"sed -i 's/UV_OFFLINE=1/UV_OFFLINE=0/g' usr/local/sbin/elspi-first-boot-ui"
+mutate "the manifest does not declare where the baked delta layer is" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d['first_boot_ui'].pop('deltas',None);json.dump(d,open(p,'w'))\""
+# THE FIRST-BOOT CLAIM. started_on_first_boot must agree with the guard, and
+# the guard answer must agree with the checkout that shipped: a manifest
+# saying "starts, UNCOMMISSIONED" over a release with no guard is a card
+# that would run on silent defaults while claiming otherwise.
+mutate "the manifest claims started_on_first_boot while declaring no commissioning guard" \
+	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d['baked_app']['commissioning_guard']=False;json.dump(d,open(p,'w'))\""
+mutate "the manifest claims the guard, but the shipped checkout does not carry it" \
+	"rm -f home/default/projects/reflex/ui/reflex/utils/commissioning_state.py"
 
 echo
 echo "== /etc/elspi-release (order 2026-09-14#5) =="
