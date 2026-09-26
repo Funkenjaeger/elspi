@@ -16,9 +16,17 @@ barely change.
 **Why here, not upstream's files:** editing `stage2/01-sys-tweaks/00-packages`
 or the finalise script would be a merge conflict on every upstream sync
 (`docs/design/fork.md`). This is the last sub-stage, so no later install can
-bring it back. Its dependencies (`python3-apt`, `python3-debconf`,
-`sensible-utils`, `ucf`) are left installed: no autoremove, so the package list
-changes by exactly one package.
+bring it back.
+
+**The image loses six packages, not one.** This step purges only
+`apt-listchanges`, but upstream's `export-image/02-set-sources/01-run.sh:8`
+runs `apt-get dist-upgrade --auto-remove --purge`, which then removes the five
+auto-installed packages nothing else needs any more: `python3-apt`,
+`python-apt-common`, `python3-debconf`, `iso-codes` and `distro-info-data`
+(measured 2026-09-26: 910 -> 904 in the `.info`). Checked on the lathe that
+nothing else depends on them: `gnupg` only suggests `python3-apt`, `ucf` uses
+the Perl debconf, and the one cloud-init module that imports `apt` is
+Ubuntu-only.
 
 The step fails the build if the service file finalise tests for is still
 present.
