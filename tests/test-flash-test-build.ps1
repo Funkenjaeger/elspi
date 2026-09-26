@@ -223,6 +223,117 @@ try {
 }
 
 # =============================================================================
+# 3c. Get-CommitFile / Get-MakeOsListScriptForCommit -- must use the BUILD's
+# own commit's tools/make-os-list.sh AND its sibling
+# tools/os_list.imager-block.json, never this checkout's copies. This is the
+# second bug: make-os-list.sh differs per branch (arm64's db380b6 writes
+# 64-bit device tags and an arm64 description; master's writes armhf's
+# 32-bit tags), so a checkout on one branch running against an artifact
+# built on another mislabels the image with no error at all -- and
+# make-os-list.sh looks up the block file NEXT TO ITSELF (its own HERE/BLOCK
+# logic), so the two files have to come from the same commit into the same
+# directory or the pairing itself is wrong even when each file looks fine
+# alone.
+# =============================================================================
+
+$makeOsListTestDir = Join-Path ([System.IO.Path]::GetTempPath()) ("flash-test-build-makeoslist-" + [guid]::NewGuid())
+New-Item -ItemType Directory -Force -Path $makeOsListTestDir | Out-Null
+try {
+    # -- Get-CommitFile: the building block, tested directly ---------------
+
+    # The fake `git show` returns content that is deliberately DIFFERENT from
+    # whatever tools/make-os-list.sh actually says in THIS checkout -- e.g.
+    # the 64-bit device tags an arm64-branch commit would carry, while this
+    # repo's own checked-out copy (at test time) is master's 32-bit version.
+    # If Get-CommitFile ever read the checkout instead of the commit, this
+    # assertion catches it: the checkout's real content would not contain
+    # the marker below.
+    $buildersOwnContent = "#!/usr/bin/env bash`nset -euo pipefail`necho BUILD-COMMIT-VERSION pi5-64bit pi4-64bit pi3-64bit`n"
+
+    function git {
+        param([Parameter(ValueFromRemainingArguments)] [string[]] $Arguments)
+        if ($Arguments[0] -eq '-C' -and $Arguments[2] -eq 'show' -and $Arguments[3] -eq 'buildsha123:tools/make-os-list.sh') {
+            $global:LASTEXITCODE = 0
+            return $buildersOwnContent -split "`n" | Select-Object -SkipLast 1   # simulate line-array stdout
+        }
+        throw "unexpected git call in Get-CommitFile test 1: $($Arguments -join ' ')"
+    }
+    $out1 = Join-Path $makeOsListTestDir 'from-commit.sh'
+    Get-CommitFile -RepoRoot 'C:\fake\repo' -Sha 'buildsha123' -RepoPath 'tools/make-os-list.sh' -OutFile $out1
+    $written = Get-Content -LiteralPath $out1 -Raw
+
+    $realCheckoutContent = Get-Content -LiteralPath (Join-Path $repoRoot 'tools\make-os-list.sh') -Raw
+    Assert-True 'uses the BUILD commit''s make-os-list.sh (not the checkout''s)' `
+        ($written -match 'BUILD-COMMIT-VERSION' -and $written -ne $realCheckoutContent) `
+        "(the checkout's own tools/make-os-list.sh must NOT be what got written)"
+    Assert-True 'the fetched content carries the build''s own device tags' ($written -match 'pi5-64bit') "(got: $written)"
+
+    # Commit not present locally -> fetch, then retry -- succeeds on the
+    # second `git show`.
+    $script:showCallCount = 0
+    function git {
+        param([Parameter(ValueFromRemainingArguments)] [string[]] $Arguments)
+        if ($Arguments[2] -eq 'show') {
+            $script:showCallCount++
+            if ($script:showCallCount -eq 1) {
+                $global:LASTEXITCODE = 128
+                return "fatal: invalid object name 'notlocalsha123'."
+            }
+            $global:LASTEXITCODE = 0
+            return @('#!/usr/bin/env bash', 'echo FETCHED-THEN-FOUND')
+        }
+        if ($Arguments[2] -eq 'fetch') {
+            $global:LASTEXITCODE = 0
+            return 'From github.com:Funkenjaeger/elspi'
+        }
+        throw "unexpected git call in Get-CommitFile test 2: $($Arguments -join ' ')"
+    }
+    $out2 = Join-Path $makeOsListTestDir 'fetched-then-found.sh'
+    Get-CommitFile -RepoRoot 'C:\fake\repo' -Sha 'notlocalsha123' -RepoPath 'tools/make-os-list.sh' -OutFile $out2
+    Assert-True 'commit not local -> fetches from origin, then succeeds' `
+        ((Get-Content -LiteralPath $out2 -Raw) -match 'FETCHED-THEN-FOUND') "(showCallCount=$script:showCallCount)"
+
+    # Commit not present locally AND the fetch fails -> loud failure, no
+    # silent fallback to the checkout's own copy.
+    function git {
+        param([Parameter(ValueFromRemainingArguments)] [string[]] $Arguments)
+        if ($Arguments[2] -eq 'show') { $global:LASTEXITCODE = 128; return "fatal: invalid object name." }
+        if ($Arguments[2] -eq 'fetch') { $global:LASTEXITCODE = 1; return 'fatal: could not read from remote repository.' }
+        throw "unexpected git call in Get-CommitFile test 3: $($Arguments -join ' ')"
+    }
+    $out3 = Join-Path $makeOsListTestDir 'unreachable.sh'
+    Assert-Throws 'commit unreachable even after fetch -> loud failure naming the sha' {
+        Get-CommitFile -RepoRoot 'C:\fake\repo' -Sha 'unreachablesha' -RepoPath 'tools/make-os-list.sh' -OutFile $out3
+    } 'unreachablesha'
+    Assert-True 'no output file left behind after a failed fetch' (-not (Test-Path -LiteralPath $out3))
+
+    # -- Get-MakeOsListScriptForCommit: fetches BOTH sibling files, same commit, same dir --
+
+    $pairSha = 'pairsha456'
+    function git {
+        param([Parameter(ValueFromRemainingArguments)] [string[]] $Arguments)
+        if ($Arguments[2] -ne 'show') { throw "unexpected git call in pairing test: $($Arguments -join ' ')" }
+        $spec = $Arguments[3]
+        $global:LASTEXITCODE = 0
+        if ($spec -eq "${pairSha}:tools/make-os-list.sh") { return @('#!/usr/bin/env bash', 'echo PAIRED-SCRIPT') }
+        if ($spec -eq "${pairSha}:tools/os_list.imager-block.json") { return '{"imager":{"devices":["PAIRED-BLOCK"]}}' }
+        throw "pairing test: unexpected blob spec $spec"
+    }
+    $pairDir = Join-Path $makeOsListTestDir 'pair'
+    New-Item -ItemType Directory -Force -Path $pairDir | Out-Null
+    Get-MakeOsListScriptForCommit -RepoRoot 'C:\fake\repo' -Sha $pairSha -OutDir $pairDir
+    $pairedScript = Get-Content -LiteralPath (Join-Path $pairDir 'make-os-list.sh') -Raw
+    $pairedBlock = Get-Content -LiteralPath (Join-Path $pairDir 'os_list.imager-block.json') -Raw
+    Assert-True 'Get-MakeOsListScriptForCommit writes make-os-list.sh from the commit' ($pairedScript -match 'PAIRED-SCRIPT') "(got: $pairedScript)"
+    Assert-True 'Get-MakeOsListScriptForCommit writes the SIBLING os_list.imager-block.json from the SAME commit, next to it' `
+        ($pairedBlock -match 'PAIRED-BLOCK') "(got: $pairedBlock -- make-os-list.sh looks this file up next to itself, so a mismatched pair breaks silently)"
+
+    Remove-Item Function:\git -ErrorAction SilentlyContinue
+} finally {
+    Remove-Item -LiteralPath $makeOsListTestDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# =============================================================================
 # 4. Path conversion: C:\x\y -> /mnt/c/x/y
 # =============================================================================
 
