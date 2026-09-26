@@ -7,6 +7,16 @@ Everything the image deliberately does **not** contain. The image is
 page is the other side of it: the application, the commissioned machine data,
 and the credentials that could not be typed into Imager.
 
+!!! info "A freshly flashed card has already run phase 1 (since 2026-09-26)"
+    Images built from this date boot straight into the UI: on the first boot,
+    `elspi-first-boot-ui.service` runs **phase 1 (converge)** against the
+    reflex release baked into the image, offline, and starts `reflex-ui`,
+    which comes up **UNCOMMISSIONED** ([Flashing → After first boot](flashing.md#after-first-boot)).
+    It never runs phase 2 or 3. So on such a card this page is for
+    **restoring a capture from the command line**, the interactive phase, site
+    hooks, and recovery — not for getting a UI onto the screen. The image also
+    carries the delta scripts themselves at `/usr/local/lib/elspi/deltas`.
+
 !!! warning "First commissioning: `--fresh`, then measure everything before use"
     `provision.sh` **requires** either `--config-backup` or `--fresh` — never
     both, and never neither. That is correct for the machine this repository
@@ -34,6 +44,12 @@ and the credentials that could not be typed into Imager.
     screen** — the user-facing route onto a machine this tooling deliberately
     left uncommissioned, and it needs no SSH, no CLI and no re-run of
     `provision.sh`.
+
+    **On a card that booted straight into the UI, `--fresh` refuses**, before
+    phase 1 touches anything: the running application has already written its
+    own commissioning ledger into `/var/lib/reflex-config`, and first
+    commissioning is under way on the touchscreen. There is nothing for
+    `--fresh` to add.
 
 ## USB sticks
 
@@ -153,26 +169,34 @@ a number nobody took. Only a real pi-gen build produces the true values.
 
 ## What you need on the Pi
 
-**A checkout of this repository**, for the delta scripts. `git` is in the image
-precisely so this works with no network setup beyond the Wi-Fi you seeded:
+**The delta scripts.** Images built since 2026-09-26 carry them at
+`/usr/local/lib/elspi/deltas` (the elspi commit they came from is in
+`SOURCE_COMMIT` beside them), so recovery needs no network for them. A
+checkout of this repository works exactly the same and is how you run a
+*newer* delta layer than the image shipped; `git` is in the image so this
+works with no network setup beyond the Wi-Fi you seeded:
 
 ```sh
 git clone https://github.com/Funkenjaeger/elspi ~/projects/elspi
 ```
 
-**A checkout of the application, at a release tag.** `provision.sh` will not
-clone it for you — the application is not this repository's to fetch on a whim,
-and the image is paired with a specific application version:
+**The application checkout.** Since the 2026-09-21 seam amendment the image
+bakes it in, at `/home/default/projects/reflex`, at the newest full reflex
+release when the image was built (`cat /etc/elspi/reflex-app-release`; `v1.2.0`
+for the first images carrying it). The image's venv is locked against the same
+release (`/etc/elspi/reflex-lock-commit`), and the build installed the
+application into it, so converge needs no network. Updating to a later release
+is the reflex UI's own *Setup → Update*. On an image from before 2026-09-21,
+clone it yourself at the tag the venv was locked against:
 
 ```sh
 git clone https://github.com/Funkenjaeger/reflex ~/projects/reflex
-git -C ~/projects/reflex checkout v1.2.0-rc.3
+git -C ~/projects/reflex checkout <tag>
 ```
 
-`v1.2.0-rc.3` is the tag the current image's venv was locked against
-(see the [changelog](changelog.md)). A different tag may add a dependency the
-image's venv does not carry, in which case provisioning needs the network after
-all — acceptable for development, not for recovery.
+A different tag may add a dependency the image's venv does not carry, in which
+case provisioning needs the network after all — acceptable for development,
+not for recovery.
 
 **The commissioned config capture.** A directory or a tarball, carried to the Pi
 by hand. `02-restore.sh` cannot fetch it: that would mean this repository
@@ -187,7 +211,7 @@ argument.
 ## Run it
 
 ```sh
-cd ~/projects/elspi/deltas
+cd /usr/local/lib/elspi/deltas          # or ~/projects/elspi/deltas, from a clone
 sudo ./provision.sh --app /home/default/projects/reflex \
                     --config-backup /path/to/elspi-reflex-config-YYYY-MM-DD \
                     --firmware /path/to/flashed.json      # optional
@@ -367,6 +391,12 @@ zone against those declarations.
 **Nothing in provisioning starts the application.** That is deliberate: phase 2
 printed the commissioned values, and starting before a human has looked at them
 means coming up on whatever happened to be in the file.
+
+**If the application is already running** — it is, on a card that booted
+straight into the UI — `provision.sh` **stops it** after phase 1 and before
+phase 2, says so, and leaves it stopped. A running app keeps its in-memory
+defaults, and once its UNCOMMISSIONED warning has been dismissed it saves
+them, which would write them over what phase 2 just restored.
 
 When you are satisfied:
 

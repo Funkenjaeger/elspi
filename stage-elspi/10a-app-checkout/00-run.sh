@@ -39,10 +39,10 @@
 # rewritten to the public URL, and the gates below refuse anything
 # credential-shaped in .git/config rather than trusting that.
 #
-# THIS SUBSTAGE DOES NOT START ANYTHING. The start gate is order 2026-09-21#1
-# and does not exist yet; stage-elspi/14-first-boot-ui stays exactly the
-# scaffold order 2026-09-20#5 shipped. A checkout with nothing pointed at it
-# is inert.
+# THIS SUBSTAGE DOES NOT START ANYTHING. Since 2026-09-26 the start is
+# stage-elspi/14-first-boot-ui's, at first boot, gated on the release carrying
+# reflex's commissioning guard; 10b-app-install installs this checkout into
+# the venv in between.
 #
 # WHY "10a" AND NOT A RENUMBER. It has to run after 05-service-user (which
 # creates and owns the app parent) and BEFORE 11-manifest (which records what
@@ -395,4 +395,4 @@ printf '%s\n' "${TAG_SHA}"            > "${ROOTFS_DIR}/etc/elspi/reflex-app-comm
 printf '%s\n' "${UPDATER_READY}"      > "${ROOTFS_DIR}/etc/elspi/reflex-app-updater-ready"
 printf '%s\n' "${PROTOCOL_READABLE}"  > "${ROOTFS_DIR}/etc/elspi/reflex-app-protocol-readable"
 
-echo "  baked ${RELEASE_TAG} (${TAG_SHA}) at ${APP_ROOT}; app NOT started (order 2026-09-21#1 owns the start gate)"
+echo "  baked ${RELEASE_TAG} (${TAG_SHA}) at ${APP_ROOT}; not started here (14-first-boot-ui starts it at first boot, if it carries the commissioning guard)"
