@@ -13,9 +13,10 @@
 # script is the one-command version of pulling that artifact down and flashing
 # it, replacing three manual steps:
 #
-#   1. gh run download <run-id> --repo Funkenjaeger/elspi \
-#        --name elspi-image-<sha> --dir <cache>
-#   2. wsl bash -lc "tools/make-os-list.sh <img> --url file://<img> \
+#   1. gh api repos/Funkenjaeger/elspi/actions/artifacts/<artifact-id>/zip \
+#        > <cache>/elspi-image-<sha>.zip
+#   2. git show <head-sha>:tools/make-os-list.sh > <cache>/make-os-list.sh
+#      wsl bash -lc "<cache>/make-os-list.sh <img> --url file://<img> \
 #        --out <cache>/os_list.json"
 #   3. tools\flash-elspi.ps1 <cache>\os_list.json
 #
@@ -25,15 +26,29 @@
 # `--repo .../releases/latest/download/os_list.json`, which this script does
 # not touch.
 #
+# WHY THE ZIP ITSELF, NOT `gh run download`
+#
+# `gh run download` writes the EXTRACTED files, not the archive -- and the
+# artifact API's `size_in_bytes` (and `digest`) describe the ZIP, not the sum
+# of what comes out of it. Comparing extracted bytes against the zip's
+# reported size is off by the archive's own overhead (a few hundred bytes for
+# this image), so that comparison can never actually match and a complete,
+# correct download is permanently refused as incomplete. Fetching
+# `.../artifacts/<id>/zip` (the same bytes `gh run download` would unpack)
+# lets the downloaded file be checked byte-for-byte against `size_in_bytes`,
+# and hashed against `digest` (`sha256:<hex>`, when the API provides one),
+# BEFORE anything is extracted or cached as complete.
+#
 # WHY A PER-RUN CACHE DIRECTORY
 #
 # The artifact is ~1 GB. Re-running this against the same run (to re-flash a
 # second card, or after a failed flash) should not re-download it, so a
-# completed download is kept under <Dest>\<run-id>\ next to a small
-# `.artifact-info.json` marker recording the artifact's size and content
-# digest as GitHub's API reports them. The next run compares against that API
-# response (a few hundred bytes, not the artifact) before deciding to reuse or
-# re-fetch -- see Test-CachedArtifact below.
+# completed download is kept under <Dest>\<run-id>\ -- the verified zip AND
+# what it extracts to -- next to a small `.artifact-info.json` marker
+# recording the artifact's size and content digest as GitHub's API reports
+# them. The next run compares against that API response (a few hundred
+# bytes, not the artifact) before deciding to reuse or re-fetch -- see
+# Test-CachedArtifact below.
 #
 # WHY wsl bash -lc, NOT a native PowerShell port of make-os-list.sh
 #
@@ -49,15 +64,28 @@
 # make-os-list.sh's own WSL note) for Imager, which runs natively on Windows
 # and cannot resolve /mnt/c.
 #
+# WHY THE BUILD'S OWN make-os-list.sh, NOT THIS CHECKOUT'S
+#
+# make-os-list.sh differs per branch -- it hardcodes the image's Imager
+# device tags and description (arm64 vs armhf), because that is exactly what
+# it exists to describe. Running THIS checkout's copy against an artifact
+# built from a different branch/commit silently mislabels the image (a 64-bit
+# arm64 build tagged with armhf's 32-bit device list, or vice versa) with no
+# error at all -- the script runs fine, it is just describing the wrong
+# image. Get-MakeOsListScriptForCommit reads tools/make-os-list.sh out of the
+# artifact's own head_sha via `git show`, so the script used always matches
+# the image being described, regardless of which branch this checkout is on.
+#
 # TESTING
 #
 #   pwsh tests\test-flash-test-build.ps1
 #
 # dot-sources this file (which only defines functions and does not run
 # Main -- see the guard at the bottom) and exercises Resolve-TestBuildRun,
-# ConvertTo-WslPath, Test-CachedArtifact and Assert-CommandAvailable directly,
-# with gh/api calls replaced by fake functions of the same name. No network,
-# no download, no Imager launch.
+# ConvertTo-WslPath, Test-CachedArtifact, Confirm-DownloadedZip,
+# Get-MakeOsListScriptForCommit and Assert-CommandAvailable directly, with
+# gh/git calls replaced by fake functions of the same name (Invoke-GhDownloadZip
+# included -- see its own comment). No network, no download, no Imager launch.
 
 [CmdletBinding()]
 param(
@@ -80,7 +108,13 @@ param(
     # make-os-list.sh, Imager) instead of doing it. No network cost beyond the
     # small `gh run list`/`gh run view`/`gh api .../artifacts` calls needed to
     # resolve the run and check the cache.
-    [switch] $DryRun
+    [switch] $DryRun,
+
+    # Do everything -- download, verify, extract, build os_list.json -- except
+    # the final Imager launch. For exercising the real download/verify path
+    # end to end (including against a real ~1 GB artifact) without a GUI to
+    # click through, e.g. in a test run with no display attached.
+    [switch] $NoLaunch
 )
 
 $Repo = 'Funkenjaeger/elspi'
@@ -108,6 +142,15 @@ function Invoke-GhJson {
         throw "gh $($Arguments -join ' ') failed (exit $($result.ExitCode)): $($result.Output -join "`n")"
     }
     return ($result.Output -join "`n") | ConvertFrom-Json
+}
+
+# Same trick as Invoke-Gh, for `git` -- a test can redefine `git` (or
+# Invoke-Git directly) as a fake function.
+function Invoke-Git {
+    [CmdletBinding()]
+    param([Parameter(Mandatory, ValueFromRemainingArguments)] [string[]] $Arguments)
+    $out = & git @Arguments 2>&1
+    [PSCustomObject]@{ Output = $out; ExitCode = $LASTEXITCODE }
 }
 
 function Assert-CommandAvailable {
@@ -218,6 +261,119 @@ function Get-ArtifactInfo {
     return $match
 }
 
+# Writes the content $RepoPath had AT THE BUILD'S OWN COMMIT to $OutFile --
+# never $RepoRoot's checked-out copy. `git show <sha>:<path>` always reads
+# the exact commit the artifact was built from, regardless of what branch
+# this checkout itself happens to be on.
+#
+# Falls back to fetching the commit from origin when it is not present
+# locally (a shallow checkout, or a checkout that hasn't fetched the
+# artifact's branch), and fails loudly -- never silently falls back to the
+# checkout's own copy -- if the commit still cannot be obtained.
+function Get-CommitFile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $RepoRoot,
+        [Parameter(Mandatory)] [string] $Sha,
+        [Parameter(Mandatory)] [string] $RepoPath,
+        [Parameter(Mandatory)] [string] $OutFile
+    )
+    $blobSpec = "${Sha}:${RepoPath}"
+    $result = Invoke-Git '-C' $RepoRoot 'show' $blobSpec
+    if ($result.ExitCode -ne 0) {
+        Write-Host "commit $Sha not found locally -- fetching from origin ..."
+        $fetch = Invoke-Git '-C' $RepoRoot 'fetch' 'origin' $Sha
+        if ($fetch.ExitCode -ne 0) {
+            throw "[make-os-list] commit $Sha's $RepoPath is not available locally, and fetching it from origin failed (exit $($fetch.ExitCode)): $($fetch.Output -join "`n")"
+        }
+        $result = Invoke-Git '-C' $RepoRoot 'show' $blobSpec
+        if ($result.ExitCode -ne 0) {
+            throw "[make-os-list] fetched commit $Sha but 'git show $blobSpec' still failed (exit $($result.ExitCode)): $($result.Output -join "`n") -- refusing to fall back to the checkout's own $RepoPath, which may be for a different branch"
+        }
+    }
+    (($result.Output -join "`n") + "`n") | Set-Content -LiteralPath $OutFile -NoNewline -Encoding utf8
+}
+
+# make-os-list.sh AND its sibling os_list.imager-block.json, both as they
+# existed at the BUILD's own commit, written into $OutDir side by side.
+# make-os-list.sh differs per branch (device tags, description -- e.g.
+# arm64's db380b6 writes the 64-bit Imager tags pi5-64bit/pi4-64bit/pi3-64bit
+# and an arm64 description, while master's writes armhf's 32-bit tags), so
+# running the checkout's copy against an artifact built on a DIFFERENT
+# branch/sha mislabels the image. The block file has to come from the same
+# commit and land in the SAME directory: make-os-list.sh looks it up next to
+# itself (its own HERE/BLOCK logic), so a script fetched from the artifact's
+# commit paired with this checkout's block file (or vice versa) would be
+# reading a mismatched pair even though each half, alone, looks fine.
+function Get-MakeOsListScriptForCommit {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $RepoRoot,
+        [Parameter(Mandatory)] [string] $Sha,
+        [Parameter(Mandatory)] [string] $OutDir
+    )
+    Get-CommitFile -RepoRoot $RepoRoot -Sha $Sha -RepoPath 'tools/make-os-list.sh' `
+        -OutFile (Join-Path $OutDir 'make-os-list.sh')
+    Get-CommitFile -RepoRoot $RepoRoot -Sha $Sha -RepoPath 'tools/os_list.imager-block.json' `
+        -OutFile (Join-Path $OutDir 'os_list.imager-block.json')
+}
+
+# Downloads the artifact ZIP itself -- the exact bytes `size_in_bytes` and
+# `digest` describe -- to $OutFile. Deliberately NOT routed through
+# Invoke-Gh/Invoke-GhJson: those capture output with `2>&1` into a PowerShell
+# string array, which is fine for a JSON response but would try to decode a
+# >1 GB binary payload as text. `> $OutFile` redirects gh's own stdout stream
+# straight to disk instead. A test can still fake this the same way the rest
+# of the file fakes `gh` -- by redefining Invoke-GhDownloadZip itself (see
+# this file's own header comment on Invoke-Gh).
+function Invoke-GhDownloadZip {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $ArtifactId,
+        [Parameter(Mandatory)] [string] $OutFile,
+        [string] $Repo = $script:Repo
+    )
+    & gh api "repos/$Repo/actions/artifacts/$ArtifactId/zip" > $OutFile
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item -LiteralPath $OutFile -ErrorAction SilentlyContinue
+        throw "[gh api] downloading artifact zip (id $ArtifactId) failed (exit $LASTEXITCODE)"
+    }
+}
+
+# Verifies a downloaded artifact zip against the API's own metadata for it --
+# byte size always, sha256 digest whenever the API provided one in the
+# `sha256:<hex>` form. Throws (refusing to cache) on any mismatch. This is
+# the check that was missing: c0f3b85 compared EXTRACTED file sizes against
+# `size_in_bytes`, which describes the zip, not what comes out of it -- a
+# comparison that is off by the archive's own overhead and can never pass.
+function Confirm-DownloadedZip {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string] $ZipPath,
+        [Parameter(Mandatory)] $ArtifactInfo
+    )
+    if (-not (Test-Path -LiteralPath $ZipPath -PathType Leaf)) {
+        throw "[gh api] artifact zip not found at $ZipPath after download"
+    }
+    $actualSize = (Get-Item -LiteralPath $ZipPath).Length
+    if ($actualSize -ne $ArtifactInfo.size_in_bytes) {
+        throw "[gh api] downloaded zip is $actualSize bytes under $ZipPath but the artifact API reported $($ArtifactInfo.size_in_bytes) -- not caching this as complete"
+    }
+
+    if ($ArtifactInfo.digest -and ($ArtifactInfo.digest -match '^sha256:(?<hash>[0-9a-fA-F]{64})$')) {
+        $expected = $Matches['hash'].ToLowerInvariant()
+        $actual = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $expected) {
+            throw "[gh api] downloaded zip sha256 $actual does not match the artifact API's digest sha256:$expected -- not caching this as complete"
+        }
+        Write-Host "verified: $actualSize bytes, sha256:$actual matches the artifact API."
+    } elseif ($ArtifactInfo.digest) {
+        Write-Warning "artifact digest '$($ArtifactInfo.digest)' is not in the expected 'sha256:<64 hex chars>' form -- verifying size only ($actualSize bytes)."
+    } else {
+        Write-Warning "the artifact API reported no digest for this artifact -- verifying size only ($actualSize bytes)."
+    }
+}
+
 # True if $CacheDir already holds a complete, still-valid download of the
 # artifact described by $ArtifactInfo (an object with .size_in_bytes and
 # .digest, as Get-ArtifactInfo returns). Compares against the marker file
@@ -254,6 +410,7 @@ function Invoke-FlashTestBuild {
         [string] $RunId,
         [Parameter(Mandatory)] [string] $Dest,
         [switch] $DryRun,
+        [switch] $NoLaunch,
         [Parameter(Mandatory)] [string] $RepoRoot,
         [string] $Repo = $script:Repo
     )
@@ -297,14 +454,17 @@ function Invoke-FlashTestBuild {
         if ($reuse) {
             Write-Host "would reuse the cached artifact above; no download"
         } else {
-            Write-Host "would run: gh run download $($run.databaseId) --repo $Repo --name $artifactName --dir `"$cacheDir`""
+            Write-Host "would run: gh api repos/$Repo/actions/artifacts/$($artifactInfo.id)/zip > `"$cacheDir\$artifactName.zip`""
         }
         $img = "$cacheDir\<image>.img.xz"
         $osList = "$cacheDir\os_list.json"
-        $wslScript = ConvertTo-WslPath (Join-Path $RepoRoot 'tools\make-os-list.sh')
+        $makeOsList = "$cacheDir\make-os-list.sh"
+        $wslScript = ConvertTo-WslPath $makeOsList
         $wslImg = ConvertTo-WslPath $img
         $wslOut = ConvertTo-WslPath $osList
         $fileUrl = "file:///" + ($img -replace '\\', '/')
+        Write-Host "would run: git -C `"$RepoRoot`" show ${sha}:tools/make-os-list.sh > `"$makeOsList`"  (the BUILD's own copy, not this checkout's)"
+        Write-Host "would run: git -C `"$RepoRoot`" show ${sha}:tools/os_list.imager-block.json > `"$cacheDir\os_list.imager-block.json`"  (its sibling, same commit)"
         Write-Host "would run: wsl bash -lc `"'$wslScript' '$wslImg' --url '$fileUrl' --out '$wslOut'`""
         Write-Host "  (Windows path -> WSL path: $img -> $wslImg)"
         Write-Host "would run: tools\flash-elspi.ps1 `"$osList`""
@@ -318,24 +478,21 @@ function Invoke-FlashTestBuild {
             return
         }
         New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
-        Write-Host "downloading $artifactName to $cacheDir ..."
-        $dl = Invoke-Gh 'run' 'download' "$($run.databaseId)" '--repo' $Repo '--name' $artifactName '--dir' $cacheDir
-        if ($dl.ExitCode -ne 0) {
-            throw "[gh run download] failed (exit $($dl.ExitCode)): $($dl.Output -join "`n")"
-        }
+        $zipPath = Join-Path $cacheDir "$artifactName.zip"
+        Write-Host "downloading $artifactName to $zipPath ..."
+        Invoke-GhDownloadZip -ArtifactId "$($artifactInfo.id)" -OutFile $zipPath -Repo $Repo
+        Confirm-DownloadedZip -ZipPath $zipPath -ArtifactInfo $artifactInfo
 
-        $downloaded = @(Get-ChildItem -LiteralPath $cacheDir -File -Recurse)
-        $totalSize = ($downloaded | Measure-Object -Property Length -Sum).Sum
-        if ($totalSize -ne $artifactInfo.size_in_bytes) {
-            throw "[gh run download] downloaded $totalSize bytes under $cacheDir but the artifact API reported $($artifactInfo.size_in_bytes) -- not caching this as complete"
-        }
+        Write-Host "extracting $zipPath ..."
+        Expand-Archive -LiteralPath $zipPath -DestinationPath $cacheDir -Force
+
         [PSCustomObject]@{
             name          = $artifactName
             size_in_bytes = $artifactInfo.size_in_bytes
             digest        = $artifactInfo.digest
             run_id        = $run.databaseId
         } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $cacheDir '.artifact-info.json') -Encoding utf8
-        Write-Host "downloaded and verified ($totalSize bytes)."
+        Write-Host "downloaded, verified and extracted."
     }
 
     $img = Get-ChildItem -LiteralPath $cacheDir -Filter '*.img.xz' -Recurse | Select-Object -First 1
@@ -343,17 +500,23 @@ function Invoke-FlashTestBuild {
 
     $osListPath = Join-Path $cacheDir 'os_list.json'
     $fileUrl = "file:///" + ($img.FullName -replace '\\', '/')
-    $wslScript = ConvertTo-WslPath (Join-Path $RepoRoot 'tools\make-os-list.sh')
+    $makeOsListPath = Join-Path $cacheDir 'make-os-list.sh'
+    Get-MakeOsListScriptForCommit -RepoRoot $RepoRoot -Sha $sha -OutDir $cacheDir
+    $wslScript = ConvertTo-WslPath $makeOsListPath
     $wslImg = ConvertTo-WslPath $img.FullName
     $wslOut = ConvertTo-WslPath $osListPath
 
     Write-Host ""
-    Write-Host "building os_list.json ..."
+    Write-Host "building os_list.json (using tools/make-os-list.sh from commit $sha, not this checkout) ..."
     $bashCmd = "'$wslScript' '$wslImg' --url '$fileUrl' --out '$wslOut'"
     & wsl bash -lc $bashCmd
     if ($LASTEXITCODE -ne 0) { throw "[make-os-list.sh] failed (exit $LASTEXITCODE)" }
 
     Write-Host ""
+    if ($NoLaunch) {
+        Write-Host "-NoLaunch: skipping Imager. os_list.json is ready at $osListPath"
+        return
+    }
     Write-Host "launching Imager ..."
     & (Join-Path $RepoRoot 'tools\flash-elspi.ps1') $osListPath
     if ($LASTEXITCODE -ne 0) { throw "[flash-elspi.ps1] failed (exit $LASTEXITCODE)" }
@@ -363,6 +526,6 @@ function Invoke-FlashTestBuild {
 # dot-sources it (`. tools\flash-test-build.ps1`) to reach the functions
 # above without triggering gh/wsl/Imager calls or the confirmation prompt.
 if ($MyInvocation.InvocationName -ne '.') {
-    Invoke-FlashTestBuild -Branch $Branch -RunId $RunId -Dest $Dest -DryRun:$DryRun `
+    Invoke-FlashTestBuild -Branch $Branch -RunId $RunId -Dest $Dest -DryRun:$DryRun -NoLaunch:$NoLaunch `
         -RepoRoot (Split-Path -Parent $PSScriptRoot) -Repo $Repo
 }
