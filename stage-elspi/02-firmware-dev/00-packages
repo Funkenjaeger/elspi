@@ -11,6 +11,5 @@
 #
 # So STAGE_LIST is NOT the mechanism here. This stage always runs.
 
-gcc-arm-none-eabi
 cmake
 openocd

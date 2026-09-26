@@ -1,0 +1,22 @@
+# The STM32 compiler, WITHOUT Recommends (2026-09-26).
+#
+# Installed with Recommends (from 00-packages), libnewlib-arm-none-eabi pulls in
+# libstdc++-arm-none-eabi-newlib: 2.1 GB of bare-metal C++ library in every
+# multilib variant, which the firmware never links. It made the image 8.1 GB,
+# too big for an off-the-shelf "8 GB" SD card.
+#
+# The firmware (reflex fw/, app + slot app + bootloader) is C and asm only. Proven
+# 2026-09-26: reflex v1.2.1's fw/ built in debian:trixie with and without this
+# library produced six byte-identical .bin/.hex files (toolchain 3009 -> 893 MiB).
+# CMake's C++ compiler probe still passes: fw/CMakeLists.txt sets
+# CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY, so nothing is linked against libstdc++.
+#
+# If the firmware ever gains C++ that links the standard library, add
+# libstdc++-arm-none-eabi-newlib here by name.
+#
+# The seam.md call 3 rule is unchanged: the bytes needed to BUILD the firmware
+# are baked unconditionally; only unused bytes are dropped.
+
+gcc-arm-none-eabi
+binutils-arm-none-eabi
+libnewlib-arm-none-eabi
