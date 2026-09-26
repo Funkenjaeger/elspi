@@ -49,10 +49,20 @@ done
 
 phase "Phase 1: CONVERGE the application"
 
-need_root
-resolve_service_user
+# PURE VALIDATION FIRST -- resolve_paths and require_app_dir only READ (path
+# resolution, checkout-shape checks); neither writes anything. need_root moves
+# to right after them, so a non-root caller gets the SAME refusal any caller
+# would for a bad --app, matching the rule deltas/02-restore.sh states at :72.
+# resolve_service_user stays paired with need_root, immediately after it, the
+# same way 02-restore.sh only resolves it at its own write boundary (:243) --
+# it is a read too, but one that can fail on THIS MACHINE (no service user, no
+# image manifest) rather than on anything the caller passed, so it belongs
+# with the write-side setup, not the argument gates.
 resolve_paths
 require_app_dir "${APP_ARG}"
+
+need_root
+resolve_service_user
 
 say "service user: ${SERVICE_USER} (per ${SERVICE_USER_SRC})"
 say "app:          ${APP_DIR}"

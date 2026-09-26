@@ -101,8 +101,6 @@ if [ -n "${SITE_HOOKS}" ]; then
 	load_site_env "${SITE_HOOKS}"
 fi
 
-need_root
-
 printf '\n\033[1melspi delta provisioning\033[0m\n'
 [ "${DRY_RUN}" = "1" ] && say "DRY RUN -- nothing will be changed"
 
@@ -134,6 +132,15 @@ if [ "${FRESH}" != "1" ]; then
   commissioned config is the one most likely to get started by mistake."
 	[ -e "${BACKUP}" ] || die "--config-backup ${BACKUP} does not exist"
 fi
+
+# PURE VALIDATION FIRST -- every check above only READS the arguments already
+# parsed; nothing above writes. need_root moves to here, after all of them, so
+# a non-root caller gets refused for the SAME reason any caller would be (a
+# missing --app, mutually-exclusive flags, a missing backup) instead of a root
+# refusal that masks which of those is actually wrong -- matching the rule
+# deltas/02-restore.sh states at :72. load_site_env (above, :100-102) was
+# already before need_root even before this change, for the same reason.
+need_root
 
 "${HERE}/01-converge.sh" --app "${APP}" --drm-mode "${DRM_MODE}" ${PASS_DRY} \
 	|| die "phase 1 (converge) failed -- stopping. Nothing was restored."

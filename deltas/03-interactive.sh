@@ -41,8 +41,17 @@ done
 
 phase "Phase 3: INTERACTIVE -- things that must not live in the repo"
 
-need_root
-resolve_service_user
+# PURE VALIDATION FIRST -- resolve_paths, the APP_DIR fallback logic below,
+# and the tty check all only READ; nothing here writes. need_root moves to
+# after all of them, so a non-root, non-interactive (e.g. automated) caller
+# gets the tty refusal instead of a root refusal that has nothing to do with
+# why this phase actually cannot run, matching the rule deltas/02-restore.sh
+# states at :72. resolve_service_user stays paired with need_root,
+# immediately after it, the same way 02-restore.sh only resolves it at its
+# own write boundary (:243) -- it is a read too, but one that can fail on
+# THIS MACHINE (no service user, no image manifest) rather than on anything
+# the caller passed or on whether a human is present, so it belongs with the
+# write-side setup, not the argument/environment gates.
 resolve_paths
 
 # Where the app checkout is, for phase 4's firmware-sources report. NOT
@@ -65,6 +74,9 @@ if [ ! -t 0 ]; then
 	die "stdin is not a terminal. This phase asks questions and must not be
   automated -- that is the whole point of it being a separate phase."
 fi
+
+need_root
+resolve_service_user
 
 ask_yn() { # ask_yn <prompt> ; returns 0 for yes
 	local reply
