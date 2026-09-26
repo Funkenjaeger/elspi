@@ -136,18 +136,30 @@ if command -v on_chroot >/dev/null 2>&1; then
 set -e
 /usr/bin/python3 --version 2>&1
 /usr/local/bin/uv --version 2>&1
+dpkg --print-architecture 2>&1
 EOF
 	)"
 	PYTHON_VERSION="$(echo "${RUNTIME_VERSIONS}" | sed -n '1p')"
 	UV_VERSION="$(echo "${RUNTIME_VERSIONS}" | sed -n '2p')"
+	IMAGE_ARCH="$(echo "${RUNTIME_VERSIONS}" | sed -n '3p')"
 	[ -n "${PYTHON_VERSION}" ] || { echo "FATAL: could not measure python3 --version in the chroot"; exit 1; }
 	[ -n "${UV_VERSION}" ] || { echo "FATAL: could not measure uv --version in the chroot"; exit 1; }
+	# The userland's own answer, gated against build.sh's ARCH: the branch
+	# is the architecture (docs/design/fork.md), and a manifest that
+	# disagrees with either is lying about what shipped. (Until the arm64
+	# migration, 2026-09-26, this field was the literal "armhf".)
+	[ -n "${IMAGE_ARCH}" ] || { echo "FATAL: could not measure dpkg --print-architecture in the chroot"; exit 1; }
+	if [ -n "${ARCH:-}" ] && [ "${IMAGE_ARCH}" != "${ARCH}" ]; then
+		echo "FATAL: the rootfs says dpkg arch '${IMAGE_ARCH}' but build.sh built ARCH='${ARCH}'"
+		exit 1
+	fi
 else
 	echo "  WARNING: on_chroot is not defined -- this is not a real pi-gen build"
 	echo "           (tests/dry-run-stages.sh, most likely). python/uv versions"
 	echo "           are UNMEASURED placeholders, not what would actually ship."
 	PYTHON_VERSION="unmeasured (no chroot available)"
 	UV_VERSION="unmeasured (no chroot available)"
+	IMAGE_ARCH="unmeasured (no chroot available)"
 fi
 
 # Kivy's version comes from its installed dist-info, not from importing it:
@@ -182,7 +194,7 @@ fi
 cat > "${MANIFEST}" <<- JSON
 	{
 	  "image": "elspi",
-	  "arch": "armhf",
+	  "arch": "${IMAGE_ARCH}",
 	  "release": "trixie",
 	  "built_utc": "${BUILD_DATE}",
 	  "pi_gen_upstream_pin": "314262c",
