@@ -91,6 +91,12 @@ jobs:
       - name: DRM mode switcher contract
         run: bash tests/test-drm-mode-switcher.sh
 
+      # The first-boot UI hook, every branch, against a synthetic rootfs with a
+      # systemctl shim and a fake converge (its own header says what is and is
+      # not covered).
+      - name: first-boot UI hook
+        run: bash tests/test-first-boot-ui.sh
+
       # deltas/tests/*.sh, driven by the glob rather than by a list, so a new
       # contract test runs here the day it lands. The loop asserts it found
       # something: an empty glob would otherwise pass silently.

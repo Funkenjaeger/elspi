@@ -1,5 +1,5 @@
 [Unit]
-Description=elspi first-boot UI hook (would converge+start the baked reflex-ui; that branch is unwritten, so it only logs a verdict)
+Description=elspi first boot into the UI (converge the baked reflex checkout offline, then start reflex-ui, once)
 Documentation=file:///usr/local/sbin/elspi-first-boot-ui
 
 # ORDERING, and why each edge is here.
@@ -10,8 +10,13 @@ Documentation=file:///usr/local/sbin/elspi-first-boot-ui
 #
 # plymouth-quit-wait.service: LOAD-BEARING, not cosmetic, for the exact
 # reason stage-elspi/06-seat's DRM-mode fragments carry the same line.
-# Plymouth's DRM renderer IS a master; anything that might one day start
-# reflex-ui from this hook must not race Plymouth for card0.
+# Plymouth's DRM renderer IS a master; this hook starts reflex-ui, which must
+# not race Plymouth for card0 (reflex-ui's own DRM drop-in orders after it too).
+#
+# NOT After=network-online.target, on purpose: first boot is OFFLINE by
+# design (UV_OFFLINE=1; stage-elspi/10b-app-install proved the offline sync at
+# build time), exactly as recovery must be. A card with no Wi-Fi seeded still
+# boots into the UI.
 After=elspi-first-boot-seed.service
 After=plymouth-quit-wait.service
 

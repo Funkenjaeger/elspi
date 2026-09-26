@@ -103,7 +103,12 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
   "first_boot_ui": {
     "unit": "/etc/systemd/system/elspi-first-boot-ui.service",
     "script": "/usr/local/sbin/elspi-first-boot-ui",
-    "status": "scaffold only, see stage-elspi/14-first-boot-ui/README.md",
+    "deltas": "/usr/local/lib/elspi/deltas",
+    "commissioning_guard_check": "/usr/local/lib/elspi/commissioning-guard",
+    "offline": true,
+    "runs_once": true,
+    "restores_config": false,
+    "status": "fixture: converges the baked checkout offline and starts reflex-ui, once",
     "verified_on_hardware": false
   },
   "baked_app": {
@@ -114,7 +119,9 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
     "selected_by": "stage-elspi/10a-app-checkout/files/select-release.sh",
     "updater_ready": true,
     "protocol_version_readable": true,
-    "started_on_first_boot": false
+    "commissioning_guard": true,
+    "installed_in_venv": true,
+    "started_on_first_boot": true
   },
   "reflex_lock_commit": "0000000000000000000000000000000000000000",
   "image_build_sha": "fixture0000000000000000000000000000000000",
@@ -128,7 +135,7 @@ cat > "${DEST}/etc/elspi-image.json" <<JSON
     "DRM master acquisition (no GPU in the harness)",
     "the touchscreen",
     "SPI, I2C and the UART link to the STM32",
-    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui): the branch is unwritten, so starting the baked app unattended has never executed end-to-end"
+    "the first-boot-ui hook (stage-elspi/14-first-boot-ui): converge-then-start at first boot has not yet run on a real card"
   ]
 }
 JSON
@@ -344,17 +351,27 @@ Subsystem	sftp	/usr/lib/openssh/sftp-server
 SSHD
 
 # --- the first-boot UI hook (stage-elspi/14-first-boot-ui) ------------------
-# A scaffold, not a feature -- see stage-elspi/14-first-boot-ui/README.md.
-# The fixture's stub just exits 0, same as the seed's stub above: the real
-# script only ever logs a verdict (UNIMPLEMENTED on every image that bakes the
-# app in) and exits 0.
-printf '#!/bin/bash\n# fixture stub: elspi first-boot ui (logs a verdict, starts nothing)\nexit 0\n' \
-	> "${DEST}/usr/local/sbin/elspi-first-boot-ui"
-chmod 0755 "${DEST}/usr/local/sbin/elspi-first-boot-ui"
+# The REAL hook script, the REAL commissioning-guard check and the REAL
+# deltas/, copied as files: they are shipped CONTENT whose properties the
+# harness checks (executable, offline, pointing at the baked delta layer), not
+# facts a stage computes -- so copying them does not make the self-test a
+# tautology the way generating the fixture with the stage would.
+FIX_REPO="$(cd "$(dirname "$0")/.." && pwd)"
+install -m 0755 "${FIX_REPO}/stage-elspi/14-first-boot-ui/files/elspi-first-boot-ui.sh" \
+	"${DEST}/usr/local/sbin/elspi-first-boot-ui"
+mkdir -p "${DEST}/usr/local/lib/elspi/deltas/files"
+install -m 0755 "${FIX_REPO}/stage-elspi/14-first-boot-ui/files/commissioning-guard.sh" \
+	"${DEST}/usr/local/lib/elspi/commissioning-guard"
+for f in lib.sh 01-converge.sh 02-restore.sh 03-interactive.sh provision.sh; do
+	install -m 0755 "${FIX_REPO}/deltas/${f}" "${DEST}/usr/local/lib/elspi/deltas/${f}"
+done
+install -m 0644 "${FIX_REPO}/deltas/README.md" "${DEST}/usr/local/lib/elspi/deltas/README.md"
+install -m 0644 "${FIX_REPO}/deltas/files/50-reflex-service-user.rules" \
+	"${DEST}/usr/local/lib/elspi/deltas/files/50-reflex-service-user.rules"
 
 cat > "${DEST}/etc/systemd/system/elspi-first-boot-ui.service" <<'UNIT'
 [Unit]
-Description=elspi first-boot UI hook (would converge+start the baked reflex-ui; that branch is unwritten, so it only logs a verdict)
+Description=elspi first boot into the UI (converge the baked reflex checkout offline, then start reflex-ui, once)
 After=elspi-first-boot-seed.service
 After=plymouth-quit-wait.service
 
@@ -424,7 +441,26 @@ chmod 0755 "${DEST}/usr/local/lib/elspi/elspi-usb-mount-name"
 # somebody it is not, so this is a `git -C <fixture> config` against a
 # repository that is deleted at the end of the test and never pushed anywhere.
 APP_ROOT_FIX="${DEST}/home/default/projects/reflex"
-mkdir -p "${APP_ROOT_FIX}/ui/reflex/utils" "${APP_ROOT_FIX}/fw/scripts"
+mkdir -p "${APP_ROOT_FIX}/ui/reflex/utils" "${APP_ROOT_FIX}/fw/scripts" \
+	"${APP_ROOT_FIX}/ui/reflex/components/home"
+
+# THE COMMISSIONING GUARD (reflex v1.2.0-rc.5 and later): the three files
+# stage-elspi/14-first-boot-ui/files/commissioning-guard.sh looks for. The
+# manifest above declares commissioning_guard=true, and the harness runs the
+# image's own guard check against this checkout to hold it to that.
+cat > "${APP_ROOT_FIX}/ui/reflex/utils/commissioning_state.py" <<'PY'
+def latch():
+    return False
+PY
+cat > "${APP_ROOT_FIX}/ui/reflex/app.py" <<'PY'
+from reflex.utils import commissioning_state
+class MainApp:
+    def latch_commissioning_state(self):
+        return commissioning_state.latch()
+    def build(self):
+        self.latch_commissioning_state()
+PY
+printf '<UncommissionedBanner>:\n' > "${APP_ROOT_FIX}/ui/reflex/components/home/uncommissioned_banner.kv"
 
 cat > "${APP_ROOT_FIX}/ui/pyproject.toml" <<'TOML'
 [project]
@@ -488,6 +524,8 @@ printf '%s\n' "v1.0.0"              > "${DEST}/etc/elspi/reflex-app-release"
 printf '%s\n' "${APP_COMMIT_FIX}"   > "${DEST}/etc/elspi/reflex-app-commit"
 printf '%s\n' "yes"                 > "${DEST}/etc/elspi/reflex-app-updater-ready"
 printf '%s\n' "yes"                 > "${DEST}/etc/elspi/reflex-app-protocol-readable"
+printf '%s\n' "yes"                 > "${DEST}/etc/elspi/reflex-app-commissioning-guard"
+printf '%s\n' "yes"                 > "${DEST}/etc/elspi/reflex-app-installed-offline-ok"
 
 # --- /etc/elspi-release -------------------------------------------------
 # Generated FROM the manifest above by the same script the real build runs

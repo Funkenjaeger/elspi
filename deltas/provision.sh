@@ -133,6 +133,32 @@ if [ "${FRESH}" != "1" ]; then
 	[ -e "${BACKUP}" ] || die "--config-backup ${BACKUP} does not exist"
 fi
 
+# --fresh ON A CARD THAT ALREADY HOLDS CONFIG, refused HERE rather than in
+# phase 2. 02-restore.sh --fresh refuses a non-empty CONFIG_DIR too, and stays
+# the authority on that rule; this is the same read, taken before phase 1 has
+# re-converged the machine as root. Since 2026-09-26 it is the COMMON case, not
+# a corner: a fresh card converges and starts the UI at first boot
+# (stage-elspi/14-first-boot-ui), and the running app writes its own
+# commissioning ledger into CONFIG_DIR at startup -- so by the time anyone runs
+# provision.sh --fresh, first commissioning has already begun on the
+# touchscreen. A pure read (resolve_paths reads the image manifest), so it sits
+# ahead of need_root with the other argument gates.
+if [ "${FRESH}" = "1" ]; then
+	resolve_paths
+	if [ -d "${CONFIG_DIR}" ] && [ -n "$(ls -A "${CONFIG_DIR}" 2>/dev/null)" ]; then
+		die "--fresh refused: ${CONFIG_DIR} already holds config.
+
+  --fresh names FIRST commissioning, and this machine is past it: something
+  has already written to ${CONFIG_DIR}. On a card that booted straight into
+  the UI (images since 2026-09-26) that is the application itself -- first
+  boot already converged it, and commissioning continues on the touchscreen
+  (Setup, or the UNCOMMISSIONED strip's restore). Nothing here would add to
+  that. To restore a capture instead, use --config-backup (it moves the
+  current directory aside first). Checked BEFORE phase 1, so nothing on this
+  machine was changed."
+	fi
+fi
+
 # PURE VALIDATION FIRST -- every check above only READS the arguments already
 # parsed; nothing above writes. need_root moves to here, after all of them, so
 # a non-root caller gets refused for the SAME reason any caller would be (a
@@ -144,6 +170,33 @@ need_root
 
 "${HERE}/01-converge.sh" --app "${APP}" --drm-mode "${DRM_MODE}" ${PASS_DRY} \
 	|| die "phase 1 (converge) failed -- stopping. Nothing was restored."
+
+# --- A UI ALREADY ON THE SCREEN IS STOPPED BEFORE PHASE 2 --------------------
+# The ordering this script's header calls load-bearing -- restore before the
+# app is ever STARTED -- no longer holds by itself: since 2026-09-26 a fresh
+# card converges and starts reflex-ui at first boot, UNCOMMISSIONED
+# (stage-elspi/14-first-boot-ui). Restoring underneath a running app is not
+# harmless. The app latched "uncommissioned" when it started and keeps its
+# in-memory DEFAULTS; if the operator has dismissed the UNCOMMISSIONED
+# warning, its write gate is open, and its next save writes those defaults
+# over the geometry phase 2 just restored. So it is stopped first, said out
+# loud, and the stop is gated on systemd's own answer. It is NOT restarted
+# here: starting it stays the deliberate step at the end of this script.
+UI_WAS_RUNNING=0
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet reflex-ui.service 2>/dev/null; then
+	UI_WAS_RUNNING=1
+	warn "reflex-ui is RUNNING (a card that booted straight into the UI starts it at"
+	warn "  first boot). Stopping it before phase 2, so nothing the app holds in memory"
+	warn "  can be written over what phase 2 puts in place."
+	run systemctl stop reflex-ui.service
+	if [ "${DRY_RUN}" != "1" ]; then
+		if systemctl is-active --quiet reflex-ui.service 2>/dev/null; then
+			die "reflex-ui is still active after 'systemctl stop'. Refusing to run phase 2
+  underneath a running application. Stop it by hand and re-run."
+		fi
+		ok "reflex-ui stopped (systemd reports it inactive)"
+	fi
+fi
 
 if [ "${FRESH}" = "1" ]; then
 	"${HERE}/02-restore.sh" --fresh \
@@ -227,6 +280,10 @@ if [ "${FRESH}" = "1" ]; then
 	warn "UNCOMMISSIONED: no config was restored. See phase 2's banner above --"
 	warn "  axis geometry, servo polarity, backlash and Z scale must be measured"
 	warn "  before this machine is trusted."
+fi
+if [ "${UI_WAS_RUNNING}" = "1" ]; then
+	warn "reflex-ui was running when provisioning began and was STOPPED before phase 2."
+	warn "  It is enabled, so it will also start on the next boot."
 fi
 say "The application is NOT running. Before starting it:"
 say "  1. re-read the commissioned values phase 2 printed"

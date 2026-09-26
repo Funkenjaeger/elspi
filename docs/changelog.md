@@ -4,6 +4,25 @@ Releases of the elspi image. Each entry names the commit the image was built
 from, because the image is the artifact and the commit is the only thing that
 says what is in it.
 
+## Unreleased — a fresh card boots straight into the UI
+
+On branch `feat/first-boot-ui`, not yet released or verified on hardware.
+
+* **First boot lands in the UI, UNCOMMISSIONED.** `stage-elspi/14-first-boot-ui`
+  runs phase 1 of the delta layer (converge) against the baked reflex release,
+  offline, and starts `reflex-ui`, once. It starts nothing unless the release
+  carries reflex's commissioning guard, so the screen says *UNCOMMISSIONED* and
+  nothing is saved until a restore or a deliberate dismissal. No SSH step. See
+  [Flashing → After first boot](flashing.md#after-first-boot).
+* **The venv is locked against reflex `v1.2.0`** (was `v1.2.0-rc.3`), the same
+  release the image bakes. The only new dependency is `segno`.
+* **The app is installed into the venv at build time** (`10b-app-install`),
+  which proves an offline re-sync, so neither first boot nor recovery needs
+  PyPI.
+* **The delta scripts ship in the image** at `/usr/local/lib/elspi/deltas`.
+* **`provision.sh`** refuses `--fresh` up front on a card that already holds
+  config, and stops a running `reflex-ui` before phase 2.
+
 ## v2026.09.13 — first release
 
 Built from [`8388fb5`](https://github.com/Funkenjaeger/elspi/commit/8388fb5),

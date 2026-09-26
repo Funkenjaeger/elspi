@@ -12,9 +12,10 @@ Clones the reflex monorepo into `/home/<service user>/projects/reflex` as a
 **real git checkout with full tag history**, detached at the selected release
 tag, owned by the service user.
 
-It does **not** start anything. The start gate is order 2026-09-21#1;
-`stage-elspi/14-first-boot-ui` remains exactly the scaffold order 2026-09-20#5
-shipped.
+It does **not** start anything. `stage-elspi/10b-app-install` installs this
+checkout into the venv at build time, and `stage-elspi/14-first-boot-ui`
+converges and starts it at first boot — only when the release carries reflex's
+commissioning guard (since 2026-09-26).
 
 ## Why a checkout and not a tarball
 
