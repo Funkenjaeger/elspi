@@ -71,30 +71,16 @@ rpi-imager --repo https://github.com/Funkenjaeger/elspi/releases/latest/download
     pinned to its own tag instead of `latest`, which is what you want if you
     are reproducing a known-good pair.
 
-!!! info "Publishing a build: `OS_LIST_URL`"
-    `os_list.json` carries a `url` field pointing at the image, and
-    `build-elspi.sh` has no way to know in advance where a given build will end
-    up being served from — so by default it writes a `file://` URL for the
-    image's path on the machine that built it. That is fine for a `--repo`
-    flash from that same machine, and useless anywhere else: `rpi-imager` on
-    another machine cannot open a `file://` path from a box it isn't running
-    on, and fails with something like "not found: /the/build/machine/path".
-
-    Before publishing a release, re-run the build with `OS_LIST_URL` set to the
-    URL the JSON's `url` field should actually contain — the shape GitHub gives
-    a release asset:
-
-    ```
-    OS_LIST_URL=https://github.com/Funkenjaeger/elspi/releases/download/<tag>/image_<date>-elspi.img.xz ./build-elspi.sh
-    ```
-
-    (Note: that is the image's own URL -- the one Imager downloads once it
-    reads the `url` field inside `os_list.json` -- not `os_list.json`'s own
-    address, which is what `--repo` above points at.) Leave it unset for
-    a local-only build-and-flash — `build-elspi.sh` prints a WARNING naming the
-    `file://` URL it wrote and which machine it is only good on, so a build
-    headed for a release does not get published by accident with the wrong
-    `url` field.
+!!! info "`os_list.json` and a local build: `OS_LIST_URL`"
+    `os_list.json` carries a `url` field pointing at the image. A release's
+    list is written by `tools\promote-release.ps1` (see
+    [Releasing a tested build](#releasing-a-tested-build)) and points at the
+    release's own image asset. `build-elspi.sh` cannot know where its image
+    will be served from, so by default it writes a `file://` URL for the
+    image's path on the machine that built it: fine for a `--repo` flash from
+    that machine, useless anywhere else. `OS_LIST_URL=<url of the image>
+    ./build-elspi.sh` writes another URL (the image's own address, not the
+    list's). A locally built image is never what gets released.
 
 ### What Imager shows
 
@@ -339,10 +325,10 @@ stays and nothing is saved.
 
 ## Testing an unreleased build
 
-Everything above flashes a *released* image — the last one a human promoted
-from pre-release to release after a card from it provisioned clean
-(`.github/workflows/image.yml`'s header explains why). To try a build that is
-still just a green `image` workflow run — nothing tagged, nothing published —
+Everything above flashes a *released* image: a test build that passed the
+bench and was published unchanged (see
+[Releasing a tested build](#releasing-a-tested-build)). To try a build that is
+still just a green `image` workflow run, nothing tagged and nothing published,
 from a checkout of this repo:
 
 ```
@@ -385,7 +371,41 @@ commit by hand, but it still has to match the `.info`. Every file is checked
 against the package registry's own size and sha256 before it is cached. The
 script's header explains each check.
 
+## Releasing a tested build
 
+A release is a test build that passed the bench, published **byte for byte**.
+Nothing is rebuilt, and pushing a tag builds nothing. From a checkout of this
+repo, with `gh` logged in:
+
+1. **Build:** `gh workflow run image --ref arm64`.
+2. **Flash:** `tools\flash-test-build.ps1 -Branch arm64` (or `-Source forgejo`).
+   It caches the build under `<Dest>\<run-id>\` (Forgejo:
+   `<Dest>\forgejo-<sha>\`).
+3. **Bench** the card on the machine.
+4. **Promote** that cache: check first, then publish:
+
+    ```
+    tools\promote-release.ps1 -RunId <run-id> -DryRun
+    tools\promote-release.ps1 -RunId <run-id>
+    ```
+
+`promote-release.ps1` re-verifies the cached bytes (the artifact's digest, that
+the image is the one in the artifact, `xz -t`), reads the architecture from
+the image's own package list, and checks that the commit is on `arm64` and the
+tag is unused. It then writes `os_list.json` with that commit's
+`make-os-list.sh` and compares it with the list the bench card was flashed from.
+It shows the tag, commit, architecture and every asset, and publishes only
+after you type the tag back. The tag is created at the build's commit, named
+for the image's date: `v2026.09.26`, then `v2026.09.26.1` for a second release
+that day, and `-armhf` for an armhf image. An arm64 release becomes `latest`.
+An armhf one never does, and `-Prerelease` publishes a pre-release that is not
+`latest`. Afterwards it reads the release back, including an anonymous download
+of `os_list.json`. `-DryRun` does every check, prints the exact `gh` commands,
+and publishes nothing. The script's header lists each check.
+
+A release image is xz `-1`, like every test build: about 1.1 GB to download.
+
+## Troubleshooting
 
 **Imager says “Source file not found”, or shows its normal OS catalogue instead
 of one entry.** The `--repo` URL is wrong, or the release it points at has no

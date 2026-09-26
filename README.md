@@ -65,6 +65,10 @@ tests are in `tests/`. One installation's own hardware and defaults go in an
 optional site build config, `ELSPI_SITE_CONF=/path/to/site.conf` -- see
 [Provisioning](docs/provisioning.md#a-site-build-config).
 
+A release is a CI test build that passed the bench, published byte for byte
+by `tools/promote-release.ps1`; pushing a tag builds nothing. See
+[Releasing a tested build](docs/flashing.md#releasing-a-tested-build).
+
 ## License
 
 Two licenses, because this is a fork with additions:
