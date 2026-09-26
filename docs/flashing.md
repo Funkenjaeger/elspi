@@ -1,13 +1,13 @@
 # Flashing a card
 
-Start to finish: a blank SD card, one command, and a Pi you can log into. No
-checkout, nothing downloaded by hand.
+Start to finish: a blank SD card, one command, and a Pi that boots straight
+into the lathe UI. No checkout, nothing downloaded by hand, no SSH needed.
 
-This page is honest about where it stops. Flashing gives you a **booted
-appliance with no application on it** — the lathe UI arrives in a separate
-[provisioning](provisioning.md) step, and until it does the touchscreen goes
-black after the splash. That is expected, and this page says how to tell it
-apart from a failure.
+This page is honest about where it stops. A freshly flashed card comes up
+**UNCOMMISSIONED**: the application is running on its own defaults, says so on
+the home screen, and saves nothing until this lathe's commissioned settings are
+restored or measured. [After first boot](#after-first-boot) says how to get
+from there to a machine you can trust.
 
 ## Requirements
 
@@ -182,8 +182,9 @@ did not run and the first boot will seed nothing.
 
 ## First boot
 
-Put the card in the Pi and power it. Allow about **90 seconds** — cloud-init
-does real work on a first boot, and the seed unit runs after it.
+Put the card in the Pi and power it. Allow about **3 minutes**, and up to 5
+before worrying — cloud-init does real work on a first boot, the seed unit runs
+after it, and the first-boot UI unit runs after that.
 
 During that time the image's oneshot unit
 (`elspi-first-boot-seed.service`, ordered after `cloud-final.service` and
@@ -211,23 +212,50 @@ enabled in `cloud-init.target`) does the five things cloud-init cannot do here
    unencrypted and readable by any machine with a card slot, so the password
    hash and the Wi-Fi PSK do not stay there.
 
-### What the touchscreen shows — and why it is not a failure
+Then the image's second first-boot unit, `elspi-first-boot-ui.service`
+(ordered after the seed unit and after Plymouth has let go of the display),
+does the rest **once**:
 
-**The Plymouth splash, and then a black screen.** That is the correct outcome of
-a first boot.
+1. **Checks the baked application for its commissioning guard** — the
+   UNCOMMISSIONED state described below. A release without it is never started
+   unattended.
+2. **Runs phase 1 of the [delta layer](provisioning.md), converge,** against the
+   reflex checkout baked into the image, from the image's own copy of the
+   scripts at `/usr/local/lib/elspi/deltas`. **Offline**: the image build
+   already installed the application and proved that no download is needed, so
+   a card with no Wi-Fi boots into the UI exactly like one with it.
+3. **Starts `reflex-ui`.** Converge enabled it, so every later boot starts it
+   too, without this unit doing anything.
 
-The lathe UI is **not in the image**. The image carries the runtime — Kivy
-compiled, SDL2, the Mesa DRI drivers, the venv at `/opt/reflex-venv` — but the
-application itself, and the commissioned machine data it needs, arrive during
-[provisioning](provisioning.md). There is no desktop, no X server and no
-compositor for anything else to draw, so once Plymouth quits the console is all
-there is. A black screen at this point means the boot finished, not that it
-broke.
+It never restores anything and never writes the machine's settings.
+
+### What the touchscreen shows
+
+In order:
+
+1. **The Plymouth splash** while the system boots.
+2. **A black screen, for up to about a minute,** while converge runs. Normal on
+   the first boot only.
+3. **The lathe UI, with an amber UNCOMMISSIONED strip across the top of the
+   home screen:** *UNCOMMISSIONED — defaults, not this machine — settings are
+   not saved*, and *Tap for options* at its right-hand end. That strip is the
+   correct end state of a first boot. It is the application saying that
+   `/var/lib/reflex-config` holds nothing measured off this lathe, that every
+   number on screen is a built-in default, and that it is **saving nothing**
+   until a backup is restored or you deliberately dismiss the warning to
+   commission by hand. **Do not cut with the machine in this state.**
+
+Every later boot is the splash and then the UI, with the strip for as long as
+the machine stays uncommissioned.
+
+**Nothing on the screen after 5 minutes** is not the expected result any more
+— see [Troubleshooting](#troubleshooting).
 
 ### Confirm it is up
 
-The screen cannot tell you anything yet, so use SSH — from the workstation
-whose public key you gave Imager, or with the password you set there:
+The UI on the screen is the test. SSH is optional now, and still worth doing
+once — from the workstation whose public key you gave Imager, or with the
+password you set there:
 
 ```sh
 ssh default@elspi
@@ -251,17 +279,89 @@ credential wipe. While you are there, confirm the seed really is gone:
 sudo head -1 /boot/firmware/user-data     # expect: #cloud-config
 ```
 
-With SSH up and the seed reporting `OK`, the flash is finished and the card is a
-working appliance.
+And the first-boot UI unit's own summary line:
 
-## Next: provisioning
+```sh
+journalctl -u elspi-first-boot-ui --no-pager | grep verdict=
+```
 
-The machine has an operating system, a runtime and your credentials. It does not
-have the application or the lathe's commissioned geometry.
+`verdict=STARTED` is the good answer. Every other verdict names why the UI was
+not started; they are listed under [Troubleshooting](#troubleshooting).
 
-**→ [Provisioning](provisioning.md)**
+## After first boot
 
-## Troubleshooting
+The card is a working appliance running the lathe UI on **defaults**. The
+application, the runtime and your credentials are in place. What it does not
+have is anything measured off *this* lathe: axis geometry, servo polarity,
+backlash calibration, Z scale counts/mm. Until it does, the UNCOMMISSIONED strip
+stays and nothing is saved.
+
+**Pick one of these — they are alternatives, not steps:**
+
+- **You have a backup of this lathe's settings** (a USB export or a gist from
+  the reflex Setup screen). Restore it from the touchscreen: **Setup → Backup →
+  Import from USB** (or *Restore from gist*), then **restart the machine** — the
+  restored settings are read at startup, and the strip does not come back. No
+  SSH, no command line. This is the route for recovering a lathe whose old card
+  died. (*Tap for options* on the strip says the same.)
+- **You have a capture on a workstation and prefer the command line.** Carry it
+  to the Pi and run phase 2 from the delta layer the image carries:
+
+    ```sh
+    sudo /usr/local/lib/elspi/deltas/provision.sh \
+        --app /home/default/projects/reflex \
+        --config-backup /path/to/reflex-config-capture
+    ```
+
+    It stops the running UI before it restores, prints the values it put in
+    place, and leaves the UI stopped so you can check them before
+    `sudo systemctl start reflex-ui`. Full detail on
+    [Provisioning](provisioning.md).
+- **This lathe has never been commissioned.** *Tap for options* on the strip,
+  then **Dismiss** — deliberately: from that moment everything you save is
+  recorded as this machine's baseline — and measure and enter everything in the
+  order the reflex Setup screen gives. Until you dismiss, nothing you change is
+  saved. (`provision.sh --fresh` names this same choice from the command line;
+  on a card that booted into the UI it has nothing left to do and says so.)
+
+**Independently of which you picked:**
+
+- **A brand-new controller board** has OEM firmware and no field bootloader. It
+  needs one session with an ST-Link before the UI can talk to it — see
+  [First load (SWD)](swd-first-load.md). The toolchain is already on the card.
+- **The optional interactive phase** (the dev-role question, and any credential
+  you did not give Imager) is phase 3 of the delta layer and needs a terminal:
+  `sudo /usr/local/lib/elspi/deltas/03-interactive.sh --app /home/default/projects/reflex`.
+- **Site hooks** (one estate's own steps, kept outside this repository) run
+  from `provision.sh --site-hooks` — see [Provisioning](provisioning.md#site-hooks).
+
+## Testing an unreleased build
+
+Everything above flashes a *released* image — the last one a human promoted
+from pre-release to release after a card from it provisioned clean
+(`.github/workflows/image.yml`'s header explains why). To try a build that is
+still just a green `image` workflow run — nothing tagged, nothing published —
+from a checkout of this repo:
+
+```
+tools\flash-test-build.ps1 -Branch <branch>
+```
+
+or, to flash a specific run instead of the newest successful one on a branch:
+
+```
+tools\flash-test-build.ps1 -RunId <run-id>
+```
+
+It shows the run's branch, commit and date and asks to confirm before
+downloading the ~1 GB workflow artifact, then builds an `os_list.json` next to
+it and launches Imager on it exactly as `tools\flash-elspi.ps1` does. A repeat
+run against the same run id reuses the cached download instead of fetching it
+again. **Nothing is tagged, released, or otherwise published by this
+command** — it only downloads a workflow artifact GitHub already built and
+flashes it locally.
+
+
 
 **Imager says “Source file not found”, or shows its normal OS catalogue instead
 of one entry.** The `--repo` URL is wrong, or the release it points at has no
@@ -297,6 +397,18 @@ there is no way to fix `authorized_keys` from outside.
 You chose “Allow public-key authentication only” on Imager's page, so the card
 refuses SSH passwords by design. Use the key you pasted there, or re-flash and
 allow password authentication.
+
+**The screen stays black after 5 minutes, but SSH answers.** The first-boot UI
+unit says why in one line:
+`journalctl -u elspi-first-boot-ui --no-pager | grep verdict=`
+
+| verdict | meaning | what to do |
+|---|---|---|
+| `STARTED` or `START_UNCONFIRMED` | the UI was started; the display is the problem | the [DRM ladder](provisioning.md#if-the-screen-stays-black-the-drm-ladder), Plymouth first; `journalctl -u reflex-ui -b` |
+| `CONVERGE_FAILED` | converge refused or failed; the `converge:` lines above the verdict say which check | fix what it names, then reboot — the unit retries on every boot until it succeeds |
+| `REFUSED_NO_GUARD` | the baked release predates reflex's commissioning guard, so it was deliberately **not** started | an image from a build that baked an older release; provision by hand ([Provisioning](provisioning.md)) or use a newer image |
+| `ALREADY_PROVISIONED` | `reflex-ui` was already enabled before first boot got to it | nothing: systemd starts it; read `journalctl -u reflex-ui -b` |
+| `NOOP` / `UNKNOWN` | an image built before the app was baked in, or one missing a piece | provision by hand |
 
 **The screen stays black and SSH does not answer either.** That is a boot
 failure rather than the expected black screen. Attach a keyboard and check the

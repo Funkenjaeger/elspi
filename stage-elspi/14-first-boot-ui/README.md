@@ -1,97 +1,103 @@
-# `14-first-boot-ui` — the hook for first-boot-into-the-UI, not the feature
-
-**This substage ships a trigger, not the feature.** Read this before changing
-it, and before assuming it does more than it does.
-
-## The goal it is a hook for
+# `14-first-boot-ui` — a fresh card boots straight into the UI
 
 *A fresh elspi card boots straight into the UI: no SSH, no mandatory backup.*
-The whole of that needs two things: the reflex checkout baked into the image,
-and something that converges and starts it at first boot, right after the seed
-(`stage-elspi/12-first-boot-seed`), so a fresh card comes up on defaults,
-visibly uncommissioned.
+Decided by Evan 2026-09-13; this substage was a trigger-only scaffold from
+2026-09-20 until 2026-09-26, when the converge/start branch was written.
+`DECISIONS.md`, "2026-09-26 first-boot-ui", has every choice below and its
+alternative.
 
-**The first half exists now.** `docs/design/seam.md`'s amendment of
-2026-09-21 moved the checkout into the image: `stage-elspi/10a-app-checkout`
-bakes the latest full release at `/home/default/projects/reflex`, and
-`11-manifest` declares it as `baked_app` (with
-`"started_on_first_boot": false`). Until then the checkout was deltas-owned
-and no image carried one.
+## What it installs
 
-**The second half does not.** Starting the application unattended is a
-separate decision from baking it in: `docs/provisioning.md` makes starting
-reflex-ui a deliberate, human-reviewed step, specifically so a lathe never
-comes up on unreviewed commissioned data. This substage does not make that
-decision.
+| path on the card | what it is |
+|---|---|
+| `/etc/systemd/system/elspi-first-boot-ui.service` | a oneshot, enabled in `cloud-init.target`, ordered after the seed and after Plymouth |
+| `/usr/local/sbin/elspi-first-boot-ui` | `files/elspi-first-boot-ui.sh`, the hook |
+| `/usr/local/lib/elspi/commissioning-guard` | `files/commissioning-guard.sh`: does a checkout carry reflex's commissioning guard? `yes`/`no` |
+| `/usr/local/lib/elspi/deltas/` | this repository's `deltas/`, minus `tests/`, plus `SOURCE_COMMIT` |
 
-## What this substage does
+## What the hook does, once
 
-It ships the part that is genuinely image-side: a systemd unit, enabled,
-ordered correctly against both the first-boot seed and Plymouth's hold on DRM
-master. Its installed script (`files/elspi-first-boot-ui.sh`) looks for a
-checkout at the path the manifest declares (`.paths.app_root`):
+1. Reads `.paths.app_root` from `/etc/elspi-image.json` and finds the checkout
+   `10a-app-checkout` baked there.
+2. **Asks the guard check.** reflex's commissioning guard (first shipped in
+   `v1.2.0-rc.5`) is what makes an unrestored card safe to start: the app
+   latches "uncommissioned" once at startup, shows the UNCOMMISSIONED strip,
+   and refuses every settings write until a restore or a deliberate dismissal.
+   `docs/design/seam.md`'s 2026-09-21 amendment makes that state the condition
+   for starting at first boot ("silent defaults are the one outcome this
+   amendment forbids"). No guard: `verdict=REFUSED_NO_GUARD`, nothing runs.
+3. **Leaves a provisioned card alone.** If `reflex-ui.service` is already
+   enabled, somebody provisioned it: `verdict=ALREADY_PROVISIONED`.
+4. **Runs converge** — `/usr/local/lib/elspi/deltas/01-converge.sh --app
+   <app_root>` — with `UV_OFFLINE=1` and a private cache on `/run`.
+   `10b-app-install` did the one networked step (installing the app into the
+   venv) at build time and proved an offline re-sync succeeds, so first boot
+   is as hermetic as recovery (`seam.md` test 2). If converge fails after
+   enabling the unit, the hook disables it again, so the next boot cannot
+   start a half-converged app: `verdict=CONVERGE_FAILED`, retried next boot.
+5. **Starts** `reflex-ui.service` with `--no-block` (a oneshot waiting on
+   another unit's job from inside its own ExecStart is the shape of a
+   boot-time deadlock), watches for `active` for 60 s, and writes
+   `/etc/elspi/first-boot-ui-done`: `verdict=STARTED` (or `START_UNCONFIRMED`).
 
-- **found** — true of every image built since 2026-09-21 — it logs
-  `verdict=UNIMPLEMENTED`, naming the unwritten converge/start branch, and
-  exits 0. Nothing starts;
-- **absent** — an image built before 2026-09-21 — it logs `verdict=NOOP` and
-  exits 0.
+Every later boot: the marker exists, the hook logs `verdict=DONE_EARLIER` and
+does nothing. systemd starts the enabled unit by itself, and a human who
+stopped or disabled it since is not overruled.
 
-Either way nothing is visibly different on the console. `docs/flashing.md`
-documents a black screen after Plymouth as the expected result of a first boot
-before provisioning, and this substage does not change that. The loud
-`UNIMPLEMENTED` verdict exists so that whoever writes the start branch gets a
-pointer back to this file rather than a boot that mysteriously still shows a
-black screen.
+**It never restores and never writes `/var/lib/reflex-config`.** Phase 2
+(restore) is an action a human takes with a capture in hand; phase 3 needs a
+terminal. `deltas/provision.sh` still does both, and since this change it
+stops a running `reflex-ui` before phase 2.
 
-## Why the ordering matters even for a unit that (today) does nothing
+The verdict is one journal line (`journalctl -u elspi-first-boot-ui | grep
+verdict=`) and the file `/etc/elspi/first-boot-ui-verdict`.
+`docs/flashing.md` → Troubleshooting has the operator's table.
 
-`After=plymouth-quit-wait.service` is asserted at build time
-(`00-run.sh`) and at verification time (`tests/verify-image.sh`) even though
-the shipped script never touches DRM. The reasoning: whoever eventually
-writes the converge/start branch inherits *correct* ordering for free, rather
-than rediscovering the exact hazard `stage-elspi/06-seat`'s DRM-mode
-fragments already exist to avoid — Plymouth's DRM renderer is itself a
+## Why the ordering matters
+
+`After=plymouth-quit-wait.service`: Plymouth's DRM renderer is itself a DRM
 master, and anything that opens card0 before Plymouth releases it loses the
-race the `first-opener` DRM mode depends on winning.
+race the `first-opener` DRM mode depends on winning (`stage-elspi/06-seat`).
+The hook starts `reflex-ui`, so this is load-bearing now, not
+future-proofing.
 
-`After=elspi-first-boot-seed.service` is there because a converge run before
-the seed has finished would be converging a machine whose network, password
-and regulatory domain are not yet settled.
+`After=elspi-first-boot-seed.service`: converging before the seed has finished
+would converge a machine whose network, password and regulatory domain are not
+settled.
+
+**Not** `After=network-online.target`, on purpose: first boot is offline by
+design, and a card with no Wi-Fi seeded still boots into the UI.
 
 ## Why `cloud-init.target`, not `multi-user.target`
 
-Verbatim the same trap `stage-elspi/12-first-boot-seed/README.md` documents
-at length, so it is not repeated here in full: this unit's own `After=`
-chain reaches `cloud-final.service` (via `elspi-first-boot-seed.service`),
-and `cloud-final.service` is itself `After=multi-user.target`. Pulling this
-unit in from `multi-user.target.wants` would recreate the exact ordering
-cycle that made systemd delete the seed unit's job on 2026-09-13, silently.
-`cloud-init.target` adds no ordering edge of its own and our real edges
-already point the direction it points, so no cycle is possible.
-`00-run.sh` and `tests/verify-image.sh` both assert the unit is **not**
-also enabled in `multi-user.target.wants`, for the same reason
-`12-first-boot-seed` does.
+The exact trap `stage-elspi/12-first-boot-seed/README.md` documents at length:
+this unit's `After=` chain reaches `cloud-final.service` (via the seed unit),
+and `cloud-final.service` is itself `After=multi-user.target`. Pulling this unit
+in from `multi-user.target.wants` would recreate the ordering cycle that made
+systemd delete the seed unit's job on 2026-09-13. `00-run.sh` and
+`tests/verify-image.sh` both assert it is not.
 
-## What this substage does NOT do, and why that is not a shortcut
+## How it is tested
 
-- It does not touch `deltas/` or `provision.sh`. Making `--config-backup`
-  optional was a provisioning-safety change and landed there as `--fresh`, a
-  deliberate, loud flag — not here.
-- It does not touch `stage-elspi/06-seat` or the DRM default. Two modes ship
-  (`first-opener`, `cap-sys-admin`); `first-opener` is the default and was
-  **measured** on real hardware 2026-09-13
-  (`docs/design/runtime-inventory.md`, "SETTLED 2026-09-13 on hardware").
-  Neither fact changes here.
-- It does not write documentation for the SWD first load; that is
-  `docs/swd-first-load.md`.
+- `tests/test-first-boot-ui.sh` runs the **real** hook against a synthetic
+  rootfs, with a `systemctl` shim and a fake converge, through every branch
+  (and goes red against the old scaffold).
+- `tests/dry-run-stages.sh` runs this substage and checks the payload landed,
+  byte-identical to the repository.
+- `tests/verify-image.sh` (and `self-test.sh`'s mutations) check the payload on
+  a rootfs and that the manifest's `started_on_first_boot` agrees with the
+  guard check run against the checkout that shipped.
+- `10b-app-install`'s offline-sync gate runs in every real build.
 
-## The blind spot this substage adds
+## The blind spot
 
-`/etc/elspi-image.json`'s `cannot_be_verified_without_hardware` list carries
-one member for it: whether a converge/start branch would actually work is
-untested, because that branch does not exist and has never run. That is a
-genuinely different limitation from the GPU/touchscreen/UART hardware blind
-spots, and it is declared rather than left implicit, per this repo's own rule
-that a harness holding a private copy of what it cannot see will eventually
-disagree with the image and be believed anyway.
+Whether the whole chain works on a real card — seed, Plymouth, converge on the
+real venv, the unit starting, the application drawing its UNCOMMISSIONED strip
+— was closed 2026-09-26: a CI image (run 36244494844, tip 5ef03b0) flashed onto
+a spare card and booted on the lathe's Pi 5 came up UNCOMMISSIONED, with SSH
+confirming `verdict=STARTED` and `baked_app.started_on_first_boot: true` in
+`/etc/elspi-image.json`. `first_boot_ui.verified_on_hardware` is now `true` in
+the manifest this stage writes. The automated harness still cannot reproduce
+this itself — no GPU or real card in CI — so `cannot_be_verified_without_hardware`
+keeps declaring the hook as a standing limit of the offline harness, not as a
+claim that it is unverified.

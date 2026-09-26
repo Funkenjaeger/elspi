@@ -183,9 +183,12 @@ DRM_MODES="$(python3 -c "import json,sys; print(' '.join(json.load(open(sys.argv
 FBS_UNIT="$(jget "['first_boot_seed']['unit']")"
 FBS_SCRIPT="$(jget "['first_boot_seed']['script']")"
 # The first-boot UI hook (stage-elspi/14-first-boot-ui) -- same arrangement as
-# the seed above. It is a SCAFFOLD, not a feature: see its own README.md.
+# the seed above -- and the payload it runs: the image's own copy of the delta
+# layer, and the commissioning-guard check that decides whether it starts.
 FBUI_UNIT="$(jget "['first_boot_ui']['unit']")"
 FBUI_SCRIPT="$(jget "['first_boot_ui']['script']")"
+FBUI_DELTAS="$(jget "['first_boot_ui']['deltas']")"
+FBUI_GUARD="$(jget "['first_boot_ui']['commissioning_guard_check']")"
 # SSH (keyless since 2026-09-23): where keys come from and who decides the
 # authentication policy. Read here and asserted to be exactly the declared
 # policy in the SSH section below.
@@ -193,7 +196,8 @@ SSH_KEY_SOURCE="$(jget "['ssh']['key_source']")"
 SSH_AUTH="$(jget "['ssh']['auth']")"
 
 for v in SERVICE_USER VENV APP_PARENT APP_ROOT CONFIG_DIR LOG_DIR DRM_DEFAULT DRM_SWITCHER \
-         DRM_MODES FBS_UNIT FBS_SCRIPT FBUI_UNIT FBUI_SCRIPT APP_RELEASE APP_COMMIT \
+         DRM_MODES FBS_UNIT FBS_SCRIPT FBUI_UNIT FBUI_SCRIPT FBUI_DELTAS FBUI_GUARD \
+         APP_RELEASE APP_COMMIT \
          SSH_KEY_SOURCE SSH_AUTH; do
 	if [ -z "${!v}" ]; then bad "manifest declares ${v}"; else ok "manifest declares ${v}=${!v}"; fi
 done
@@ -1014,13 +1018,16 @@ fi
 # ---------------------------------------------------------------------------
 section "First-boot UI hook (stage-elspi/14-first-boot-ui)"
 
-# THIS IS A SCAFFOLD, NOT THE FEATURE. The goal is a fresh card that boots
-# into the UI with converge run automatically. The checkout IS baked in since
-# the 2026-09-21 seam amendment (10a-app-checkout), but starting it unattended
-# is a separate decision and the hook's converge/start branch is unwritten.
-# So this section asserts only the TRIGGER: a unit that exists, is enabled,
-# and is ordered correctly -- not that it starts anything, because today it
-# never does. See stage-elspi/14-first-boot-ui/README.md.
+# A fresh card boots straight into the UI (2026-09-26): this hook converges
+# the baked checkout OFFLINE with the image's own copy of the delta layer and
+# starts reflex-ui, once -- and only when the baked release carries reflex's
+# commissioning guard. This section asserts the TRIGGER (a unit that exists,
+# is enabled, and is ordered correctly), the PAYLOAD (the delta layer and the
+# guard check, where the manifest says, executable), and that the manifest's
+# claim about the first-boot start agrees with the checkout it describes.
+# What the script DOES branch by branch is tests/test-first-boot-ui.sh's job;
+# that it works on a real card is a declared blind spot (below).
+# See stage-elspi/14-first-boot-ui/README.md.
 
 FBUI_UNIT_FILE="${ROOTFS}${FBUI_UNIT}"
 FBUI_SCRIPT_FILE="${ROOTFS}${FBUI_SCRIPT}"
@@ -1102,11 +1109,55 @@ else
 	bad "cannot_be_verified_without_hardware declares the first-boot-ui blind spot"
 fi
 
-# THE THING THIS SCAFFOLD CANNOT PROVE, STATED OUT LOUD RATHER THAN LEFT
-# IMPLICIT. Not a hardware limit like the others in this section -- a
-# SEAM limit: the checkout is baked in, but the branch that would converge
-# and start it has not been written.
-unknown "The first-boot-ui hook's converge/start branch has NEVER RUN, on any image: the app is baked in at .paths.app_root, but that branch is unwritten, so the hook logs verdict=UNIMPLEMENTED and starts nothing. The checks above prove the trigger is wired correctly; they cannot and do not prove anything starts, because nothing does yet."
+# --- the payload: the baked delta layer and the guard check ----------------
+FBUI_DELTAS_DIR="${ROOTFS}${FBUI_DELTAS}"
+for f in lib.sh 01-converge.sh 02-restore.sh 03-interactive.sh provision.sh; do
+	check "baked delta layer carries an executable ${f} (${FBUI_DELTAS})" test -x "${FBUI_DELTAS_DIR}/${f}"
+done
+check "baked delta layer carries converge's polkit template" \
+	test -s "${FBUI_DELTAS_DIR}/files/50-reflex-service-user.rules"
+if [ -e "${FBUI_DELTAS_DIR}/tests" ]; then
+	bad "baked delta layer ships no tests/ (it does)"
+else
+	ok "baked delta layer ships no tests/"
+fi
+check "commissioning-guard check installed and executable: ${FBUI_GUARD}" test -x "${ROOTFS}${FBUI_GUARD}"
+
+# The hook must run THAT converge, THAT guard, and run converge OFFLINE. The
+# offline property is what makes first boot hermetic (10b-app-install proved
+# the offline re-sync at build time); a hook that dropped UV_OFFLINE=1 would
+# reach for PyPI on the first boot of a card in a shop with no network.
+check "first-boot-ui script runs converge from the baked delta layer" \
+	grep -qF 'deltas/01-converge.sh' "${FBUI_SCRIPT_FILE}"
+check "first-boot-ui script asks the commissioning-guard check" \
+	grep -qF 'commissioning-guard' "${FBUI_SCRIPT_FILE}"
+check "first-boot-ui script runs converge with UV_OFFLINE=1" \
+	grep -qF 'UV_OFFLINE=1' "${FBUI_SCRIPT_FILE}"
+
+# THE MANIFEST'S CLAIM ABOUT THE FIRST-BOOT START, held to the checkout. The
+# declaration must be self-consistent (the hook starts the app exactly when
+# the guard is present), and the guard answer it declares must be what the
+# image's own guard check says about the checkout that actually shipped. A
+# manifest claiming started_on_first_boot for a release without the guard is
+# a card that would come up on silent defaults while saying otherwise.
+FBUI_DECL="$(python3 -c 'import json,sys; b=json.load(open(sys.argv[1]))["baked_app"]; g=b.get("commissioning_guard"); s=b.get("started_on_first_boot"); print("%s %s" % (g, s))' "${MANIFEST}" 2>/dev/null)"
+case "${FBUI_DECL}" in
+	"True True"|"False False") ok "baked_app.started_on_first_boot agrees with baked_app.commissioning_guard (${FBUI_DECL})" ;;
+	*) bad "baked_app.started_on_first_boot agrees with baked_app.commissioning_guard (declared: '${FBUI_DECL}')" ;;
+esac
+if [ -x "${ROOTFS}${FBUI_GUARD}" ] && [ -d "${ROOTFS}${APP_ROOT}" ]; then
+	GUARD_SAYS="$(bash "${ROOTFS}${FBUI_GUARD}" "${ROOTFS}${APP_ROOT}" 2>/dev/null)"
+	case "${FBUI_DECL}:${GUARD_SAYS}" in
+		"True True:yes"|"False False:no") ok "the image's guard check agrees with the manifest about the shipped checkout (${GUARD_SAYS})" ;;
+		*) bad "the image's guard check agrees with the manifest about the shipped checkout (manifest: '${FBUI_DECL}', guard: '${GUARD_SAYS}')" ;;
+	esac
+fi
+
+# THE THING THESE CHECKS CANNOT PROVE, STATED OUT LOUD RATHER THAN LEFT
+# IMPLICIT: that the whole chain -- seed, Plymouth, converge on the real venv,
+# the unit starting, the application showing its UNCOMMISSIONED strip --
+# works on a real card.
+unknown "This offline harness cannot verify the first-boot-ui hook on a real card: its branches are exercised offline (tests/test-first-boot-ui.sh), 10b-app-install proves the offline re-sync at build time, and the checks above prove the hook, its payload and the manifest agree. Whether a fresh card's touchscreen actually shows the UI, UNCOMMISSIONED, needs the card in the Pi (done once, 2026-09-26; see first_boot_ui.verified_on_hardware)."
 
 # ---------------------------------------------------------------------------
 section "Artifact integrity"

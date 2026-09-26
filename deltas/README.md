@@ -10,6 +10,25 @@ detail that does not belong in it.
 
 `docs/design/seam.md` decides what lives on which side of the line.
 
+## The image carries a copy of this directory (since 2026-09-26)
+
+`stage-elspi/14-first-boot-ui` installs these scripts (not `tests/`) at
+`/usr/local/lib/elspi/deltas`, with the elspi commit they came from in
+`SOURCE_COMMIT`. Two reasons:
+
+- **First boot runs converge from it.** A fresh card converges the baked
+  reflex checkout offline and starts the UI, UNCOMMISSIONED, with no SSH and
+  no clone of this repository. Only phase 1 runs unattended; restore and the
+  interactive phase stay actions a human takes.
+- **Recovery needs no network for the scripts either.** `sudo
+  /usr/local/lib/elspi/deltas/provision.sh ...` works on a card with no
+  network. A clone of this repository still works exactly as before and is
+  the way to run a *newer* delta layer than the image shipped.
+
+The scripts are unchanged by being copied: they find `lib.sh` and `files/`
+relative to themselves, and read everything machine-specific from
+`/etc/elspi-image.json`. The directory is still runnable on its own.
+
 ## Three files, not three functions
 
 | Phase | Contract | Re-runnable? |
@@ -149,6 +168,16 @@ Nothing edits the app's unit file.
   version, including where to point a first-commissioning user who *does* have
   commissioned values to bring onto the machine (the USB import on the reflex
   Setup screen, not this flag).
+
+  Since 2026-09-26 a card flashed from the image has usually **already** done
+  what `--fresh` does by the time anyone runs it: first boot converged it and
+  started the UI, and the running app writes its own commissioning ledger into
+  `CONFIG_DIR` at startup. `provision.sh --fresh` then refuses — up front,
+  before phase 1, naming why (`deltas/tests/test-provision-contract.sh`). And
+  whenever `reflex-ui` is running when provisioning reaches phase 2,
+  `provision.sh` **stops it first**: a running app keeps its in-memory
+  defaults, and with the UNCOMMISSIONED warning dismissed it would write them
+  over what phase 2 restores.
 - **Monitoring enrolment.** Phase 3 used to have a fifth step that installed a
   purpose-scoped forced-command SSH key for one estate's collector. It named a
   particular network, so it is a **site hook** now (see above) and lives

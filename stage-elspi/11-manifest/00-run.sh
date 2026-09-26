@@ -43,6 +43,12 @@ APP_RELEASE="$(_read_fact reflex-app-release "the baked application release tag"
 APP_COMMIT="$(_read_fact reflex-app-commit "the commit that tag resolves to")"
 APP_UPDATER_READY="$(_read_fact reflex-app-updater-ready "whether the baked release carries the in-app updater's own prerequisites")"
 APP_PROTOCOL_READABLE="$(_read_fact reflex-app-protocol-readable "whether els_stop_map.py is readable at the baked tag")"
+# From stage-elspi/10b-app-install (2026-09-26): whether the baked release
+# carries reflex's commissioning guard -- the condition for starting it at
+# first boot -- and that the app is installed in the venv with an offline
+# re-sync proven. Same one-measurement rule as the facts above.
+APP_COMMISSIONING_GUARD="$(_read_fact reflex-app-commissioning-guard "whether the baked release carries the commissioning guard (10b-app-install)")"
+APP_INSTALLED_OFFLINE_OK="$(_read_fact reflex-app-installed-offline-ok "whether the baked app is installed in the venv with an offline re-sync proven (10b-app-install)")"
 
 # The declared value must be a FULL release, checked HERE as well as at the
 # clone. Not belt-and-braces: this is the field the manifest publishes to the
@@ -68,6 +74,25 @@ case "${APP_PROTOCOL_READABLE}" in
 	no)  APP_PROTOCOL_READABLE_JSON=false ;;
 	*)   echo "FATAL: reflex-app-protocol-readable is '${APP_PROTOCOL_READABLE}', expected yes or no"; exit 1 ;;
 esac
+case "${APP_COMMISSIONING_GUARD}" in
+	yes) APP_COMMISSIONING_GUARD_JSON=true ;;
+	no)  APP_COMMISSIONING_GUARD_JSON=false ;;
+	*)   echo "FATAL: reflex-app-commissioning-guard is '${APP_COMMISSIONING_GUARD}', expected yes or no"; exit 1 ;;
+esac
+# 10b-app-install writes only "yes": it FATALs rather than record a failed
+# offline proof. Anything else here is a build that did not run it.
+[ "${APP_INSTALLED_OFFLINE_OK}" = yes ] || { echo "FATAL: reflex-app-installed-offline-ok is '${APP_INSTALLED_OFFLINE_OK}', expected yes"; exit 1; }
+
+# THE FIRST-BOOT START, declared from what was measured. The hook
+# (stage-elspi/14-first-boot-ui) starts the app only when the guard is there;
+# the manifest says the same thing rather than a constant.
+if [ "${APP_COMMISSIONING_GUARD}" = yes ]; then
+	STARTED_ON_FIRST_BOOT_JSON=true
+	FBUI_STATUS="converges the baked checkout OFFLINE with the image's own copy of the delta layer (paths below), then starts reflex-ui.service, once. The baked release carries the commissioning guard, so a fresh card comes up UNCOMMISSIONED on the application's defaults and saves nothing until a restore or a deliberate dismissal. Never restores. See stage-elspi/14-first-boot-ui/README.md."
+else
+	STARTED_ON_FIRST_BOOT_JSON=false
+	FBUI_STATUS="the baked release predates reflex's commissioning guard, so the hook REFUSES to start it (verdict=REFUSED_NO_GUARD) and the card is provisioned by hand. See stage-elspi/14-first-boot-ui/README.md."
+fi
 
 BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -216,7 +241,9 @@ cat > "${MANIFEST}" <<- JSON
 	    "selected_by": "stage-elspi/10a-app-checkout/files/select-release.sh",
 	    "updater_ready": ${APP_UPDATER_READY_JSON},
 	    "protocol_version_readable": ${APP_PROTOCOL_READABLE_JSON},
-	    "started_on_first_boot": false
+	    "commissioning_guard": ${APP_COMMISSIONING_GUARD_JSON},
+	    "installed_in_venv": true,
+	    "started_on_first_boot": ${STARTED_ON_FIRST_BOOT_JSON}
 	  },
 
 	  "service_user": "${FIRST_USER_NAME}",
@@ -274,8 +301,13 @@ cat > "${MANIFEST}" <<- JSON
 	  "first_boot_ui": {
 	    "unit": "/etc/systemd/system/elspi-first-boot-ui.service",
 	    "script": "/usr/local/sbin/elspi-first-boot-ui",
-	    "status": "scaffold only -- enabled and correctly ordered against elspi-first-boot-seed.service and plymouth-quit-wait.service. The app IS baked in (baked_app above), but the hook's converge/start branch is UNIMPLEMENTED, so it logs verdict=UNIMPLEMENTED and starts nothing. See stage-elspi/14-first-boot-ui/README.md.",
-	    "verified_on_hardware": false
+	    "deltas": "/usr/local/lib/elspi/deltas",
+	    "commissioning_guard_check": "/usr/local/lib/elspi/commissioning-guard",
+	    "offline": true,
+	    "runs_once": true,
+	    "restores_config": false,
+	    "status": "${FBUI_STATUS}",
+	    "verified_on_hardware": true
 	  },
 
 	  "delta_layer_owns": [
@@ -294,7 +326,7 @@ cat > "${MANIFEST}" <<- JSON
 	    "anything config.txt or a dtoverlay actually DOES (firmware level)",
 	    "whether usb_max_current_enable (off unless a site build turns it on) prevents a USB touchscreen's brownouts",
 	    "audio output on card 0",
-	    "the first-boot-ui hook's converge/start branch (stage-elspi/14-first-boot-ui): enabled and ordered correctly, but the branch is unwritten, so starting the baked app unattended has never executed end-to-end",
+	    "the first-boot-ui hook (stage-elspi/14-first-boot-ui): its branches are exercised offline (tests/test-first-boot-ui.sh) and 10b-app-install proves the offline re-sync at build time, but this offline harness cannot itself run converge-then-start of the baked app on a real card (verified once by hand, see first_boot_ui.verified_on_hardware), and the UNCOMMISSIONED strip is the application's to show",
 	    "SSH login on a real card with the key or password typed into Imager (the image is keyless since 2026-09-23; the seed unit's key install is verified offline only)"
 	  ]
 	}
@@ -311,6 +343,7 @@ fi
 for key in log_dir config_dir venv app_parent default_mode reflex_lock_commit \
            first_boot_seed first_boot_ui unit script image_build_sha image_release \
            runtime_versions baked_app updater_ready protocol_version_readable \
+           commissioning_guard started_on_first_boot deltas commissioning_guard_check \
            ssh key_source build_defaults boot_config usb_max_current_enable; do
 	grep -q "\"${key}\"" "${MANIFEST}" || {
 		echo "FATAL: manifest is missing required key '${key}'"
