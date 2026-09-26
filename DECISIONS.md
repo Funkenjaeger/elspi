@@ -1,5 +1,31 @@
 # Decisions
 
+## 2026-09-26 releases are promoted test builds, not tag-triggered rebuilds
+
+Choice: a release is a test build (`ci-test.conf`, xz -1) that passed the bench,
+published byte-for-byte by `tools/promote-release.ps1`, which creates the tag at the
+build's own commit. `.github/workflows/image.yml`'s `push: tags` trigger and its
+release-publish job are removed; the workflow's only trigger is now `workflow_dispatch`,
+which always builds `ci-test.conf`. Test builds are flashed for the bench with
+`tools/flash-test-build.ps1`, downloading the image from a GitHub Actions workflow
+artifact or from a self-hosted Forgejo instance's generic package registry. Because a
+release is the tested bytes and not a rebuild, a release image is xz -1, like every test
+build.
+
+Alternative: keep the tag-triggered build and publish whatever it produces.
+
+Why: before this change, pushing a `v*` tag rebuilt the image from scratch and published
+that rebuild — so the bytes a user downloaded from a release were never the bytes anyone
+had actually flashed onto a card and benched. A rebuild can drift from the tested build
+in ways nothing would catch (a dependency resolving differently, a flaky stage, the
+baked reflex release moving between the two runs); promoting the cached, benched
+artifact unchanged closes that gap by construction instead of hoping a second build
+matches the first.
+
+`docs/flashing.md`, "Releasing a tested build", has the full flow; `ci-test.conf` and
+`ci.conf`'s own header comments were updated the same day to stop describing the old
+tag-builds-and-publishes behavior.
+
 ## 2026-09-26 order 2026-09-25#1: resolve_service_user stays paired with need_root, not moved ahead of it
 
 Order's words: "Pure validation = ... anything that only READS." `resolve_service_user`
