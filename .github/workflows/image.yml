@@ -74,7 +74,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # ospi's proven shape: the hosted runner is tight on disk and a pi-gen
       # work tree is not small.
@@ -138,7 +138,7 @@ jobs:
       # ospi's proven shape. Registers binfmt handlers (with the F flag, so
       # they keep working inside the privileged build container) for the
       # emulated armhf chroot.
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
 
       # build-docker.sh DIRECTLY, not build-elspi.sh: the wrapper hardcodes
       # `-c elspi.conf`, while CI needs ci.conf. ci.conf sources elspi.conf,
@@ -182,7 +182,7 @@ jobs:
       #
       # compression-level 0: the image is already xz -9, so zipping it again
       # costs minutes and saves nothing.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: elspi-image-${{ github.sha }}
           path: |
@@ -211,9 +211,9 @@ jobs:
       GH_REPO: ${{ github.repository }}
     steps:
       # For tools/make-os-list.sh and tools/release-notes.sh at the tag.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: elspi-image-${{ github.sha }}
           path: deploy
