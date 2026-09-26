@@ -37,6 +37,14 @@ trap 'rm -rf "${WORK}"' EXIT
 export ROOTFS_DIR="${WORK}/rootfs"
 export FIRST_USER_NAME=default
 
+# ARCH, exactly as build.sh exports it to every stage: the branch is the
+# architecture (docs/design/fork.md), so it is READ from this checkout's
+# build.sh, never assumed. 07-uv picks its pinned tarball by it.
+ARCH="$(sed -n 's/^export ARCH=//p' "${REPO}/build.sh")"
+[ -n "${ARCH}" ] && [ "$(printf '%s\n' "${ARCH}" | wc -l)" -eq 1 ] \
+	|| { echo "FAIL: expected exactly one 'export ARCH=' line in build.sh"; exit 1; }
+export ARCH
+
 # THE BUILD CONFIG'S VALUES, as build.sh would export them to the stages.
 # elspi.conf is sourced in a child shell with NO site config, so what is
 # checked below is the PUBLIC image's defaults; the child prints `export`

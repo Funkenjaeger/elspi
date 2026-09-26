@@ -15,17 +15,38 @@
 # runs natively, so this costs nothing under qemu-user.
 
 UV_VERSION="0.11.23"
-UV_TARBALL="uv-armv7-unknown-linux-gnueabihf.tar.gz"
-UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_TARBALL}"
 
-# Verified against the .sha256 published beside the asset, 2026-09-07.
-# If this ever mismatches, STOP -- do not "update the hash to make it pass".
-UV_SHA256="d10df2ebaa729a51d15395720c3f5e76497ae6414beb82043bb2e53f9a86314a"
+# THE BRANCH IS THE ARCHITECTURE (docs/design/fork.md): build.sh exports ARCH,
+# armhf on master and arm64 on this branch. The uv binary must match the
+# rootfs userland, or `uv --version` in 08-venv's chroot has no loader to run
+# under. Both pins are here so this file reads the same on either branch.
+#
+# Each hash was verified against the .sha256 published beside the asset
+# (armhf 2026-09-07; arm64 2026-09-26, also matching the GitHub release
+# asset digest). If one ever mismatches, STOP -- do not "update the hash to
+# make it pass".
+case "${ARCH:?build.sh exports ARCH; this stage cannot pick a uv without it}" in
+	armhf)
+		UV_TARBALL="uv-armv7-unknown-linux-gnueabihf.tar.gz"
+		UV_SHA256="d10df2ebaa729a51d15395720c3f5e76497ae6414beb82043bb2e53f9a86314a"
+		UV_FILE_MATCH="ARM, EABI5"
+		;;
+	arm64)
+		UV_TARBALL="uv-aarch64-unknown-linux-gnu.tar.gz"
+		UV_SHA256="1873a77350f6621279ae1a0d2227f2bd8b67131598f14a7eb0ba2215d3da2c98"
+		UV_FILE_MATCH="ARM aarch64"
+		;;
+	*)
+		echo "FATAL: no pinned uv for ARCH=${ARCH}"
+		exit 1
+		;;
+esac
+UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_TARBALL}"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
-echo "  fetching uv ${UV_VERSION} (armv7 gnueabihf)"
+echo "  fetching uv ${UV_VERSION} (${UV_TARBALL}, ARCH=${ARCH})"
 curl -fsSL --retry 3 -o "${WORK}/${UV_TARBALL}" "${UV_URL}"
 
 # GATE: verify before unpacking, and branch on the result.
@@ -51,14 +72,15 @@ fi
 
 install -m 0755 "${FOUND[0]}" "${ROOTFS_DIR}/usr/local/bin/uv"
 
-# POST-WRITE CHECK: present, executable, and an ARM binary -- not the host's.
+# POST-WRITE CHECK: present, executable, and an ARM binary OF THIS ARCH --
+# not the host's, and not the other ARM ABI's.
 [ -x "${ROOTFS_DIR}/usr/local/bin/uv" ] || {
 	echo "FATAL: post-write check failed -- /usr/local/bin/uv not installed"
 	exit 1
 }
-if ! file "${ROOTFS_DIR}/usr/local/bin/uv" | grep -q "ARM"; then
-	echo "FATAL: installed uv is not an ARM binary:"
+if ! file "${ROOTFS_DIR}/usr/local/bin/uv" | grep -qF "${UV_FILE_MATCH}"; then
+	echo "FATAL: installed uv is not a '${UV_FILE_MATCH}' binary (ARCH=${ARCH}):"
 	file "${ROOTFS_DIR}/usr/local/bin/uv"
 	exit 1
 fi
-echo "  installed: /usr/local/bin/uv ${UV_VERSION} (ARM)"
+echo "  installed: /usr/local/bin/uv ${UV_VERSION} (${UV_FILE_MATCH})"
