@@ -82,8 +82,8 @@ the plan's ordered steps and this repository's docs now assume:
   commissioned 64-bit card for a few weeks.
 - **D3 — no.** No final armhf release is cut from master's tip. The rollback is the
   commissioned armhf card itself, and gate G proves arm64 recovery.
-- **D4 — resolved to Forgejo.** The gate build is proven through Forgejo
-  (forge.dudzik.app) first: a build that passes the bench is promoted by uploading the
+- **D4 — resolved to Forgejo.** The gate build is proven through our own Forgejo
+  instance first: a build that passes the bench is promoted by uploading the
   same image bytes as the GitHub release, no rebuild, closing the tested-bytes gap.
   Needs a Forgejo-only workflow with an artifact upload, a stable-path wrapper config,
   and a Forgejo mode in `tools/flash-test-build.ps1`.
@@ -93,7 +93,8 @@ the plan's ordered steps and this repository's docs now assume:
   policy, alongside `master`, landing with step 2 (branch plumbing).
 - **D7 — delete after the merge.** `build-elspi.sh`'s trap 1 (the host-side
   `qemu-arm`/`qemu-aarch64` precheck) is deleted once the upstream sync lands and a
-  local dserver build proves it unneeded, rather than made arch-aware first.
+  local build on our own build host proves it unneeded, rather than made
+  arch-aware first.
 - **D8 — yes.** Tag convention: a bare CalVer tag (`vYYYY.MM.DD`) means arm64; any
   armhf tag carries an explicit `-armhf` suffix.
 - **D9 — "from now on."** The lathe's future is 64-bit only. Evan will not use the
