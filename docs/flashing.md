@@ -30,10 +30,12 @@ the smallest sensible card and leaves room for the application, the venv and
 logs.
 
 **The target machine:** a Raspberry Pi 5 with the touchscreen attached. The
-image is `armhf` userland on a 64-bit kernel, with `config.txt` written for that
-board — including upstream's `[pi5] dtoverlay=nospi10`. The public image leaves
-`usb_max_current_enable` off; a Pi 5 powering a USB touchscreen may need it, and
-a [site build config](provisioning.md#a-site-build-config) turns it on.
+image is `arm64` userland; Imager offers it for Pi 5/4/3 (64-bit), but the
+supported target is still a Pi 5 with the touchscreen, and `config.txt` is
+written for that board — including upstream's `[pi5] dtoverlay=nospi10`. The
+public image leaves `usb_max_current_enable` off; a Pi 5 powering a USB
+touchscreen may need it, and a
+[site build config](provisioning.md#a-site-build-config) turns it on.
 
 **Keep the card that is currently in the machine.** It is the rollback and it is
 the running lathe. Flash a *second* card.

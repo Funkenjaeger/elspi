@@ -66,6 +66,45 @@ fallback logic, the tty check (03-interactive.sh); the `--app`/mutual-exclusivit
 behind `need_root` on those grounds, so this entry records the check rather than a
 change: the bound's "list it in the report instead of moving it" clause did not fire.
 
+## 2026-09-26 arm64 is the main line
+
+Following the arm64 migration entry below, Evan reviewed the full migration plan
+(`claude-working/drafts/elspi-arm64-mainline-plan-2026-09-26.md`) and decided arm64
+becomes elspi's main line, not just a working branch. Recorded here as the decisions
+the plan's ordered steps and this repository's docs now assume:
+
+- **D1 — yes**, make `arm64` GitHub's default branch, once gate G and steps 1-2 (docs,
+  branch plumbing) pass. Not done in this pass; tracked separately.
+- **D2 — freeze (option C)**. `master` keeps its current tip plus a "frozen" notice
+  commit. No more elspi work and no more upstream merges land there; it stays
+  rebuildable on demand (`gh workflow run image --ref master`) for as long as the
+  armhf rollback card is in service. Revisit deleting it once the lathe has run a
+  commissioned 64-bit card for a few weeks.
+- **D3 — no.** No final armhf release is cut from master's tip. The rollback is the
+  commissioned armhf card itself, and gate G proves arm64 recovery.
+- **D4 — resolved to Forgejo.** The gate build is proven through Forgejo
+  (forge.dudzik.app) first: a build that passes the bench is promoted by uploading the
+  same image bytes as the GitHub release, no rebuild, closing the tested-bytes gap.
+  Needs a Forgejo-only workflow with an artifact upload, a stable-path wrapper config,
+  and a Forgejo mode in `tools/flash-test-build.ps1`.
+- **D5 — after.** The upstream sync (merging `upstream/arm64`) happens after the first
+  arm64 release, not before, so gate G tests exactly one variable.
+- **D6 — yes.** Add `arm64` to the `github-pages` environment's deployment branch
+  policy, alongside `master`, landing with step 2 (branch plumbing).
+- **D7 — delete after the merge.** `build-elspi.sh`'s trap 1 (the host-side
+  `qemu-arm`/`qemu-aarch64` precheck) is deleted once the upstream sync lands and a
+  local dserver build proves it unneeded, rather than made arch-aware first.
+- **D8 — yes.** Tag convention: a bare CalVer tag (`vYYYY.MM.DD`) means arm64; any
+  armhf tag carries an explicit `-armhf` suffix.
+- **D9 — "from now on."** The lathe's future is 64-bit only. Evan will not use the
+  lathe again until the arm64 build is tested (gate G) and released; the gate-G card,
+  restored from his gist, becomes the lathe's card. No separate move step, no armhf
+  interim.
+
+This entry records the decisions; it does not itself flip the default branch,
+promote a release, or touch master. Those are later, separate steps in the plan,
+each gated on the ones before it.
+
 ## 2026-09-26 arm64 migration
 
 Evan decided 2026-09-26 to migrate elspi to a 64-bit userland. The branch is the

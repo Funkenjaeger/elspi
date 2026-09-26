@@ -39,7 +39,7 @@ genuinely non-obvious call here.
 
 | What | Why here |
 |---|---|
-| Base trixie/armhf, pi-gen stages 0–2 | definitional |
+| Base trixie/arm64, pi-gen stages 0–2 | definitional |
 | `config.txt`, `cmdline.txt` — SPI, I²C, UART, camera off, quiet+splash, upstream's `[pi5] dtoverlay=nospi10`; `usb_max_current_enable=1` only when a site build config sets `ELSPI_USB_MAX_CURRENT=1` | firmware-level, needs a reboot, and wrong means no display or no Modbus. Cheap to bake, painful to retrofit |
 | Plymouth theme and splash | boot-path, invisible to deltas |
 | Every Debian package: SDL2 + Mesa DRI + libmtdev, `network-manager`, the build toolchain, `gcc-arm-none-eabi`, `cmake`, `openocd` | apt at provision time is a network dependency on the recovery path |
@@ -75,6 +75,13 @@ image+app become a version pair that wants tagging together rather than floating
 This is the load-bearing recommendation. **No `cp313`/`armv7l` Kivy wheel exists**
 (`runtime-inventory.md`), so somebody compiles Kivy from sdist. The only question
 is who.
+
+*2026-09-26: this reasoning was written for the armhf line and is kept here as
+the record of why the call was made. On `arm64`, the situation changes but the
+call does not: a prebuilt `cp313`/`aarch64` Kivy wheel exists on PyPI (Kivy
+2.3.1, pinned in `uv.lock`), so the compile-under-emulation risk below is gone.
+The venv still bakes into the image — the criterion was hermetic recovery, not
+avoiding a slow build.*
 
 Putting it in the deltas means every provision compiles Kivy on the Pi — natively,
 so not slow, but it makes recovery depend on PyPI still serving that exact sdist
@@ -325,3 +332,8 @@ emulated armhf chroot**. It is slow, it is on the critical path, and native-buil
 failures under `qemu-user` are not exotic. Before building the rest of the stage
 around it, get that one step to succeed on its own — everything else here is
 conventional pi-gen work, and this is the part that could force a redesign.
+
+*2026-09-26: on `arm64` this risk does not apply — the prebuilt `aarch64` Kivy
+wheel is taken from PyPI, and the image builds natively on
+`ubuntu-24.04-arm` besides. Kept here as the record of the armhf-line
+reasoning.*

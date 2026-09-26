@@ -38,7 +38,7 @@
 # It is here because THE DEVICE STEP READS IT. The device chooser Imager opens
 # on is populated from `imager.devices`; a repository without that block gives
 # a Device page with nothing on it, and our entry's `devices` tags
-# (`pi4-32bit`, ...) then have nothing to match against. It is a snapshot
+# (`pi4-64bit`, ...) then have nothing to match against. It is a snapshot
 # rather than a fetch so that flashing works with no network and cannot change
 # under us between two flashes of the same image.
 #

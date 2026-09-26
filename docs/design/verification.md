@@ -86,6 +86,11 @@ repo is 2000 minutes/month, which is roomy at this cadence, and the metering
 disappears entirely once the repo goes public — which is the intent as soon as it
 is moderately mature.
 
+*2026-09-26: written for the armhf line. On `arm64` the build is native on
+`ubuntu-24.04-arm` and takes the prebuilt Kivy wheel — see `fork.md` — so the
+compile-under-emulation cost below no longer applies. Kept as the record of
+the armhf-line estimate.*
+
 The number nobody has yet is *our* build's duration, and there is a specific
 reason to expect it to exceed ospi's: **we compile Kivy from source under
 QEMU-emulated armhf**, which ospi never pays for (see `runtime-inventory.md`).

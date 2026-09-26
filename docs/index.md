@@ -28,8 +28,8 @@ Where that line falls, in detail: [Where the image ends](design/seam.md).
 
 ## What is in the image
 
-Raspberry Pi OS **trixie** with an `armhf` userland on a 64-bit kernel, built
-from pi-gen `stage0`–`stage2` plus this fork's `stage-elspi/`:
+Raspberry Pi OS **trixie** with an `arm64` userland, built from pi-gen
+`stage0`–`stage2` plus this fork's `stage-elspi/`:
 
 | | |
 |---|---|

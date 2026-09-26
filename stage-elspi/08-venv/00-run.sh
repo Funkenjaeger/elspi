@@ -1,22 +1,24 @@
 #!/bin/bash -e
 
-# THE VENV, WITH KIVY ALREADY COMPILED -- but not reflex itself.
+# THE VENV, WITH KIVY ALREADY PROVISIONED -- but not reflex itself.
 #
 # docs/design/seam.md call 1, RATIFIED 2026-08-22. This is the load-bearing decision in the
-# whole split. No cp313/armv7l Kivy wheel exists on PyPI, so somebody compiles
-# Kivy from sdist. If that somebody is the DELTA layer, then recovery depends
-# on PyPI still serving that exact sdist on the day the SD card dies -- in a
-# machine shop, possibly with no network. Baking it makes recovery
-# flash -> restore -> run, hermetically.
+# whole split. On armhf, no cp313/armv7l Kivy wheel exists on PyPI, so
+# somebody compiles Kivy from sdist; on arm64 a prebuilt cp313/aarch64 wheel
+# exists instead. Either way, if that somebody (or something) is the DELTA
+# layer, then recovery depends on PyPI still serving that exact package on the
+# day the SD card dies -- in a machine shop, possibly with no network. Baking
+# it makes recovery flash -> restore -> run, hermetically.
 #
 # The image ships everything in uv.lock EXCEPT the reflex package. The delta
 # layer drops the app and runs `uv sync --no-dev`, which finds its dependencies
 # already satisfied and finishes in seconds.
 #
-# THIS IS ALSO THE RISKIEST STEP IN THE BUILD, and docs/design/seam.md says so: compiling
-# Kivy inside pi-gen's emulated armhf chroot is slow, on the critical path, and
-# native-build failures under qemu-user are not exotic. If the build dies, it
-# most likely dies here.
+# ON ARMHF, THIS IS ALSO THE RISKIEST STEP IN THE BUILD, and docs/design/seam.md
+# says so: compiling Kivy inside pi-gen's emulated armhf chroot is slow, on the
+# critical path, and native-build failures under qemu-user are not exotic. On
+# arm64 this risk does not apply -- the prebuilt wheel is taken as-is and the
+# build is native.
 #
 # VERSION PAIRING, an accepted consequence of call 1: pyproject.toml and
 # uv.lock are VENDORED from the reflex repo at the commit in files/REFLEX_COMMIT.

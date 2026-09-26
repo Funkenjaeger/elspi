@@ -4,7 +4,19 @@ Releases of the elspi image. Each entry names the commit the image was built
 from, because the image is the artifact and the commit is the only thing that
 says what is in it.
 
-## Unreleased — a fresh card boots straight into the UI
+## Unreleased on arm64 — the main line moves to 64-bit
+
+**2026-09-26: Evan decided to make `arm64` the main line** (decision D1) and
+freeze `master` as a legacy armhf line (decision D2). Hardware evidence to
+date: the CI image from run
+[`36253822753`](https://github.com/Funkenjaeger/elspi/actions/runs/36253822753)
+(commit `a699073`, `arch=arm64`) booted and ran on the lathe's Pi 5. GitHub's
+default branch and the first promoted arm64 release still wait on gate G —
+one more arm64 build carrying a reflex UI fix, then a full end-to-end
+flash-and-restore test on the lathe — not yet run as of this entry. See
+`docs/design/fork.md` for the branch table and the migration's status.
+
+## Unreleased on master (armhf, frozen) — a fresh card boots straight into the UI
 
 On `master` (merged from `feat/first-boot-ui`), not yet released as an image.
 **Verified on hardware 2026-09-26:** the CI image from run 36244494844 (tip

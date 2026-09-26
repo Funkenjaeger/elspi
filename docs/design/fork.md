@@ -6,16 +6,25 @@ the `reflex-ui` electronic-leadscrew control application on the lathe. It is a
 intend to keep merging upstream indefinitely, not to diverge from it.
 
 Everything except this file and our own stage is upstream's code. Upstream's
-README is still here, **byte-identical**, as `README.pi-gen.md`; it was moved
-aside rather than edited so that the root `README.md` can describe elspi — see
-[Keep the merge surface small](#keep-the-merge-surface-small).
+README is still here as `README.pi-gen.md`; it was moved aside rather than
+edited so that the root `README.md` can describe elspi — see
+[Keep the merge surface small](#keep-the-merge-surface-small). On `arm64`
+today `README.pi-gen.md` is **not yet byte-identical** with
+`upstream/arm64`'s README: it is still master's armhf copy, and differs at
+one line (`qemu-arm-static` vs `qemu-aarch64-static`). The upstream sync
+(below) resolves this as a rename/modify conflict and restores byte-identity.
 
 ## Syncing with upstream
 
+`master` (frozen legacy armhf) takes no more upstream merges. `arm64` is the
+line that syncs, and upstream's own pattern is master → arm64 (upstream merges
+`master` into `arm64`, so `upstream/arm64` already contains
+`upstream/master`):
+
 ```sh
 git fetch upstream
-git merge upstream/master        # on master (armhf)
-git merge upstream/arm64         # on arm64
+git checkout arm64
+git merge upstream/arm64         # brings upstream master's commits too
 ```
 
 `upstream` is fetch-only; its push URL is deliberately set to an invalid string so
@@ -38,21 +47,29 @@ in a config file does nothing. We mirror upstream's structure:
 
 | Branch | ARCH | Status |
 |---|---|---|
-| `master` | `armhf` | **Current.** Matches elspi as it runs today. |
-| `arm64` | `arm64` | Planned migration target. Currently pristine upstream. |
+| `master` | `armhf` | Frozen legacy line. No more elspi work or upstream merges land here; it stays rebuildable on demand for as long as the armhf rollback card is in service. |
+| `arm64` | `arm64` | **Current: the main line**, carrying default-branch and release status (decision D1, 2026-09-26), gated on the ordered migration plan's gate G. |
 
-elspi today is a Raspberry Pi 5 running a 64-bit kernel with a **32-bit userland**
-(`uname -m` = `aarch64`, `dpkg --print-architecture` = `armhf`) — the standard
-Raspberry Pi OS 32-bit-on-Pi-5 arrangement, not a misconfiguration. `master` is
-therefore the like-for-like rebuild, and the one to get working first: the point
-of this repo is a recovery path, and a recovery path that changes the ABI at the
-same time is proving two things at once.
+**Migrated 2026-09-26.** elspi was originally a Raspberry Pi 5 running a
+64-bit kernel with a **32-bit userland** (`uname -m` = `aarch64`,
+`dpkg --print-architecture` = `armhf`) — the standard Raspberry Pi OS
+32-bit-on-Pi-5 arrangement, not a misconfiguration — and `master` was the
+like-for-like rebuild target while the fork was proved out. That proof is
+done: an arm64 build (workflow run `36253822753`, commit `a699073`) has
+booted and run on the lathe's hardware. Evan decided the same day to make
+`arm64` the main line (decision D1) and freeze `master` (decision D2) rather
+than maintain both ABIs. GitHub's default-branch setting and the first
+promoted arm64 release wait on gate G — one more build carrying a reflex UI
+fix, then a full end-to-end flash-and-restore test — recorded in this
+repository's migration plan.
 
-Moving to `arm64` is a real ABI change. Every Python wheel with a compiled
-extension (Kivy and its SDL2/GL bindings above all) needs an `aarch64` build, and
-the `gcc-arm-none-eabi` cross-toolchain used to build STM32 firmware on the Pi
-needs its 64-bit package — though the firmware it emits is unaffected, since the
-target is a Cortex-M either way.
+Moving to `arm64` was a real ABI change, now proven out. Every Python wheel
+with a compiled extension needed an `aarch64` build: Kivy 2.3.1 has one on
+PyPI (running on SDL2 against the Pi 5's V3D driver), so the venv no longer
+compiles Kivy from source under emulation. The `gcc-arm-none-eabi`
+cross-toolchain used to build STM32 firmware on the Pi has its 64-bit
+package too — the firmware it emits is unaffected either way, since the
+target is a Cortex-M regardless of the Pi's own userland.
 
 ## Both release lines are trixie
 

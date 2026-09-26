@@ -53,6 +53,7 @@ checkout are then handed back to the service user with the same ownership gate
 ## Where it cannot be exercised
 
 Like `08-venv` and `10a-app-checkout`, the interesting half runs through
-`on_chroot` (an armhf `uv` against the image's venv), so `tests/dry-run-stages.sh`
-cannot run it. The gate *is* the build: a CI image build that gets past this
-substage has proven the offline re-sync on the real venv and the real release.
+`on_chroot` (the target arch's `uv` against the image's venv), so
+`tests/dry-run-stages.sh` cannot run it. The gate *is* the build: a CI image
+build that gets past this substage has proven the offline re-sync on the real
+venv and the real release.

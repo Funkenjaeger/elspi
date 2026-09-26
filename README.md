@@ -7,11 +7,12 @@ manual lathe. A soft fork of
 recovery path for that machine: a dead SD card should cost a flash, not a
 rebuild.
 
-* **Raspberry Pi OS trixie, `armhf` userland** on a 64-bit kernel, built by
-  pi-gen from `stage0`–`stage2` plus our own `stage-elspi/`.
-* **The Kivy runtime is compiled in.** No `cp313`/`armv7l` Kivy wheel exists, so
-  the image ships a venv at `/opt/reflex-venv` with every dependency already
-  built — recovery does not need PyPI.
+* **Raspberry Pi OS trixie, 64-bit (`arm64`) userland**, built by pi-gen from
+  `stage0`–`stage2` plus our own `stage-elspi/`. The `master` branch builds the
+  legacy 32-bit (`armhf`) line, frozen.
+* **The Kivy runtime is compiled in.** The venv ships Kivy from PyPI's
+  prebuilt `aarch64` wheel (pinned by `uv.lock`), with every dependency already
+  built — recovery still does not need PyPI.
 * **The firmware toolchain is baked** (`gcc-arm-none-eabi`, `cmake`, `openocd`):
   STM32 firmware is flashed *from* the lathe.
 * **First boot is seeded from Raspberry Pi Imager's customisation page** —

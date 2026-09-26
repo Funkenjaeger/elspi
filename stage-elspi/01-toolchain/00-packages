@@ -1,10 +1,14 @@
-# Build toolchain: Kivy is COMPILED here, not downloaded.
+# Build toolchain, for the case where Kivy has to be COMPILED rather than
+# downloaded.
 #
-# docs/design/runtime-inventory.md, the single most consequential finding: the installed
-# Kivy-2.3.1.dist-info/WHEEL reads "Tag: cp313-cp313-linux_armv7l" and NO SUCH
-# WHEEL EXISTS ON PyPI. It was built from sdist on the device. ospi never pays
-# this cost -- on its Python version rotary-controller-python pulls a prebuilt
-# wheel -- which is why its stage installs runtime SDL2 only.
+# docs/design/runtime-inventory.md, the single most consequential finding on
+# armhf: the installed Kivy-2.3.1.dist-info/WHEEL read "Tag:
+# cp313-cp313-linux_armv7l" and NO SUCH WHEEL EXISTS ON PyPI, so it was built
+# from sdist on the device. ospi never pays this cost -- on its Python version
+# rotary-controller-python pulls a prebuilt wheel -- which is why its stage
+# installs runtime SDL2 only. On arm64, a prebuilt cp313-cp313-linux_aarch64
+# wheel exists, so Kivy is no longer compiled here; the -dev packages below
+# stay anyway, a judgment call recorded in DECISIONS.md.
 #
 # build-essential, pkg-config and python3-venv already come from upstream
 # stage2/01-sys-tweaks; the -dev set does not.

@@ -1,5 +1,10 @@
 # What the image has to produce
 
+**Captured from the armhf card.** This snapshot predates the arm64 migration
+(2026-09-26); the arm64 image differs, most notably in the Kivy wheel tag
+below — see `fork.md` and `seam.md` for what changed. Left as a dated
+snapshot rather than rewritten.
+
 Captured **2026-08-17** from the live elspi, from `C:\projects\reflex\ui`, and from
 `bartei/ospi@main` for comparison. This is the input spec for our custom stage.
 Re-verify before trusting it — it is a snapshot of a machine, not a contract.
