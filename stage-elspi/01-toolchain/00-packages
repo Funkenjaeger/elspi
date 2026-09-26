@@ -1,0 +1,25 @@
+# Build toolchain: Kivy is COMPILED here, not downloaded.
+#
+# docs/design/runtime-inventory.md, the single most consequential finding: the installed
+# Kivy-2.3.1.dist-info/WHEEL reads "Tag: cp313-cp313-linux_armv7l" and NO SUCH
+# WHEEL EXISTS ON PyPI. It was built from sdist on the device. ospi never pays
+# this cost -- on its Python version rotary-controller-python pulls a prebuilt
+# wheel -- which is why its stage installs runtime SDL2 only.
+#
+# build-essential, pkg-config and python3-venv already come from upstream
+# stage2/01-sys-tweaks; the -dev set does not.
+
+libsdl2-dev
+libsdl2-image-dev
+libsdl2-mixer-dev
+libsdl2-ttf-dev
+libmtdev-dev
+python3-dev
+
+# Present via stage2, named here because the Kivy build fails without them and
+# the harness asserts on this contract.
+build-essential
+pkg-config
+
+# Cython arrives transiently through PEP 517 build isolation. It is deliberately
+# NOT installed as a package -- it is not one on the live machine either.

@@ -1,0 +1,255 @@
+name: image
+
+# Build the elspi Raspberry Pi image on a GitHub-hosted runner.
+#
+# TWO TRIGGERS, TWO OUTCOMES:
+#
+#   workflow_dispatch  -> a TEST build. The image is kept as a 14-day workflow
+#                         artifact and nothing is published.
+#   a pushed v-tag     -> the same build, then a GitHub PRE-release carrying
+#                         the image, os_list.json and the .info.
+#
+# The tag pattern follows the one elspi tag that exists, v2026.09.13
+# (docs/changelog.md): CalVer, v<YYYY>.<MM>.<DD>, with anything after it
+# allowed so a second build on one day can be v2026.09.13.1. It deliberately
+# does NOT match upstream pi-gen's own YYYY-MM-DD-raspios-* tags, which arrive
+# with every upstream merge.
+#
+# PRE-RELEASE, NOT RELEASE, and on purpose: v2026.09.13 went out as a
+# pre-release and was flipped to a release only after a card flashed from it
+# provisioned clean on a real machine (2026-09-13).
+# A pre-release is excluded from releases/latest/, so the
+# .../releases/latest/download/os_list.json that README.md and
+# docs/flashing.md point Imager at keeps serving the last VERIFIED image until
+# a human promotes this one:
+#     gh release edit <tag> --prerelease=false --latest
+#
+# THE BAKED APP IS WHATEVER THE NEWEST FULL reflex RELEASE IS AT BUILD TIME
+# (stage-elspi/10a-app-checkout; elspi.conf's REFLEX_RELEASE is empty). As of
+# this workflow's writing that is still v1.1.0, which predates the updater
+# (updater_ready=no in the image's /etc/elspi-image.json). An image built
+# before reflex v1.2.0 is cut is one to test, not one to hand out.
+#
+# THE IMAGE IS KEYLESS (2026-09-23). No SSH key is baked in and this workflow
+# supplies none: the image is published, and nobody's personal key belongs in
+# a public release. The account ships locked; the operator's password and/or
+# public key are typed into Raspberry Pi Imager's customisation page at flash
+# time, and stage-elspi/12-first-boot-seed's unit installs them on the machine.
+# Whether SSH accepts passwords is likewise chosen there, per card -- the image
+# sets no SSH authentication option of its own. (Until 2026-09-23 this
+# workflow baked vars.ELSPI_PUBKEY in; that variable is no longer read.)
+#
+# PROVING THIS FILE. GitHub lists a workflow_dispatch workflow in the Actions
+# UI (and accepts a dispatch for it) only once the file exists on the
+# repository's DEFAULT branch, master; a branch holding only this file cannot
+# be dispatched. A tag push, by contrast, runs the file as it exists AT THE
+# TAGGED COMMIT, default branch or not -- but that publishes a public
+# pre-release, so it is not a free test. The ways to a first run are a merge to
+# master, or a temporary push trigger on a branch that is removed again
+# afterwards; which is Evan's call.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]*'
+
+# Read-only by default. Only the release job, which exists only for a tag,
+# gets contents: write.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Pinned rather than ubuntu-latest: the qemu shim step below unpacks a
+    # specific package layout (noble's qemu-user-static ships
+    # /usr/bin/qemu-arm-static), and a 46-minute build should not have its
+    # host OS change underneath it on a day nobody touched this repo. The
+    # shim step gates on that layout, so drift fails loudly either way.
+    runs-on: ubuntu-24.04
+    # ~46 min on a local x86_64 build host; a 4-vCPU hosted runner compiling Kivy under
+    # emulated armhf will be slower. 180 leaves room without letting a hung
+    # build burn the job's 6-hour ceiling.
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # ospi's proven shape: the hosted runner is tight on disk and a pi-gen
+      # work tree is not small.
+      - name: free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+
+      # build-elspi.sh's TRAP 1, reproduced here because this workflow calls
+      # build-docker.sh directly (see the build step for why). build-docker.sh
+      # :119 runs `which qemu-arm` UNCONDITIONALLY on x86_64 -- upstream's
+      # guard only skips re-REGISTERING binfmt, not this lookup -- and
+      # setup-qemu-action registers binfmt handlers without putting any
+      # qemu-arm on the host PATH. ospi's release.yml got away without this
+      # only because ospi patched that lookup; our build-docker.sh is
+      # unpatched upstream.
+      #
+      # Unpacked, not installed, exactly as build-elspi.sh does on a local build host:
+      # `apt-get download` + dpkg-deb touches no binfmt state and no
+      # conflicting package (qemu-user-binfmt vs qemu-user-static), and it is
+      # the path already proven by a real build. STATIC because a registered
+      # interpreter has to work inside the armhf chroot.
+      - name: stage a static qemu-arm on PATH
+        run: |
+          set -euo pipefail
+          SHIM="${RUNNER_TEMP}/qemu-shim"
+          mkdir -p "${SHIM}/deb" "${SHIM}/root" "${SHIM}/bin"
+          sudo apt-get update -qq
+          ( cd "${SHIM}/deb" && apt-get download qemu-user-static )
+          dpkg-deb -x "${SHIM}"/deb/*.deb "${SHIM}/root"
+          test -x "${SHIM}/root/usr/bin/qemu-arm-static" \
+            || { echo "::error::qemu-user-static no longer ships usr/bin/qemu-arm-static"; exit 1; }
+          ln -sf "${SHIM}/root/usr/bin/qemu-arm-static" "${SHIM}/bin/qemu-arm"
+          # Same two spellings build-elspi.sh:95 accepts: Ubuntu builds this
+          # as static-PIE, which is still static.
+          file -L "${SHIM}/bin/qemu-arm" | grep -Eq "statically linked|static-pie linked" \
+            || { echo "::error::${SHIM}/bin/qemu-arm is not static"; file -L "${SHIM}/bin/qemu-arm"; exit 1; }
+          echo "${SHIM}/bin" >> "${GITHUB_PATH}"
+
+      # ospi's proven shape. Registers binfmt handlers (with the F flag, so
+      # they keep working inside the privileged build container) for the
+      # emulated armhf chroot.
+      - uses: docker/setup-qemu-action@v3
+
+      # build-docker.sh DIRECTLY, not build-elspi.sh: the wrapper hardcodes
+      # `-c elspi.conf`, while CI needs ci.conf. ci.conf sources elspi.conf,
+      # so the only differences are ci.conf's own (xz -9).
+      #
+      # NO KEY IS PASSED IN, and none is needed: the image is keyless
+      # (elspi.conf's SSH block), so nothing is forwarded into the container
+      # beyond what build-docker.sh forwards itself (GIT_HASH,
+      # build-docker.sh:149).
+      #
+      # REFLEX_SOURCE/REFLEX_RELEASE/REFLEX_ORIGIN_URL are deliberately NOT
+      # forwarded: unset, elspi.conf's defaults apply inside the container
+      # (public reflex repo, newest full release), which is what a clean runner
+      # should build.
+      #
+      # PRESERVE_CONTAINER is left at build-docker.sh's default (0): the
+      # preserved rootfs matters for Tier 2 verification on a local build host, and it
+      # dies with the runner here anyway. deploy/ is copied out before the
+      # container is removed (build-docker.sh:163 then :172).
+      - name: build the image (build-docker.sh -c ci.conf)
+        run: ./build-docker.sh -c ci.conf
+
+      # Gate rather than trust the upload's glob: if-no-files-found only
+      # fails when NOTHING matches, so a build that exported no image but left
+      # a .info behind would upload green.
+      - name: exactly one image in deploy/
+        run: |
+          ls -la deploy/
+          n="$(find deploy -maxdepth 1 -name '*.img.xz' | wc -l)"
+          test "${n}" -eq 1 || { echo "::error::expected exactly one deploy/*.img.xz, found ${n}"; exit 1; }
+
+      # The image plus what pi-gen writes beside it: .info (package list, and
+      # the build sha make-os-list.sh reads), .bmap and the SBOM when present,
+      # and both build logs. The image's own manifest, /etc/elspi-image.json,
+      # is INSIDE the image, not here.
+      #
+      # os_list.json is NOT made here: its "url" field must name where the
+      # image is served from, which only the release job knows. A dispatch
+      # build has no such place; generate one next to the downloaded image with
+      # tools/make-os-list.sh, which needs no root and no network.
+      #
+      # compression-level 0: the image is already xz -9, so zipping it again
+      # costs minutes and saves nothing.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elspi-image-${{ github.sha }}
+          path: |
+            deploy/*.img.xz
+            deploy/*.info
+            deploy/*.bmap
+            deploy/*.sbom.xz
+            deploy/*.log
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    needs: build
+    # A PUSHED tag only. `github.ref_type == 'tag'` alone is not enough: a
+    # workflow_dispatch can be started ON a tag ref, and a dispatch must never
+    # publish.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # For tools/make-os-list.sh and tools/release-notes.sh at the tag.
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: elspi-image-${{ github.sha }}
+          path: deploy
+
+      # The url INSIDE os_list.json is the one Imager downloads the image
+      # from, so it is pinned to this release's own asset --
+      # releases/download/<tag>/<image> -- the form tools/release-notes.sh's
+      # header specifies. That resolves while this is a pre-release and after
+      # it is promoted, and keeps resolving after a newer release ships.
+      # (make-os-list.sh's --url is the IMAGE's url, not the list's.)
+      #
+      # The 2 GiB gate is GitHub's per-asset limit, checked here so an image
+      # that has outgrown it fails with a sentence instead of an upload error.
+      - name: write os_list.json for this release
+        run: |
+          set -euo pipefail
+          n="$(find deploy -maxdepth 1 -name 'image_*.img.xz' | wc -l)"
+          test "${n}" -eq 1 || { echo "::error::expected exactly one deploy/image_*.img.xz, found ${n}"; exit 1; }
+          IMG="$(find deploy -maxdepth 1 -name 'image_*.img.xz')"
+          BASE="$(basename "${IMG}")"
+          INFO="deploy/${BASE#image_}"
+          INFO="${INFO%.img.xz}.info"
+          test -f "${INFO}" || { echo "::error::no ${INFO} beside ${IMG}"; exit 1; }
+          size="$(stat -c %s "${IMG}")"
+          test "${size}" -lt 2147483648 || { echo "::error::${BASE} is ${size} bytes, over GitHub's 2 GiB release-asset limit"; exit 1; }
+          URL="https://github.com/${GH_REPO}/releases/download/${TAG}/${BASE}"
+          ./tools/make-os-list.sh "${IMG}" --url "${URL}" --out deploy/os_list.json
+          # Read the url back out of what was written rather than trusting
+          # the argument that went in.
+          got="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["os_list"][0]["url"])' deploy/os_list.json)"
+          test "${got}" = "${URL}" || { echo "::error::os_list.json url is ${got}, expected ${URL}"; exit 1; }
+          { echo "IMG=${IMG}"; echo "INFO=${INFO}"; echo "IMG_URL=${URL}"; } >> "${GITHUB_ENV}"
+
+      # DRAFT FIRST, published only once every asset is attached. A release
+      # that goes public and then fails an upload would be a release page with
+      # no os_list.json, and Imager pointed at it gets a 404. The three assets
+      # are exactly the ones tools/release-notes.sh says a release must carry.
+      - name: create the pre-release
+        run: |
+          set -euo pipefail
+          tools/release-notes.sh "${TAG}" --repo-slug "${GH_REPO}" > "${RUNNER_TEMP}/notes.md"
+          gh release create "${TAG}" --verify-tag --draft --prerelease \
+            --title "elspi ${TAG}" --notes-file "${RUNNER_TEMP}/notes.md" \
+            "${IMG}" deploy/os_list.json "${INFO}"
+          gh release edit "${TAG}" --draft=false
+
+      # Read the published release back the way Imager will: anonymously,
+      # through the redirects. The list must come back byte-identical to what
+      # was written, and the image url inside it must answer. A pre-release is
+      # not behind releases/latest/, so the pinned list URL is the one to test.
+      - name: read the release back
+        run: |
+          set -euo pipefail
+          LIST_URL="https://github.com/${GH_REPO}/releases/download/${TAG}/os_list.json"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o "${RUNNER_TEMP}/fetched.json" "${LIST_URL}"
+          cmp "${RUNNER_TEMP}/fetched.json" deploy/os_list.json || { echo "::error::${LIST_URL} differs from the os_list.json that was uploaded"; exit 1; }
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -r 0-0 -o /dev/null "${IMG_URL}" \
+            || { echo "::error::image url inside os_list.json does not answer: ${IMG_URL}"; exit 1; }
+          echo "::notice title=release::${TAG} published as a PRE-release. Promote after a card from it provisions clean: gh release edit ${TAG} --prerelease=false --latest"

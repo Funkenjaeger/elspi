@@ -1,0 +1,94 @@
+site_name: elspi
+site_description: The SD-card image for the Raspberry Pi that runs Reflex on a lathe
+repo_url: https://github.com/Funkenjaeger/elspi
+repo_name: Funkenjaeger/elspi
+edit_uri: edit/master/docs/
+# Two licenses, and the footer says which is which: this is a fork, and the
+# additions are not under upstream's terms. LICENSE-elspi names the split.
+copyright: "elspi additions: MIT (LICENSE-elspi) &middot; upstream pi-gen: BSD 3-Clause (LICENSE)"
+
+# Set in the same change that added the Pages workflow. NOTE: the workflow
+# existing is not the same as Pages being ENABLED -- that is a repository
+# setting (Settings -> Pages -> Source: GitHub Actions) and it has not been
+# turned on. Until it is, the deploy job is the thing that fails, not this.
+site_url: https://funkenjaeger.github.io/elspi/
+
+# Build output goes under deploy/, which upstream pi-gen's .gitignore already
+# ignores wholesale (`deploy/*`). Deliberate: the default `site/` would need a
+# new .gitignore entry, and .gitignore is an UPSTREAM file -- docs/design/fork.md's
+# merge-surface rule keeps "upstream files edited: none" true, so a generated
+# directory is not worth spending the first edit on.
+site_dir: deploy/site
+
+# docs_dir is the repo root docs/. The design notes moved INTO it (2026-09-13)
+# rather than being mirrored there: MkDocs cannot reference a file outside its
+# docs_dir, and a mirror is exactly where a document and its copy drift.
+docs_dir: docs
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: cyan
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.keys
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Using a card:
+      - Flashing a card: flashing.md
+      - Provisioning: provisioning.md
+      - Site layer: site-layer.md
+      - First load (SWD): swd-first-load.md
+  - Design notes:
+      - Where the image ends: design/seam.md
+      - This is not pi-gen: design/fork.md
+      - Runtime inventory: design/runtime-inventory.md
+      - Verifying the image: design/verification.md
+  - Changelog: changelog.md

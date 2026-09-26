@@ -1,0 +1,69 @@
+#!/bin/bash
+# elspi-usb-mount-name -- turn a USB filesystem LABEL (or a kernel device
+# name, as a fallback) into a safe, collision-free directory name to mount
+# under /media.
+#
+#   elspi-usb-mount-name <label> <kernel-name>
+#
+# Called from stage-elspi/13-usb-automount/files/90-elspi-usb-automount.rules
+# as a udev PROGRAM=; its stdout becomes ELSPI_MOUNT_NAME, which the same
+# rule then uses as the systemd-mount target: /media/$ELSPI_MOUNT_NAME.
+#
+# Kept as its own file, not inlined in the udev rule, specifically so
+# tests/test-usb-automount-name.sh can drive it directly without a udev
+# environment.
+#
+# ELSPI_MEDIA_ROOT overrides the collision-check root for that test;
+# production callers (the udev rule) never set it and get the real /media.
+
+set -u
+
+MEDIA_ROOT="${ELSPI_MEDIA_ROOT:-/media}"
+
+LABEL="${1:-}"
+KERNEL="${2:?usage: elspi-usb-mount-name <label> <kernel-name>}"
+
+# Keep only the characters the caller asked for; everything else becomes
+# '_'. `tr -c SET '_'` maps every byte NOT in SET to '_', which is exactly
+# "sanitize to [A-Za-z0-9._-]".
+sanitize() {
+	printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
+}
+
+name="$(sanitize "${LABEL}")"
+
+# An empty label, or a label made ENTIRELY of characters the sanitizer
+# strips (so it collapses to a run of underscores) is treated the same way:
+# neither is a label a human chose, so fall back to the kernel name.
+if [ -z "${LABEL}" ] || [ -z "${name//_/}" ]; then
+	name="$(sanitize "${KERNEL}")"
+fi
+
+# "." and ".." are made up entirely of characters the sanitizer above lets
+# through UNCHANGED, so they survive it intact -- and /media/.. resolves
+# outside /media. The character-class filter cannot catch this by
+# construction; it has to be rejected by name, explicitly, after the fact.
+case "${name}" in
+.|..)
+	name="$(sanitize "${KERNEL}")"
+	;;
+esac
+# Belt and suspenders: if the KERNEL-derived fallback is itself empty, or is
+# ALSO "." or "..", fall back to a fixed, always-safe name.
+case "${name}" in
+.|..|"")
+	name="usb-device"
+	;;
+esac
+
+# Collisions: two sticks that land on the same name (same label, or the same
+# fallback) must not be handed the same mount point. Append -2, -3, ...
+# until a name that is not already in use under MEDIA_ROOT is found.
+base="${name}"
+i=1
+while [ -e "${MEDIA_ROOT}/${name}" ]; do
+	i=$((i + 1))
+	name="${base}-${i}"
+done
+
+printf '%s\n' "${name}"

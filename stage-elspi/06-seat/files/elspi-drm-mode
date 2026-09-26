@@ -1,0 +1,133 @@
+#!/bin/bash
+# elspi-drm-mode -- select how reflex-ui obtains DRM master.
+#
+# WHY THIS EXISTS: whether a given mechanism actually takes DRM master cannot
+# be tested without a GPU, so the verification harness cannot answer it and CI
+# never will. It is settled on the real Pi. An elspi machine has no terminal --
+# its only local interface is the touchscreen -- so every wrong guess that
+# requires a reflash costs a lathe power cycle. This makes an attempt cost one
+# SSH command instead.
+#
+#   elspi-drm-mode                 # show current mode
+#   elspi-drm-mode first-opener    # default; plain system unit, no privilege
+#   elspi-drm-mode cap-sys-admin   # last resort; narrower than root, not narrow
+#
+# After switching:  systemctl restart reflex-ui
+#
+# THE LADDER IS TWO RUNGS NOW. There used to be a third, `logind-seat`:
+# autologin on tty1 plus a `systemd --user` unit, so logind would hand the
+# device to seat0's active session. It existed as the fallback for the case
+# where the first-opener hypothesis was wrong. It was not wrong -- first-opener
+# took the display on hardware 2026-09-13 at the first attempt -- so the seat
+# machinery was DELETED rather than maintained, which is what the 2026-09-13
+# flash-session notes said to do with it. The name is refused explicitly below
+# rather than falling into "unknown mode", because an old note, an old field
+# sheet or a printed ladder is the likeliest reason anyone types it.
+
+set -euo pipefail
+
+MODES_DIR=/usr/share/elspi/drm-modes
+STATE_DIR=/etc/elspi
+DROPIN_DIR=/etc/systemd/system/reflex-ui.service.d
+DROPIN="${DROPIN_DIR}/10-drm-mode.conf"
+# Residue of the deleted rung. Nothing installs these any more; they are
+# removed on every switch so an image that was once flipped to logind-seat
+# cannot keep an autologin nobody can log in to undo.
+GETTY_DROPIN_DIR=/etc/systemd/system/getty@tty1.service.d
+GETTY_DROPIN="${GETTY_DROPIN_DIR}/10-elspi-autologin.conf"
+USER_UNIT_DIR=/etc/systemd/user
+USER_UNIT="${USER_UNIT_DIR}/reflex-ui.service"
+SERVICE_USER=default
+
+VALID_MODES="first-opener cap-sys-admin"
+# Modes this image once had and deliberately no longer has.
+RETIRED_MODES="logind-seat"
+
+usage() {
+	echo "usage: elspi-drm-mode [${VALID_MODES// /|}]"
+	exit 2
+}
+
+current_mode() {
+	if [ -r "${STATE_DIR}/drm-mode" ]; then
+		cat "${STATE_DIR}/drm-mode"
+	else
+		echo "(unset)"
+	fi
+}
+
+if [ $# -eq 0 ]; then
+	echo "current DRM mode: $(current_mode)"
+	echo "available:        ${VALID_MODES}"
+	exit 0
+fi
+
+[ $# -eq 1 ] || usage
+MODE="$1"
+
+case " ${RETIRED_MODES} " in
+	*" ${MODE} "*)
+		echo "elspi-drm-mode: mode '${MODE}' was DELETED from this image." >&2
+		echo "  first-opener was verified on hardware 2026-09-13, so the logind-seat" >&2
+		echo "  rung -- tty1 autologin plus a systemd --user unit -- was removed" >&2
+		echo "  rather than maintained." >&2
+		echo "  The modes are: ${VALID_MODES}" >&2
+		exit 2
+		;;
+esac
+
+case " ${VALID_MODES} " in
+	*" ${MODE} "*) ;;
+	*)
+		echo "elspi-drm-mode: unknown mode '${MODE}'" >&2
+		echo "  the modes are: ${VALID_MODES}" >&2
+		usage
+		;;
+esac
+
+[ "$(id -u)" -eq 0 ] || { echo "elspi-drm-mode: must run as root" >&2; exit 1; }
+
+# GATE: the fragment must exist before we claim to have applied anything.
+SRC="${MODES_DIR}/${MODE}.conf"
+[ -f "${SRC}" ] || { echo "elspi-drm-mode: missing fragment ${SRC}" >&2; exit 1; }
+
+# GATE: the delta layer must have installed the system unit first. Without it
+# there is nothing to drop into, and a silent success here would look like the
+# mode was applied.
+SYS_UNIT=/etc/systemd/system/reflex-ui.service
+[ -f "${SYS_UNIT}" ] || {
+	echo "elspi-drm-mode: ${SYS_UNIT} not installed yet." >&2
+	echo "  The DELTA layer installs reflex-ui.service. Run this after it." >&2
+	exit 1
+}
+
+install -d -m 0755 "${STATE_DIR}" "${DROPIN_DIR}"
+install -m 0644 "${SRC}" "${DROPIN}"
+
+# Clear the per-mode markers. The only thing that ever read them was the
+# logind-seat fragment's ConditionPathExists, which is gone, so none is
+# written back -- /etc/elspi/drm-mode is the state now.
+rm -f "${STATE_DIR}"/drm-mode.*
+printf '%s\n' "${MODE}" > "${STATE_DIR}/drm-mode"
+
+# Both remaining modes are plain system units. Anything the deleted seat rung
+# may have left behind on a machine that was once switched to it gets removed,
+# and the system unit is the thing that starts the app.
+rm -f "${GETTY_DROPIN}" "${USER_UNIT}"
+rmdir --ignore-fail-on-non-empty "${GETTY_DROPIN_DIR}" 2>/dev/null || true
+systemctl daemon-reload
+systemctl --global disable reflex-ui.service >/dev/null 2>&1 || true
+systemctl enable reflex-ui.service >/dev/null 2>&1 || true
+
+# POST-WRITE CHECKS
+[ ! -e "${GETTY_DROPIN}" ] || { echo "FAILED: autologin drop-in still present" >&2; exit 1; }
+
+# The drop-in systemd will actually read. There is no longer a mode in which
+# the system unit is inert, so this is a hard failure rather than a warning.
+if ! systemctl cat reflex-ui.service 2>/dev/null | grep -q "drm-mode.conf"; then
+	echo "FAILED: drop-in was written but systemd is not reading it" >&2
+	exit 1
+fi
+
+echo "DRM mode set to: $(current_mode)"
+echo "next: systemctl restart reflex-ui"

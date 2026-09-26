@@ -1,0 +1,55 @@
+# elspi: automount USB filesystem partitions for the reflex commissioning
+# bundle's Export/Import buttons.
+#
+# CONSUMER: ui/reflex/utils/usb.py's list_removable() (integration branch),
+# which reads /proc/mounts and treats anything mounted under /media or
+# /run/media as removable media -- a path-prefix rule, no udisks, no
+# lsblk. export_bundle() and find_bundles() both build on it. Mounting under
+# /media below is what makes a plugged-in stick visible to that function; no
+# reflex code changes with this stage.
+#
+# @@SERVICE_UID@@ / @@SERVICE_GID@@ are substituted by
+# stage-elspi/13-usb-automount/00-run.sh from the SERVICE USER's actual
+# /etc/passwd entry on THIS image -- never a literal number chosen here.
+# That is what makes the service user able to WRITE the export; a rule
+# hardcoding some other uid would mount the stick with the wrong owner and
+# the Setup screen's write would fail with EACCES.
+#
+# systemd-mount, NOT `mount` or udisks2: systemd-udevd.service ships
+# PrivateMounts=yes (its own unit file), so a `mount` invoked directly from
+# this rule's RUN+= would only take effect inside udevd's own private mount
+# namespace and would never become visible to reflex-ui, or to anyone
+# looking at `findmnt` outside udevd. systemd-mount instead asks systemd
+# (PID 1, which is NOT namespace-isolated this way) to perform the mount
+# over its D-Bus API and returns immediately -- --no-block is not a
+# performance nicety here, it is required: udev(7) RUN{type} documents that
+# RUN programs "can only be used for very short-running foreground tasks",
+# and without --no-block systemd-mount blocks until the mount job finishes.
+#
+# --bind-device is the easiest ingredient in this rule to leave out while
+# still looking complete, and doing so breaks removal, not addition:
+# systemd-mount(1) states that WITHOUT it, "the automount unit stays
+# around, and subsequent accesses will block until backing device is
+# replugged". WITH it, the automount unit is bound to the backing device's
+# lifetime and is stopped automatically when the device vanishes -- that
+# stop is the "unmount cleanly" this stage promises, not a separate
+# ACTION=="remove" rule calling `systemd-mount --umount` (which would be
+# racing a device node udev can no longer resolve by the time a remove
+# event for it fires). --collect on top unloads the resulting
+# stopped/failed transient units instead of leaving them as clutter for
+# `systemctl list-units` after every unplug.
+#
+# Filesystems: vfat and exfat are kernel drivers (this image's rpi kernel,
+# see docs/design/runtime-inventory.md); ntfs here means ntfs-3g (FUSE),
+# already installed by stage2/01-sys-tweaks/00-packages for its own
+# reasons -- NOT the newer in-kernel ntfs3 driver. See
+# stage-elspi/13-usb-automount/00-run.sh and docs/provisioning.md for what
+# was and was not independently verified in this build.
+#
+# uid=/gid= are NUMBERS on purpose: the vfat and exfat kernel mount-option
+# parsers accept only numeric uid=/gid=, not usernames, which is the whole
+# reason the substitution above exists instead of writing `uid=@@SERVICE_USER@@`.
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_BUS}=="usb", ENV{ID_FS_USAGE}=="filesystem", ENV{ID_FS_TYPE}=="vfat|exfat|ntfs", \
+	PROGRAM="/usr/local/lib/elspi/elspi-usb-mount-name '$env{ID_FS_LABEL}' '$kernel'", \
+	ENV{ELSPI_MOUNT_NAME}="%c", \
+	RUN+="/usr/bin/systemd-mount --no-block --automount=yes --bind-device --collect -o uid=@@SERVICE_UID@@,gid=@@SERVICE_GID@@,umask=022,nosuid,nodev,noexec $devnode /media/$env{ELSPI_MOUNT_NAME}"

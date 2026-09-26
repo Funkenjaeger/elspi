@@ -1,0 +1,16 @@
+# Boot splash.
+#
+# cmdline.txt carries "quiet splash logo.nologo plymouth.ignore-serial-consoles"
+# to match the live machine; those tokens only mean anything if Plymouth is
+# actually installed, so it is named here rather than assumed.
+#
+# NOTE for 06-seat: Plymouth's DRM renderer takes DRM MASTER. That is why the
+# reflex-ui drop-in orders After=plymouth-quit-wait.service. Installing
+# Plymouth and forgetting the ordering is the most likely way to produce a
+# black screen on a machine that has no terminal to debug it from.
+#
+# Custom splash ART is deliberately NOT here. The theme stays stock: art is
+# cosmetic, and shipping a placeholder would make it look done.
+
+plymouth
+plymouth-themes

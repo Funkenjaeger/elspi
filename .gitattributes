@@ -1,0 +1,9 @@
+# This repository builds a Linux disk image. Every file in it is a shell script,
+# a config fragment, or a systemd unit that gets executed on Debian — including
+# from a Windows checkout via WSL or Docker.
+#
+# Git for Windows ships with core.autocrlf=true in its SYSTEM config, which
+# rewrites LF to CRLF on checkout. A shell script with CRLF line endings fails at
+# runtime with "bad interpreter: /bin/bash^M", which does not name line endings
+# as the cause. Pin LF here so the setting cannot reach this repository.
+* text=auto eol=lf

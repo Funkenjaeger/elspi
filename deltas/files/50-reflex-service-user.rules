@@ -1,0 +1,21 @@
+// Installed by elspi (deltas/01-converge.sh); belongs to the image's
+// service-user stage. DO NOT hand-edit on the machine.
+//
+// The reflex UI runs as the service user under systemd with NO logind
+// session, so polkit classifies it as neither "active" nor "inactive" and
+// every NetworkManager action falls to its "any" default -- "no" for
+// enable-disable-wifi, which the Network screen exercises at startup and
+// which killed the app on the first non-root card (2026-09-13,
+// "Not authorized to perform this operation"). Debian's shipped rule
+// (org.freedesktop.NetworkManager.rules) covers only settings.modify.system
+// and only for a local ACTIVE session, so group netdev does not help here.
+//
+// Scope: the whole NetworkManager action namespace (radio, scan, connection
+// add/up/delete, network-control) for exactly the service user. This is
+// the machine's appliance UI; it IS the network operator. Nothing else.
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0 &&
+        subject.user === "default") {
+        return polkit.Result.YES;
+    }
+});
