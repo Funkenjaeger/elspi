@@ -114,6 +114,26 @@ jobs:
           echo "ran $n delta contract test(s)"
           test "$n" -gt 0
 
+      # tools/promote-release.ps1 dot-sourced and driven against on-disk
+      # fixtures (gh, git and Read-Host replaced by fakes of the same name);
+      # no network, no real GitHub release. ubuntu-latest carries pwsh
+      # preinstalled. Run the way the header says: `pwsh tests\...ps1`, exit
+      # 0/1, one PASS/FAIL line per case.
+      - name: promote-release.ps1 contract (pwsh)
+        shell: pwsh
+        run: tests/test-promote-release.ps1
+
+      # tests/test-flash-test-build.ps1 is NOT run here. Verified by hand
+      # (native Linux pwsh 7.4.6, WSL/Ubuntu, 2026-09-26): it dies with an
+      # unhandled exception, not a failing assertion, because
+      # tools/flash-test-build.ps1's dry-run tail (Write-DryRunTail) always
+      # calls ConvertTo-WslPath on its cache paths to print the `wsl`
+      # command it would run -- and on a real Linux path (e.g.
+      # /tmp/xxx/make-os-list.sh) that throws "not an absolute Windows
+      # path" by design, every time, for both the GitHub and Forgejo dry
+      # runs. That is the tool genuinely assuming Windows+WSL, not a gap in
+      # the test's mocking, so it is not something to fake out here.
+
       # NOT A PASS/FAIL GATE HERE, and it says so out loud.
       #
       # test-lockfile-drift.sh compares stage-elspi/08-venv/files/{pyproject
