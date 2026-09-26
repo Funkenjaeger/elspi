@@ -65,3 +65,20 @@ fallback logic, the tty check (03-interactive.sh); the `--app`/mutual-exclusivit
 `run`, `install`, `mkdir`, `mv`, `cp`, `chown`, or any other write. None needed to stay
 behind `need_root` on those grounds, so this entry records the check rather than a
 change: the bound's "list it in the report instead of moving it" clause did not fire.
+
+## 2026-09-26 first-boot-ui
+
+Branch `feat/first-boot-ui`: "a fresh elspi card boots straight into the UI", items 1-4
+of the 2026-09-13 decision.
+
+### The vendored reflex dependency set is bumped to v1.2.0 (the branch's first commit)
+
+`stage-elspi/08-venv/files/{REFLEX_COMMIT,pyproject.toml,uv.lock}` pinned
+`v1.2.0-rc.3` (`43ac7c5`). Now `REFLEX_COMMIT` is `f776eae0a1782ede3e7a3882ce7ad85742ebff20`
+(tag `v1.2.0`, released 2026-09-25) and both files are reflex's `ui/pyproject.toml` and
+`ui/uv.lock` at that tag, byte-identical (same git blob ids). The only dependency change
+is `segno` (added in reflex 2026-09-17 for the device-flow QR). Why: Evan's gate of
+2026-09-22 was "cut v1.2.0 from main BEFORE the first image bake", so the image the
+first card is baked from pairs its venv with v1.2.0 — the same release `10a-app-checkout`
+selects as the newest full release — rather than with a pre-release two weeks older.
+`tests/test-lockfile-drift.sh` against a checkout of reflex at `v1.2.0`: `RESULT: in sync`.
