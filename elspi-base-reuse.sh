@@ -9,6 +9,13 @@
 #   bash elspi-base-reuse.sh --print-inputs   # the paths the fingerprint reads
 #   bash elspi-base-reuse.sh --check-configs  # the config guard, below
 #
+# --print-inputs IS AN INTERFACE (2026-09-26). A nightly pre-warm on the
+# self-hosted runner runs it on an exported copy of the branch head to decide
+# whether the base needs rebuilding. Keep this file at the repo root, keep the
+# option name, and keep the output one repo-relative path per line. If any of
+# those change, the pre-warm cannot list the inputs and falls back to
+# rebuilding every night.
+#
 # WHY. stage0-2 are pi-gen's stock Lite base and, with arm64 emulated under
 # qemu, the dominant cost of a build. Nothing elspi changes between builds
 # touches them, so on a self-hosted runner with a persistent work volume they
