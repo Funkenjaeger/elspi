@@ -103,6 +103,13 @@ jobs:
       - name: base-reuse decision
         run: bash tests/test-base-reuse.sh
 
+      # docs/swd-first-load.md against the firmware-dev substage's package
+      # lists, read the way pi-gen reads them. It was red, unseen, from
+      # c2f1902 (the compiler moved into 00-packages-nr) until it was added
+      # here on 2026-09-27.
+      - name: SWD first-load doc matches the baked toolchain
+        run: bash tests/test-swd-doc.sh
+
       # deltas/tests/*.sh, driven by the glob rather than by a list, so a new
       # contract test runs here the day it lands. The loop asserts it found
       # something: an empty glob would otherwise pass silently.
