@@ -186,9 +186,55 @@ build "${T6}"
 echo "     $(logline "${T6}")"
 check "reverted inputs do NOT reuse the half-built base" mode_is "${T6}" FULL
 
-# --- 7. host context: sourcing changes no files ------------------------------
+# --- 7. config content: comments/blanks stripped, everything else counts ----
+# ci.conf is on the source stack (elspi.conf -> ci.conf -> ci-test.conf, the
+# tree's mounted config) and is neither the helper nor build.sh, so it gets
+# the new stripping. Give its settings line a trailing comment up front so
+# case (d) can change just the comment text later without touching the value.
 echo
-echo "== 7. host context (build-docker.sh:52): no BASE_DIR, under set -eu"
+echo "== 7. config content: whole-line comments and blank lines don't count, everything else does"
+T7c="$(make_tree confstrip)"
+CONF="${T7c}/pi-gen/ci.conf"
+sed 's/^COMPRESSION_LEVEL=9$/COMPRESSION_LEVEL=9  # baseline note/' "${CONF}" > "${CONF}.new"
+mv "${CONF}.new" "${CONF}"
+build "${T7c}"
+check "7 baseline: fresh tree is FULL"            mode_is "${T7c}" FULL
+
+echo "  -- (a) a comment-only change to a config keeps REUSE"
+build "${T7c}"
+check "precondition: unchanged tree reuses"       mode_is "${T7c}" REUSE
+echo "# a brand-new whole-line comment, changes nothing that matters" >> "${CONF}"
+build "${T7c}"
+echo "     $(logline "${T7c}")"
+check "(a) comment-only change -> REUSE"          mode_is "${T7c}" REUSE
+
+echo "  -- (b) a blank-line-only change to a config keeps REUSE"
+printf '\n   \n' >> "${CONF}"
+build "${T7c}"
+echo "     $(logline "${T7c}")"
+check "(b) blank-line-only change -> REUSE"       mode_is "${T7c}" REUSE
+
+echo "  -- (c) changing a setting VALUE in a config forces FULL"
+sed 's/COMPRESSION_LEVEL=9  # baseline note/COMPRESSION_LEVEL=8  # baseline note/' "${CONF}" > "${CONF}.new"
+mv "${CONF}.new" "${CONF}"
+build "${T7c}"
+echo "     $(logline "${T7c}")"
+check "(c) setting value change -> FULL"          mode_is "${T7c}" FULL
+check "(c) reason is a mismatch"                  grep -q 'FULL (fingerprint mismatch' "${T7c}/out"
+
+echo "  -- (d) a change to a TRAILING comment on a settings line forces FULL"
+build "${T7c}"
+check "precondition: rebuilt tree reuses again"   mode_is "${T7c}" REUSE
+sed 's/COMPRESSION_LEVEL=8  # baseline note/COMPRESSION_LEVEL=8  # different note/' "${CONF}" > "${CONF}.new"
+mv "${CONF}.new" "${CONF}"
+build "${T7c}"
+echo "     $(logline "${T7c}")"
+check "(d) trailing-comment-only change on a settings line -> FULL" mode_is "${T7c}" FULL
+check "(d) reason is a mismatch"                  grep -q 'FULL (fingerprint mismatch' "${T7c}/out"
+
+# --- 8. host context: sourcing changes no files ------------------------------
+echo
+echo "== 8. host context (build-docker.sh:52): no BASE_DIR, under set -eu"
 T7="$(make_tree host)"
 mkdir -p "${T7}/pi-gen/deploy"
 echo keep > "${T7}/pi-gen/deploy/image_x-elspi.img.xz"

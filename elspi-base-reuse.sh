@@ -88,6 +88,23 @@ _elspi_base_workdir() {
 #     when ci-test.conf sources it), ${BASE_DIR}/config if build.sh:158-161
 #     sourced one, and ELSPI_SITE_CONF -- anything set after this point by a
 #     config that sources elspi.conf is covered by that config's content.
+#     For these config files ONLY, hashed with whole-line comments (lines
+#     that are a '#' after optional leading whitespace) and blank/
+#     whitespace-only lines removed first.
+#
+#     WHY (2026-09-26). 1116b04 changed only comments in ci.conf/ci-test.conf
+#     -- describing a release flow that had already changed, not behavior --
+#     and that forced a full base rebuild (about 47 min emulated) on a
+#     self-hosted runner: comment text does not shape stage0-2.
+#
+#     WHAT STILL COUNTS. Any non-comment line, including a TRAILING comment
+#     on a settings line (e.g. `FOO=1  # note`): the strip only drops a line
+#     that is ENTIRELY a comment, or entirely blank, after stripping is
+#     applied line-by-line with sed, never a whole-file transform that could
+#     also touch a value. elspi-base-reuse.sh's own content (BASH_SOURCE[0])
+#     and build.sh's (the outermost script, already hashed raw above via the
+#     F loop) are excluded from this stripping and stay raw here too, since
+#     neither is a config file.
 _elspi_base_manifest() {
 	local p f h x n=0
 	for p in stage0 stage1 stage2 scripts build.sh Dockerfile elspi.conf elspi-base-reuse.sh; do
@@ -124,7 +141,11 @@ _elspi_base_manifest() {
 
 	for f in "${BASH_SOURCE[@]}" "${BASE_DIR}/config" "${ELSPI_SITE_CONF:-}"; do
 		[ -n "${f}" ] && [ -f "${f}" ] || continue
-		h="$(sha256sum < "${f}")" || return 1
+		if [ "${f}" = "${BASE_DIR}/elspi-base-reuse.sh" ] || [ "${f}" = "${BASE_DIR}/build.sh" ]; then
+			h="$(sha256sum < "${f}")" || return 1
+		else
+			h="$(sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "${f}" | sha256sum)" || return 1
+		fi
 		echo "C ${h%% *}"
 	done
 }
