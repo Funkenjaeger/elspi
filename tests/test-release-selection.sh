@@ -3,7 +3,7 @@
 #
 #   tests/test-release-selection.sh
 #
-# docs/design/seam.md's 2026-09-21 amendment is one sentence long and the whole
+# docs/design/seam.md's rule here is one sentence long and the whole
 # sentence is a negative: the image ships the latest FULL release, "not a
 # development rc.*, not a floating branch". A selection that PICKS correctly on
 # a tidy tag list proves almost nothing -- what has to be true is that it

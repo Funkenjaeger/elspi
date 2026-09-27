@@ -420,7 +420,7 @@ printf '#!/bin/bash\n# fixture stub: elspi-usb-mount-name\nprintf "%%s\\n" "${1:
 chmod 0755 "${DEST}/usr/local/lib/elspi/elspi-usb-mount-name"
 
 # --- the baked application checkout (stage-elspi/10a-app-checkout) ---------
-# docs/design/seam.md amendment 2026-09-21: the image ships the app as a REAL
+# docs/design/seam.md: the image ships the app as a REAL
 # GIT CHECKOUT at a full release tag, carrying tag history, owned by the
 # service user.
 #

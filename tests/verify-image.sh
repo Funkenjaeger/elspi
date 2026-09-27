@@ -159,12 +159,12 @@ VENV="$(jget "['paths']['venv']")"
 # THAT SECOND CLAUSE CHANGED 2026-09-21. It used to read "app_root is where the
 # DELTA puts the checkout and does NOT exist in a freshly built image. Checking
 # app_root here would fail on every correct image -- the distinction is the
-# seam." docs/design/seam.md's ratified amendment moves the checkout into the
+# seam." docs/design/seam.md now has the checkout moved into the
 # image, so the opposite is now true: an image with nothing at app_root is a
 # build that lost its application, and the section below is what says so.
 APP_PARENT="$(jget "['paths']['app_parent']")"
 APP_ROOT="$(jget "['paths']['app_root']")"
-# The baked release (seam.md amendment 2026-09-21), read out of the image's own
+# The baked release (see docs/design/seam.md), read out of the image's own
 # declaration like everything else in this section.
 APP_RELEASE="$(jget "['baked_app']['release']")"
 APP_COMMIT="$(jget "['baked_app']['commit']")"
@@ -382,7 +382,7 @@ check "/usr/bin/git exists in the rootfs" rootfs_exists /usr/bin/git
 #              seed unit validates and fingerprints the Imager seed's keys
 #   passwd     phase 3 sets the service account's password; the account ships
 #              LOCKED, so without this the machine cannot be commissioned
-#   openocd    the firmware toolchain docs/design/seam.md call 3 bakes in unconditionally
+#   openocd    the firmware toolchain docs/design/seam.md bakes in unconditionally
 #   install    every file the delta layer puts in place
 #   visudo     converge validates each sudoers file BEFORE moving it in, and a
 #              malformed /etc/sudoers.d file breaks sudo for every user on a
@@ -419,7 +419,7 @@ else
 	bad "Kivy carries compiled extensions (.so)"
 fi
 
-# docs/design/seam.md call 1: the image ships the DEPENDENCIES, the delta ships the APP.
+# docs/design/seam.md: the image ships the DEPENDENCIES, the delta ships the APP.
 if found_any "${ROOTFS}${VENV}" -maxdepth 5 -iname 'reflex-*.dist-info'; then
 	bad "the reflex package is NOT in the image venv (it is a delta)"
 else
@@ -433,14 +433,14 @@ else
 	bad "uv is an ARM binary"
 fi
 
-# KNOWN GAP, not a failure: docs/design/seam.md ratified promoting Pillow to a runtime
-# dependency, and that fix belongs in the reflex repo. Until it lands, --no-dev
+# KNOWN GAP, not a failure: promoting Pillow to a runtime dependency has not
+# yet landed in the reflex repo. Until it lands, --no-dev
 # drops pillow and Kivy loses img_pil. Reported as UNKNOWN rather than PASS so
 # it cannot quietly become "fine".
 if found_any "${ROOTFS}${VENV}" -maxdepth 5 -iname 'pillow-*.dist-info'; then
 	ok "pillow present (img_pil provider available)"
 else
-	unknown "pillow ABSENT -- img_pil unavailable. docs/design/seam.md ratified promoting it to a runtime dep in the reflex repo; that has not landed."
+	unknown "pillow ABSENT -- img_pil unavailable. Promoting it to a runtime dep in the reflex repo has not landed."
 fi
 
 # The service user owns the WHOLE venv. reflex's in-app
@@ -455,13 +455,13 @@ check "${VENV} is wholly owned by ${SERVICE_USER} (the updater syncs into it as 
 	venv_owned_by_service_user
 
 # ---------------------------------------------------------------------------
-section "The baked application (seam.md amendment 2026-09-21)"
+section "The baked application (see docs/design/seam.md)"
 
-# RATIFIED 2026-09-21: "The image now ships the app, pinned to the latest FULL
+# docs/design/seam.md: "The image now ships the app, pinned to the latest FULL
 # release. Not a development rc.*, not a floating branch." Everything in this
 # section is a property ui/reflex/utils/updater.py already depends on -- any
 # one of them missing makes the updater refuse every update on a freshly
-# flashed card, which is the assumption the amendment rests on.
+# flashed card, which is the assumption this decision rests on.
 
 APP_DIR="${ROOTFS}${APP_ROOT}"
 SELECT_RELEASE="$(cd "$(dirname "$0")/.." && pwd)/stage-elspi/10a-app-checkout/files/select-release.sh"
@@ -666,7 +666,7 @@ if [ -x "${SELECT_RELEASE}" ] || [ -f "${SELECT_RELEASE}" ]; then
 	if bash "${SELECT_RELEASE}" check "${APP_RELEASE}" >/dev/null 2>&1; then
 		ok "the baked release ${APP_RELEASE} is a FULL release (not an rc.*, not a branch)"
 	else
-		bad "the baked release ${APP_RELEASE} is a FULL release -- the selection rule REFUSES it. seam.md 2026-09-21: never a development rc.*"
+		bad "the baked release ${APP_RELEASE} is a FULL release -- the selection rule REFUSES it. docs/design/seam.md: never a development rc.*"
 	fi
 else
 	unknown "cannot find ${SELECT_RELEASE}, so the baked release '${APP_RELEASE}' was NOT checked against the selection rule. This harness is being run from outside the repo."

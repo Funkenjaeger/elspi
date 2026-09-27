@@ -1,6 +1,6 @@
 # 10a-app-checkout — the application, baked at the latest full release
 
-`docs/design/seam.md`, **amendment 2026-09-21, ratified**: the image
+`docs/design/seam.md` decides this: the image
 ships the app pinned to the **latest FULL release** — never a development
 `rc.*`, never a branch tip. Full releases are infrequent and in-app updating
 closes the gap cheaply, so the image only has to be *a* good starting point
@@ -89,7 +89,7 @@ stage says so by name rather than passing quietly, and records the verdict in
 the manifest as `baked_app.updater_ready` and
 `baked_app.protocol_version_readable`, so the image declares its own
 limitation. It is **not** a build failure: which files a release contains is a
-property of the release, and the amendment is ratified. It resolves itself the
+property of the release, and docs/design/seam.md's decision stands. It resolves itself the
 day `v1.2.0` ships from `main`.
 
 ## Why the directory is called `10a`

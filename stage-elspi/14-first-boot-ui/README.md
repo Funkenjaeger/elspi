@@ -3,8 +3,8 @@
 *A fresh elspi card boots straight into the UI: no SSH, no mandatory backup.*
 Decided 2026-09-13; this substage was a trigger-only scaffold from
 2026-09-20 until 2026-09-26, when the converge/start branch was written.
-`DECISIONS.md`, "2026-09-26 first-boot-ui", has every choice below and its
-alternative.
+See `DECISIONS.md`'s "A fresh card boots into the UI, but not onto defaults"
+for the choice this rests on.
 
 ## What it installs
 
@@ -23,16 +23,16 @@ alternative.
    `v1.2.0-rc.5`) is what makes an unrestored card safe to start: the app
    latches "uncommissioned" once at startup, shows the UNCOMMISSIONED strip,
    and refuses every settings write until a restore or a deliberate dismissal.
-   `docs/design/seam.md`'s 2026-09-21 amendment makes that state the condition
-   for starting at first boot ("silent defaults are the one outcome this
-   amendment forbids"). No guard: `verdict=REFUSED_NO_GUARD`, nothing runs.
+   `docs/design/seam.md` makes that state the condition
+   for starting at first boot (silent defaults are the one outcome this
+   decision forbids). No guard: `verdict=REFUSED_NO_GUARD`, nothing runs.
 3. **Leaves a provisioned card alone.** If `reflex-ui.service` is already
    enabled, somebody provisioned it: `verdict=ALREADY_PROVISIONED`.
 4. **Runs converge** — `/usr/local/lib/elspi/deltas/01-converge.sh --app
    <app_root>` — with `UV_OFFLINE=1` and a private cache on `/run`.
    `10b-app-install` did the one networked step (installing the app into the
    venv) at build time and proved an offline re-sync succeeds, so first boot
-   is as hermetic as recovery (`seam.md` test 2). If converge fails after
+   is as hermetic as recovery (see `seam.md`). If converge fails after
    enabling the unit, the hook disables it again, so the next boot cannot
    start a half-converged app: `verdict=CONVERGE_FAILED`, retried next boot.
 5. **Starts** `reflex-ui.service` with `--no-block` (a oneshot waiting on

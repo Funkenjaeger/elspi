@@ -86,7 +86,7 @@ ask_yn() { # ask_yn <prompt> ; returns 0 for yes
 }
 
 # --- 1. the service account's password --------------------------------------
-# The image ships this account LOCKED (docs/design/seam.md call 2: no credential
+# The image ships this account LOCKED (docs/design/seam.md: no credential
 # repo, and the build's throwaway is revoked to a bare '!'). Locked means sudo
 # and password-SSH do not work, so this is usually the first thing needed.
 phase "1/4  password for ${SERVICE_USER}"
@@ -186,7 +186,7 @@ else
 fi
 
 # --- 4. firmware toolchain: THE ROLE QUESTION IS RETIRED --------------------
-# docs/design/seam.md call 3, RATIFIED WITH AN AMENDMENT, put the firmware BYTES
+# docs/design/seam.md put the firmware BYTES
 # in the image unconditionally (installing them at provision time would put a
 # package mirror back on the recovery path) and left the ENABLEMENT here as a
 # question -- where "enable the dev role" meant cloning reflex-fw and exposing
@@ -202,10 +202,10 @@ fi
 # (2026-09-13) it was exactly that: a request for a clone URL for a repo that
 # had not existed separately for four weeks.
 #
-# That page is NOT edited to match. It records the call as it was ratified; this
-# is the note that the call's mechanism was overtaken by the monorepo weld.
-# The DECISION it protects -- bytes baked unconditionally, never fetched at
-# provision time -- is untouched, and is what the first check below reports.
+# docs/design/seam.md's decision -- bytes baked unconditionally, never
+# fetched at provision time -- is untouched by the monorepo weld; only the
+# enablement question this script used to ask is retired. That decision is
+# what the first check below reports.
 #
 # What is left is a REPORT, not a decision, so it is not a prompt: the bytes
 # the seam promises, and whether the sources actually landed in this checkout.
@@ -214,7 +214,7 @@ if command -v openocd >/dev/null 2>&1 && command -v arm-none-eabi-gcc >/dev/null
 	ok "toolchain present in the image (openocd, arm-none-eabi-gcc) -- as designed"
 else
 	warn "toolchain NOT found. The image is supposed to bake gcc-arm-none-eabi,"
-	warn "  cmake and openocd in unconditionally (docs/design/seam.md call 3)."
+	warn "  cmake and openocd in unconditionally (docs/design/seam.md)."
 fi
 
 if [ -z "${APP_DIR}" ]; then

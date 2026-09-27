@@ -3,12 +3,12 @@
 # COMMISSIONING GUARD? Prints exactly `yes` or `no` and exits 0; exits 2 (and
 # prints nothing on stdout) when the question cannot be asked at all.
 #
-# WHY THIS IS THE GATE ON STARTING THE APP UNATTENDED. docs/design/seam.md's
-# 2026-09-21 amendment moved the app into the image and ratified, with it, the
+# WHY THIS IS THE GATE ON STARTING THE APP UNATTENDED. docs/design/seam.md
+# moved the app into the image and, with it, set the
 # condition for starting it on first boot: with /var/lib/reflex-config empty
 # the UI must come up in an EXPLICIT uncommissioned state, named on screen, and
 # no dispatcher may write a commissioning event until a restore or a deliberate
-# dismissal. "Silent defaults are the one outcome this amendment forbids."
+# dismissal. Silent defaults are the one outcome this decision forbids.
 #
 # That state is the APPLICATION's to show, not the image's: reflex latches it
 # once at startup (ui/reflex/utils/commissioning_state.py, called as the first

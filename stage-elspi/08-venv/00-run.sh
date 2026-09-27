@@ -2,7 +2,7 @@
 
 # THE VENV, WITH KIVY ALREADY PROVISIONED -- but not reflex itself.
 #
-# docs/design/seam.md call 1, RATIFIED 2026-08-22. This is the load-bearing decision in the
+# docs/design/seam.md. This is the load-bearing decision in the
 # whole split. On armhf, no cp313/armv7l Kivy wheel exists on PyPI, so
 # somebody compiles Kivy from sdist; on arm64 a prebuilt cp313/aarch64 wheel
 # exists instead. Either way, if that somebody (or something) is the DELTA
@@ -27,8 +27,8 @@
 # case -- but it does mean images want tagging against app versions rather than
 # floating. tests/test-lockfile-drift.sh is the tripwire.
 #
-# KNOWN GAP, decided but NOT applied: docs/design/seam.md also ratified "promote Pillow to
-# a runtime dependency in pyproject.toml". In the vendored lock, pillow is
+# KNOWN GAP, decided but NOT applied: promoting Pillow to a runtime dependency
+# in pyproject.toml has not landed in the reflex repo. In the vendored lock, pillow is
 # still in the DEV group only, so --no-dev drops it and Kivy loses the img_pil
 # provider. That fix belongs in the reflex repo, not here; until it lands, this
 # image reproduces the gap rather than papering over it.

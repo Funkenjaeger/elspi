@@ -89,6 +89,6 @@ nav:
   - Design notes:
       - Where the image ends: design/seam.md
       - This is not pi-gen: design/fork.md
-      - Runtime inventory: design/runtime-inventory.md
+      - Runtime requirements: design/runtime-inventory.md
       - Verifying the image: design/verification.md
   - Changelog: changelog.md

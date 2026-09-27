@@ -14,7 +14,7 @@
 # If the firmware ever gains C++ that links the standard library, add
 # libstdc++-arm-none-eabi-newlib here by name.
 #
-# The seam.md call 3 rule is unchanged: the bytes needed to BUILD the firmware
+# The docs/design/seam.md rule is unchanged: the bytes needed to BUILD the firmware
 # are baked unconditionally; only unused bytes are dropped.
 
 gcc-arm-none-eabi

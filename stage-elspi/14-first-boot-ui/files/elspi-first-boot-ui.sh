@@ -9,8 +9,8 @@
 #   2. asks /usr/local/lib/elspi/commissioning-guard whether that release
 #      carries reflex's COMMISSIONING GUARD -- the UNCOMMISSIONED strip and the
 #      write gate behind it. No guard, no start: starting a release without it
-#      would come up on silent defaults, which docs/design/seam.md's 2026-09-21
-#      amendment forbids by name;
+#      would come up on silent defaults, which docs/design/seam.md forbids by
+#      name;
 #   3. runs the image's own copy of the delta layer's CONVERGE phase
 #      (/usr/local/lib/elspi/deltas/01-converge.sh --app <checkout>) --
 #      OFFLINE (UV_OFFLINE=1): stage-elspi/10b-app-install already installed
@@ -104,7 +104,7 @@ APP="${R}${APP_ROOT}"
 GUARD_ANSWER="$("${GUARD}" "${APP}" 2>/dev/null)"
 case "${GUARD_ANSWER}" in
 	yes) log "commissioning guard: present in the baked release (it will show UNCOMMISSIONED until a restore or a deliberate dismissal)" ;;
-	no)  finish REFUSED_NO_GUARD "the release at ${APP_ROOT} predates reflex's commissioning guard (v1.2.0-rc.5); started unattended it would run on silent defaults, which docs/design/seam.md (amendment 2026-09-21) forbids. NOT started -- provision by hand (docs/provisioning.md)" ;;
+	no)  finish REFUSED_NO_GUARD "the release at ${APP_ROOT} predates reflex's commissioning guard (v1.2.0-rc.5); started unattended it would run on silent defaults, which docs/design/seam.md forbids. NOT started -- provision by hand (docs/provisioning.md)" ;;
 	*)   finish UNKNOWN "commissioning-guard could not judge ${APP_ROOT} (answer '${GUARD_ANSWER}'); NOT started" ;;
 esac
 

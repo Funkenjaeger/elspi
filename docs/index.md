@@ -51,8 +51,8 @@ Raspberry Pi OS **trixie** with an `arm64` userland, built from pi-gen
   brand-new controller board, before RS-485 updates are possible.
 * **[This is not pi-gen](design/fork.md)** — the fork contract, how upstream is
   merged, and the merge surface.
-* **[Runtime inventory](design/runtime-inventory.md)** — what the live machine
-  actually has, as measured rather than as remembered.
+* **[Runtime requirements](design/runtime-inventory.md)** — what `reflex-ui`
+  needs from the OS, as measured rather than as remembered.
 * **[Verifying the image](design/verification.md)** — the three test tiers, and
   the honest boundary of what each can prove.
 * **[Changelog](changelog.md)** — what each release is.

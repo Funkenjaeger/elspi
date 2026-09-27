@@ -9,7 +9,7 @@
 #    that its author can copy a path; one that reads the image's declaration
 #    and checks reality against it is checking the image.
 #
-# 2. THE DELTA LAYER gates on it. The sequencing trap from docs/design/runtime-inventory.md
+# 2. THE DELTA LAYER gates on it. The sequencing trap
 #    -- the log directory must exist and be writable BEFORE KCFG_KIVY_LOG_DIR
 #    points at it -- is enforceable only if the delta can ASK where that
 #    directory is instead of assuming. On a machine with no terminal, a delta
@@ -21,8 +21,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REFLEX_COMMIT="$(tr -d '[:space:]' < "${ROOTFS_DIR}/etc/elspi/reflex-lock-commit")"
 [ -n "${REFLEX_COMMIT}" ] || { echo "FATAL: reflex-lock-commit missing or empty"; exit 1; }
 
-# WHICH RELEASE OF THE APP IS BAKED IN (docs/design/seam.md amendment
-# 2026-09-21). READ, not re-derived: stage-elspi/10a-app-checkout measured it
+# WHICH RELEASE OF THE APP IS BAKED IN (see docs/design/seam.md).
+# READ, not re-derived: stage-elspi/10a-app-checkout measured it
 # when it did the clone and wrote these files, exactly as 08-venv writes
 # reflex-lock-commit above. A second `git describe` here could disagree with
 # the checkout it is describing -- one measurement, not two.
@@ -57,7 +57,7 @@ APP_INSTALLED_OFFLINE_OK="$(_read_fact reflex-app-installed-offline-ok "whether 
 # the selection uses, never a second regex.
 if ! bash "${HERE}/../10a-app-checkout/files/select-release.sh" check "${APP_RELEASE}" >/dev/null; then
 	echo "FATAL: the baked release '${APP_RELEASE}' is not a full release."
-	echo "       docs/design/seam.md's 2026-09-21 amendment: the image ships the"
+	echo "       docs/design/seam.md: the image ships the"
 	echo "       latest FULL release, never a development rc.*. Refusing to"
 	echo "       declare it in the manifest."
 	exit 1
@@ -211,8 +211,8 @@ fi
 
 # NOTE ON delta_layer_owns BELOW: "reflex monorepo checkout at
 # /home/default/projects/reflex" was its first entry for as long as the seam
-# put the app in the deltas. docs/design/seam.md's ratified 2026-09-21
-# amendment moves the checkout into the image, so it is declared as baked_app
+# put the app in the deltas. docs/design/seam.md now has the checkout moved
+# into the image, so it is declared as baked_app
 # above and is NO LONGER in that list. Leaving it would make one document
 # claim the same path for two different owners, and the delta layer reads this
 # file to decide what it still has to do.

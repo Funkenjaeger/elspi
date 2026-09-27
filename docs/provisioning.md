@@ -276,7 +276,7 @@ It ends by saying the application is **not started**, and why.
 
 *AMENDED 2026-09-21 — this is the PROVISION path and still holds here. It is
 no longer the whole story for a FRESH CARD: the image now carries the app
-(`docs/design/seam.md`, call 1 amendment 2026-09-21), and first boot starts it
+(see `docs/design/seam.md`), and first boot starts it
 GATED on commissioned config being present. An unrestored card must come up in
 an explicit uncommissioned state, never silently on in-code defaults.*
 

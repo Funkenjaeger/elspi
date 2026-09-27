@@ -56,7 +56,7 @@ jobs:
   #   arm64 -> ubuntu-24.04-arm  (native aarch64; qemu-aarch64 only if ever
   #                               routed to x86 again)
   # armhf deliberately stays on x86 + qemu: GitHub's arm64 runners do not
-  # reliably execute 32-bit ARM code (DECISIONS.md, 2026-09-26). A build.sh
+  # reliably execute 32-bit ARM code (see DECISIONS.md). A build.sh
   # whose ARCH line is missing, duplicated or unknown fails here, in seconds,
   # rather than 40 minutes into a build.
   #

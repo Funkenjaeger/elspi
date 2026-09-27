@@ -3,14 +3,13 @@
 # THE APPLICATION ITSELF -- a real git checkout of the reflex monorepo, at the
 # latest FULL release, at the app root the app's own unit already hardcodes.
 #
-# docs/design/seam.md, AMENDMENT 2026-09-21, RATIFIED: call 1's second
-# clause ("but not reflex-ui itself") is withdrawn. "The image now ships the
-# app, pinned to the latest FULL release. Not a development `rc.*`, not a
-# floating branch." Full releases are infrequent, and in-app updating closes
-# the gap cheaply, so the image only has to be *a* good starting point rather
-# than *the current* one.
+# docs/design/seam.md decides this: the image now ships the app, pinned to
+# the latest FULL release. Not a development `rc.*`, not a floating branch.
+# Full releases are infrequent, and in-app updating closes the gap cheaply,
+# so the image only has to be *a* good starting point rather than *the
+# current* one.
 #
-# THE THREE THINGS THAT AMENDMENT SAYS THE STAGE MUST DO -- two already held
+# THE THREE THINGS THAT DECISION SAYS THE STAGE MUST DO -- two already held
 # before this substage existed, and are ASSERTED here rather than redone:
 #
 #   1. a real git checkout carrying tag history, at a path writable by the
@@ -27,7 +26,7 @@
 # fw/" -- when <root>/.git, <root>/ui/pyproject.toml, <root>/fw/scripts/
 # modbus-flash.py or <root>/fw/scripts/reflex_image.py is missing. A source
 # export would therefore make EVERY in-app update fail on a freshly flashed
-# card, which is the one thing the amendment leans on.
+# card, which is the one thing this decision leans on.
 #
 # WHERE THE SOURCE COMES FROM: REFLEX_SOURCE, a BUILD PARAMETER (see
 # elspi.conf), never a URL hardcoded here. That is what keeps the build
@@ -139,7 +138,7 @@ else
 	if ! RELEASE_TAG="$(bash "${SELECT}" latest "${REFLEX_SOURCE}")"; then
 		echo "FATAL: no full release could be selected (message above)."
 		echo "       The build stops rather than baking a pre-release or a"
-		echo "       branch tip -- docs/design/seam.md amendment 2026-09-21."
+		echo "       branch tip -- see docs/design/seam.md."
 		exit 1
 	fi
 fi
@@ -267,7 +266,7 @@ git -C "${DEST}" show "${RELEASE_TAG}:ui/pyproject.toml" >/dev/null 2>&1 \
 #    stage worked. The two fw/scripts entries are reported LOUDLY BY NAME and
 #    are NOT fatal, because whether they exist is a property of the RELEASE,
 #    not of this build: they landed after v1.1.0. Making them fatal would
-#    veto the ratified amendment from inside the build script. The manifest
+#    veto docs/design/seam.md's decision from inside the build script. The manifest
 #    records the verdict so the image declares its own limitation instead of
 #    the build silently shrugging.
 UPDATER_READY=yes
@@ -288,7 +287,7 @@ for p in ui/pyproject.toml fw/scripts/modbus-flash.py fw/scripts/reflex_image.py
 			echo "           preflight until the app is updated by hand to a"
 			echo "           release that carries it. NOT a build failure: which"
 			echo "           files a release contains is the release's property,"
-			echo "           and docs/design/seam.md's amendment is ratified."
+			echo "           and docs/design/seam.md's decision stands."
 			;;
 		esac
 	fi

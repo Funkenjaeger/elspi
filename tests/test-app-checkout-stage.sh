@@ -169,7 +169,7 @@ else
 	fail "HEAD is not v1.0.0"
 fi
 
-# THE EXACT READ docs/design/seam.md names.
+# THE EXACT READ the in-app updater performs (see docs/design/seam.md).
 if git -C "${APP}" show "v1.0.0:ui/reflex/utils/els_stop_map.py" >/dev/null 2>&1; then
 	pass "git show v1.0.0:ui/reflex/utils/els_stop_map.py works in the baked checkout"
 else

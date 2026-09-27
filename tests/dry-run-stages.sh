@@ -208,7 +208,7 @@ echo "no" > "${ROOTFS_DIR}/etc/elspi/reflex-app-commissioning-guard"
 # claim it is -- one document, one owner per path.
 if grep -q 'reflex monorepo checkout at' "${ROOTFS_DIR}/etc/elspi-image.json"; then
 	echo "  FAIL: delta_layer_owns still claims the reflex checkout, which the"
-	echo "        image now bakes (docs/design/seam.md amendment 2026-09-21)"
+	echo "        image now bakes (see docs/design/seam.md)"
 	FAIL=$((FAIL+1))
 else
 	echo "  ok: delta_layer_owns no longer claims the baked checkout"

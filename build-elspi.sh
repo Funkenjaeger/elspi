@@ -105,8 +105,8 @@ echo "qemu-arm: ${RESOLVED} (static)"
 
 # --- trap 2: the app-release parameters, forwarded by NAME ------------------
 # stage-elspi/10a-app-checkout's REFLEX_SOURCE / REFLEX_RELEASE /
-# REFLEX_ORIGIN_URL are parameters of the BUILD (docs/design/seam.md amendment
-# 2026-09-21). They are read inside the container, and build-docker.sh passes
+# REFLEX_ORIGIN_URL are parameters of the BUILD (see docs/design/seam.md).
+# They are read inside the container, and build-docker.sh passes
 # only `-e GIT_HASH` of its own accord, so without this they are parameters
 # nobody outside the container can actually set -- which is a knob that cannot
 # turn, not a configuration point.

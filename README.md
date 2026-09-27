@@ -52,7 +52,7 @@ becomes on the machine: **[docs/flashing.md](docs/flashing.md)**.
 | [Provisioning](docs/provisioning.md) | the delta layer — app, commissioned config, starting the UI |
 | [Where the image ends](docs/design/seam.md) | what belongs in the image and what belongs in a delta run |
 | [This is not pi-gen](docs/design/fork.md) | the fork contract, merging upstream, the merge surface |
-| [Runtime inventory](docs/design/runtime-inventory.md) | what the live machine has, as measured |
+| [Runtime requirements](docs/design/runtime-inventory.md) | what `reflex-ui` needs from the OS, as measured |
 | [Verifying the image](docs/design/verification.md) | the three test tiers and what each can prove |
 | [Changelog](docs/changelog.md) | releases |
 

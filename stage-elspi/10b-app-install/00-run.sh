@@ -18,9 +18,10 @@
 #     full release cut before the next re-vendor would add whatever it adds
 #     (v1.2.0 added segno over rc.3), and converge would fetch it.
 #
-# docs/design/seam.md test 2: "Every step that needs PyPI, a package mirror, or
-# the network at recovery time is a step that can fail on the day you need
-# it. Bake those in." First commissioning is the same day as recovery for a
+# docs/design/seam.md: recovery must not need the network -- a step that needs
+# PyPI, a package mirror, or the network at recovery time is a step that can
+# fail on the day you need it, so it belongs in the image. First
+# commissioning is the same day as recovery for a
 # card nobody has provisioned. So this substage runs that SAME sync, with the
 # same environment converge uses, here -- where the build already has the
 # network (08-venv fetched Kivy's sdist the same way) -- and then PROVES the
@@ -82,8 +83,8 @@ case "${GUARD_ANSWER}" in
 	yes) echo "  commissioning guard: PRESENT in the baked release -- first boot will start the UI, UNCOMMISSIONED" ;;
 	no)  echo "  commissioning guard: ABSENT in the baked release."
 	     echo "           The first-boot hook will NOT start this app: without the guard a"
-	     echo "           fresh card would run on silent defaults (docs/design/seam.md,"
-	     echo "           amendment 2026-09-21). NOT a build failure -- the image is still a"
+	     echo "           fresh card would run on silent defaults (see"
+	     echo "           docs/design/seam.md). NOT a build failure -- the image is still a"
 	     echo "           recovery image, provisioned by hand -- and the manifest says so." ;;
 	*)   fatal "commissioning-guard answered '${GUARD_ANSWER}', expected yes or no" ;;
 esac

@@ -5,7 +5,7 @@
 #   select-release.sh check  <tag>        0 iff <tag> is a full release tag
 #   select-release.sh list   <source>     every full release tag, oldest first
 #
-# docs/design/seam.md, AMENDMENT 2026-09-21, ratified: the image ships
+# docs/design/seam.md decides this: the image ships
 # the app pinned to the LATEST FULL RELEASE -- "not a development `rc.*`, not
 # a floating branch". This script is the only thing in the repo that decides
 # what that means, so that the answer is testable without a 2-3 hour pi-gen
@@ -103,7 +103,7 @@ check_loud() { # <tag> -> 0, or 1 with a named refusal on stderr
 		moan "REFUSED: '${tag}' is a PRE-RELEASE, not a full release."
 		moan "         reflex's .github/workflows/release.yml makes any version"
 		moan "         carrying a hyphen a pre-release, published from the dev"
-		moan "         branch. docs/design/seam.md's 2026-09-21 amendment says the"
+		moan "         branch. docs/design/seam.md says the"
 		moan "         image ships the latest FULL release -- 'never a"
 		moan "         development rc.*'."
 		moan "         Nothing is substituted for it. Pass a full release tag,"
@@ -225,7 +225,7 @@ latest_full() { # <source> -> the newest full release tag, or refuse
 			[ "${shown}" -eq 0 ] && moan "           (none)"
 		fi
 		moan "         NOT falling back to a branch tip, to HEAD, or to the"
-		moan "         newest pre-release. docs/design/seam.md's amendment bakes a"
+		moan "         newest pre-release. docs/design/seam.md's decision bakes a"
 		moan "         full release or the build stops here."
 		return 1
 	fi

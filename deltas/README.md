@@ -41,13 +41,12 @@ relative to themselves, and read everything machine-specific from
 of `--config-backup`, for first commissioning — see "What is NOT here yet"
 below for what it does and does not do.
 
-`docs/design/seam.md` is explicit that the differing failure contracts are the
-point, and that collapsing them loses it:
+The three delta phases deliberately have different failure contracts, and
+collapsing them into one script would lose that:
 
-> The three delta phases have deliberately different failure contracts: converge
-> is idempotent and retryable, restore refuses to invent data, and interactive
-> blocks on a human. Collapsing them into one "ansible run" loses that, and the
-> restore contract is the one that must not be softened.
+> converge is idempotent and retryable, restore refuses to invent data, and
+> interactive blocks on a human. The restore contract is the one that must
+> not be softened (see `docs/design/seam.md`).
 
 They are separate files rather than three functions because **the boundary is
 the product**. `provision.sh` runs them in order for convenience — it does not
@@ -61,7 +60,7 @@ have come out differently.
 
 ## Nothing machine-specific lives in this directory
 
-A hard requirement (checklist item 13), and `docs/design/seam.md` call 2
+A hard requirement (checklist item 13), and `docs/design/seam.md`
 adds: no credential enters this repo, because it is going public.
 
 So: no IP addresses, no hostnames of other machines, no keys, no passwords, no

@@ -2,9 +2,9 @@
 
 # A PINNED, CHECKSUM-VERIFIED uv.
 #
-# docs/design/seam.md: "uv, not pip. If the image builds the venv, it must reproduce
-# uv.lock exactly, and pip would re-resolve." And: "fetch a PINNED uv and
-# verify its checksum rather than curl-to-shell the latest."
+# docs/design/seam.md decides this: uv, not pip -- if the image builds the venv,
+# it must reproduce uv.lock exactly, and pip would re-resolve. And: fetch a
+# PINNED uv and verify its checksum rather than curl-to-shell the latest.
 #
 # On the live elspi uv is a ~50 MB binary hand-placed at
 # /home/default/.local/bin/uv, version 0.11.23, provisioned by nothing. That is

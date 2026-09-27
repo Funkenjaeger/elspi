@@ -16,7 +16,7 @@ to do:
   the next re-vendor adds whatever it adds (`v1.2.0` added `segno` over
   `rc.3`), and converge would fetch it.
 
-`docs/design/seam.md` test 2 says a step that needs the network at recovery
+`docs/design/seam.md` says a step that needs the network at recovery
 time is a step that can fail on the day it is needed, and first commissioning
 of a card nobody provisioned is the same day. So this substage does converge's
 sync **here**, where the build already has the network (08-venv fetched Kivy's

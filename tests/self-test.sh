@@ -413,10 +413,10 @@ mutate "the manifest declares the image's own key-only SSH policy" \
 mutate "the manifest does not declare ssh at all" \
 	"python3 -c \"import json;p='etc/elspi-image.json';d=json.load(open(p));d.pop('ssh',None);json.dump(d,open(p,'w'))\""
 
-# --- THE BAKED APPLICATION (stage-elspi/10a-app-checkout, seam.md amendment
-#     2026-09-21) -----------------------------------------------------------
+# --- THE BAKED APPLICATION (stage-elspi/10a-app-checkout, see
+#     docs/design/seam.md) -----------------------------------------------------------
 #
-# The amendment's item 1 is "bake the app as a REAL GIT CHECKOUT CARRYING TAG
+# This decision's item 1 is "bake the app as a REAL GIT CHECKOUT CARRYING TAG
 # HISTORY", and every way of getting that subtly wrong produces a directory at
 # the app root that looks finished. These mutations are the shapes: no
 # checkout, an export with the .git removed, a shallow clone, a depth-1 clone
@@ -425,7 +425,7 @@ mutate "the manifest does not declare ssh at all" \
 # and none of them is visible in a directory listing.
 mutate "no checkout at the app root at all (the image lost its application)" \
 	"rm -rf home/default/projects/reflex"
-# THE TARBALL. This is the one the amendment argues against by name: "a source
+# THE TARBALL. This is the one this decision argues against by name: "a source
 # tarball, or a detached export, cannot be updated in place".
 mutate "the checkout is an EXPORT -- the .git directory removed" \
 	"rm -rf home/default/projects/reflex/.git"
@@ -630,7 +630,7 @@ fi
 # would exercise the regex while skipping the half that talks to git.
 echo
 echo "== the release selection refuses what it claims to (order 2026-09-21#2) =="
-echo "   docs/design/seam.md 2026-09-21: the image ships the latest FULL release,"
+echo "   docs/design/seam.md: the image ships the latest FULL release,"
 echo "   'not a development rc.*, not a floating branch'. Delegated to"
 echo "   tests/test-release-selection.sh -- see its header."
 if bash "${HERE}/test-release-selection.sh" >"${WORK}/out.txt" 2>&1; then

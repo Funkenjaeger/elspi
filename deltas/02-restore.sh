@@ -273,8 +273,8 @@ else
 fi
 
 # --- firmware manifest: SOFT, and says so -----------------------------------
-# docs/design/seam.md: "~/firmware/flashed.json if available (soft -- its loss costs
-# knowledge, not function)".
+# docs/design/seam.md decides this: ~/firmware/flashed.json is restored if
+# available, but SOFT -- its loss costs knowledge, not function.
 # need_root/resolve_service_user are called again here (harmless if already
 # done above) because --fresh with no firmware never calls them at all, and
 # this is the one place that writes regardless of which path was taken.
