@@ -146,6 +146,22 @@
 
 _ELSPI_BASE_MAX_AGE_S=$((7 * 86400))
 
+# THE REFRESH REQUEST (2026-09-27). The 7-day bound expires a base or package
+# layer on whichever build comes next, which on a persistent runner can be a
+# daytime build that then pays for a FULL. A night pre-warm build therefore
+# asks for layers NEAR the bound to be rebuilt now: the self-hosted runner's
+# Forgejo workflow creates ${BASE_DIR}/.elspi-refresh in the checkout when it is
+# dispatched with refresh=yes, and build-docker.sh builds the container from
+# the checkout (Dockerfile:14, COPY . /pi-gen/). In such a run a base or package
+# layer is rebuilt from _ELSPI_REFRESH_AGE_S (6 days) instead of 7; one younger
+# is reused exactly as without the file. The file is not an input: not hashed,
+# not listed by --print-inputs, and it changes only the age bound of the run
+# it is in. homelab-ops dserver/elspi-ci-prewarm.sh reads the layers' ages
+# on the runner and asks for a refresh build when one is 6 days old.
+_ELSPI_REFRESH_AGE_S=$((6 * 86400))
+_ELSPI_REFRESH_FILE=.elspi-refresh
+_elspi_refresh_run() { [ -e "${BASE_DIR}/${_ELSPI_REFRESH_FILE}" ]; }
+
 # THE BASE VERSION, hashed into the fingerprint in place of this file's text
 # (2026-09-26). This file does not build the base: stages 0-2 do, and they are
 # hashed raw. It only decides whether to rebuild the base, and records it. So
@@ -685,6 +701,8 @@ _elspi_pkgs_prepare() {
 			reason="fingerprint is dated in the future"
 		elif [ "${age_s}" -ge "${_ELSPI_BASE_MAX_AGE_S}" ]; then
 			reason="fingerprint ${days} days old, limit 7"
+		elif _elspi_refresh_run && [ "${age_s}" -ge "${_ELSPI_REFRESH_AGE_S}" ]; then
+			reason="fingerprint ${days} days old: a refresh run rebuilds from 6"
 		else
 			m=REUSE
 			reason="fingerprint match, ${days} days old"
@@ -792,6 +810,8 @@ elspi_base_prepare() {
 					reason="fingerprint is dated in the future"
 				elif [ "${age_s}" -ge "${_ELSPI_BASE_MAX_AGE_S}" ]; then
 					reason="fingerprint ${days} days old, limit 7"
+				elif _elspi_refresh_run && [ "${age_s}" -ge "${_ELSPI_REFRESH_AGE_S}" ]; then
+					reason="fingerprint ${days} days old: a refresh run rebuilds from 6"
 				else
 					mode=REUSE
 					reason="fingerprint match, ${days} days old"
@@ -838,6 +858,9 @@ elspi_base_prepare() {
 	ELSPI_BASE_FINGERPRINT="${fp}"
 	ELSPI_BASE_FP_FILE="${fp_file}"
 	ELSPI_BASE_LASTGOOD="${lastgood}"
+	if _elspi_refresh_run; then
+		echo "elspi base: refresh run (${_ELSPI_REFRESH_FILE}): a base or package layer 6 days old or more is rebuilt"
+	fi
 	echo "elspi base: ${mode} (${reason}${ignored:+; adopt marker ignored: ${ignored}})${fp:+ fingerprint ${fp:0:12}}"
 	# The package layer's fingerprint needs the base's; under a failed guard
 	# there is none, so the layer is built and never recorded.

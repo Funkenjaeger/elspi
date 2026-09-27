@@ -48,6 +48,11 @@
 # hashed whole again; (b) with stage-elspi's apt refresh left out for a
 # reused layer.
 #
+# Section 15 (2026-09-27): THE REFRESH REQUEST. In a run that has
+# ${BASE_DIR}/.elspi-refresh, a base or package layer 6 days old or more is
+# rebuilt; without it the bound stays 7. Seen red: (b) and (c) with the file
+# ignored; (d) with every layer rebuilt in a refresh run.
+#
 # NOT covered, and only a real build can cover them: that pi-gen's own
 # run_stage honours the SKIPs and CLEAN as elspi-base-reuse.sh's header says
 # (build.sh:101-123, read, not executed here), and that a reused base
@@ -531,7 +536,7 @@ done
 # helper's CODE is pinned here: whole-line comments and blank lines stripped
 # (the rule the helper applies to private configs), CRs dropped so the pin
 # does not depend on the checkout.
-HELPER_PIN=877a9c8be39fd74a8933aaa515ca92fdd981605c4baf491bbdabcf1f56aab43b
+HELPER_PIN=d87e1ec9836f6193233916bfd8ab2ea49e8ad0db0242f677981af35b2fdeefd3
 echo
 echo "== 11. _ELSPI_BASE_VERSION stands for the helper's text"
 code_hash() { tr -d '\r' < "$1" | sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' | sha256sum | cut -c1-64; }
@@ -977,6 +982,54 @@ check "(i) layer BUILD"                           pkgs_mode_is "${T14}" BUILD
 check "(i) no layer fingerprint recorded"         test ! -e "${PFP14}"
 check "(i) and it said so"                        grep -q '^elspi base: package layer built without a fingerprint; not marked reusable' "${T14}/out"
 cp "${WORK}/elspi.conf.14" "${EC14}"
+
+# --- 15. THE REFRESH REQUEST: a run that asks rebuilds from 6 days ----------
+echo
+echo "== 15. refresh request: .elspi-refresh rebuilds what is 6 days old or more"
+T15="$(make_tree refresh)"
+W15="$(wd_of "${T15}")"
+BFP15="$(fp_of "${T15}")"
+PFP15="${W15}/stage-elspi-pkgs/.elspi-base-fingerprint"
+RF15="${T15}/pi-gen/.elspi-refresh"
+not_listed() { ! grep -qxF -- "$1" <<< "$2"; }
+build "${T15}"
+build "${T15}"
+check "precondition: base and layer reuse"        bash -c "grep -q '^elspi base: REUSE' '${T15}/out' && grep -q '^elspi base: package layer REUSE' '${T15}/out'"
+
+echo "  -- (a) no request: 6.5 days old is still reused (the bound is 7)"
+touch -d '156 hours ago' "${BFP15}" "${PFP15}"
+build "${T15}"
+check "(a) base REUSE at 6.5 days"                reason_is "${T15}" 'fingerprint match, 6.5 days old'
+check "(a) layer REUSE at 6.5 days"               pkgs_reason "${T15}" 'fingerprint match, 6.5 days old'
+check "(a) no refresh line"                       no_line "${T15}" '^elspi base: refresh run'
+
+echo "  -- (b) the request, both 6.5 days old: the base is rebuilt, and so the layer"
+touch "${RF15}"
+build "${T15}"
+echo "     $(logline "${T15}")"
+check "(b) the refresh is logged"                 grep -q '^elspi base: refresh run (.elspi-refresh)' "${T15}/out"
+check "(b) base FULL, saying why"                 reason_is "${T15}" 'fingerprint 6.5 days old: a refresh run rebuilds from 6'
+check "(b) layer BUILD on the rebuilt base"       pkgs_reason "${T15}" 'the stage2 base under it is built in this run'
+check "(b) both recorded fresh" \
+	test "$(( $(date +%s) - $(mtime "${BFP15}") ))" -lt 600 -a "$(( $(date +%s) - $(mtime "${PFP15}") ))" -lt 600
+
+echo "  -- (c) the request, a fresh base and a 6.5-day layer: only the layer"
+touch -d '156 hours ago' "${PFP15}"
+build "${T15}"
+echo "     $(pkgs_line "${T15}")"
+check "(c) base REUSE"                            mode_is "${T15}" REUSE
+check "(c) layer BUILD, saying why"               pkgs_reason "${T15}" 'fingerprint 6.5 days old: a refresh run rebuilds from 6'
+
+echo "  -- (d) the request, both under 6 days: both reused, as without it"
+touch -d '5 days ago' "${BFP15}" "${PFP15}"
+build "${T15}"
+check "(d) base REUSE at 5.0 days"                reason_is "${T15}" 'fingerprint match, 5.0 days old'
+check "(d) layer REUSE at 5.0 days"               pkgs_reason "${T15}" 'fingerprint match, 5.0 days old'
+rm -f "${RF15}"
+
+echo "  -- (e) the file is not an input"
+LIST15="$(bash "${T15}/pi-gen/elspi-base-reuse.sh" --print-inputs)"
+check "(e) --print-inputs does not list it"       not_listed .elspi-refresh "${LIST15}"
 
 echo
 if [ "${FAIL}" -eq 0 ] && [ "${PASS}" -gt 0 ]; then
