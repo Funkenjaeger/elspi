@@ -10,8 +10,8 @@
 #
 # THE FLOW THIS IS THE LAST STEP OF (2026-09-26, decision D4)
 #
-#   1. build     gh workflow run image --ref arm64      (a test build, xz -1)
-#   2. flash     tools\flash-test-build.ps1 -Branch arm64
+#   1. build     gh workflow run image --ref main       (a test build, xz -1)
+#   2. flash     tools\flash-test-build.ps1 -Branch main
 #                (downloads, verifies and caches the build under
 #                 <Dest>\<run-id>\ or <Dest>\forgejo-<sha>\, then flashes it)
 #   3. bench     the card is tested on the real machine
@@ -54,8 +54,10 @@
 #                     list, which is the rootfs's native architecture -- and
 #                     must equal the `export ARCH=` line of build.sh at that
 #                     commit. A -Tag whose -armhf suffix disagrees is refused.
-#   [branch]          the commit is an ancestor of GitHub's arm64 tip (master
-#                     for an armhf build), so the release points at the line.
+#   [branch]          the commit is an ancestor of GitHub's main tip, so the
+#                     release points at the line. An armhf build needs an
+#                     `armhf` branch, which exists only if armhf is revived
+#                     from the tag armhf-final (retired 2026-09-27, D10).
 #   [tag]             the tag is free: no such tag on GitHub, and no release
 #                     (draft included) using that name.
 #   [os_list]         os_list.json is written by tools/make-os-list.sh FROM THAT
@@ -481,13 +483,18 @@ function Assert-TagMatchesArch {
 
 function Get-ReleaseBranch {
     param([Parameter(Mandatory)] [string] $Arch)
-    if ($Arch -eq 'arm64') { return 'arm64' } else { return 'master' }
+    # D10 (2026-09-27): arm64 is released from main. armhf is retired to the tag
+    # armhf-final; its release line would be a branch `armhf` recreated from it.
+    if ($Arch -eq 'arm64') { return 'main' } else { return 'armhf' }
 }
 
 function Assert-OnBranch {
     param([Parameter(Mandatory)] [string] $RepoRoot, [Parameter(Mandatory)] [string] $Sha, [Parameter(Mandatory)] [string] $Branch, [Parameter(Mandatory)] [string] $GitUrl)
     $ls = Invoke-Git 'ls-remote' $GitUrl "refs/heads/$Branch"
     $tip = @($ls.Output | ForEach-Object { "$_" } | Where-Object { $_ -match "^[0-9a-f]{40}\s+refs/heads/$([regex]::Escape($Branch))$" } | ForEach-Object { ($_ -split '\s+')[0] })
+    if ($ls.ExitCode -eq 0 -and $tip.Count -eq 0 -and $Branch -eq 'armhf') {
+        throw "[branch] GitHub has no armhf branch: armhf was retired on 2026-09-27 (D10) to the tag armhf-final. To release armhf again, push a branch named armhf from that tag first."
+    }
     if ($ls.ExitCode -ne 0 -or $tip.Count -ne 1) { throw "[branch] could not read GitHub's $Branch tip (git ls-remote exit $($ls.ExitCode))" }
     $tip = $tip[0]
     if ("$(@((Invoke-Git '-C' $RepoRoot 'cat-file' '-t' $tip).Output) -join '')".Trim() -ne 'commit') {

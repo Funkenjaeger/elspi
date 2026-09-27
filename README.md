@@ -8,8 +8,8 @@ recovery path for that machine: a dead SD card should cost a flash, not a
 rebuild.
 
 * **Raspberry Pi OS trixie, 64-bit (`arm64`) userland**, built by pi-gen from
-  `stage0`–`stage2` plus our own `stage-elspi/`. The `master` branch builds the
-  legacy 32-bit (`armhf`) line, frozen.
+  `stage0`–`stage2` plus our own `stage-elspi/`, on `main`. The legacy 32-bit
+  (`armhf`) line was retired on 2026-09-27; its last state is the tag `armhf-final`.
 * **The Kivy runtime is compiled in.** The venv ships Kivy from PyPI's
   prebuilt `aarch64` wheel (pinned by `uv.lock`), with every dependency already
   built — recovery still does not need PyPI.

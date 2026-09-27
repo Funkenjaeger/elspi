@@ -201,6 +201,7 @@ function git {
         'ls-remote' {
             if ($a2 -contains '--tags') { return @($global:UsedTags | ForEach-Object { "$OtherSha`trefs/tags/$_" }) }
             $ref = $a2[-1]
+            if ($global:NoBranch) { return @() }
             return "$('f' * 40)`t$ref"
         }
         'cat-file' { if ($a2 -contains '-t') { return 'commit' }; return '' }
@@ -414,6 +415,18 @@ try {
     Assert-True '-RunId resolves to <Dest>\<run-id>' ((Resolve-PromoteCacheDir -RunId '555' -Dest $FixRoot) -eq (Join-Path $FixRoot '555'))
     Assert-True '-Sha finds a Forgejo cache by its snapshot sha' ((Resolve-PromoteCacheDir -Sha $SnapSha -Dest $FixRoot) -eq $global:FjDir)
     Assert-Throws '-Sha held by both a GitHub and a Forgejo cache is ambiguous' { Resolve-PromoteCacheDir -Sha $FixSha -Dest $FixRoot } '2 cache directories'
+
+    # =========================================================================
+    # 7. The release line (D10, 2026-09-27): arm64 releases from main; armhf is
+    #    retired to the tag armhf-final, so its branch exists only if revived.
+    # =========================================================================
+    Assert-True 'arm64 releases are checked against main' ((Get-ReleaseBranch -Arch 'arm64') -eq 'main')
+    Assert-True 'armhf releases would need a revived armhf branch' ((Get-ReleaseBranch -Arch 'armhf') -eq 'armhf')
+    $global:NoBranch = $true
+    try {
+        Assert-Throws 'no armhf branch: the refusal names the tag armhf-final' { Assert-OnBranch -RepoRoot $FixRoot -Sha $FixSha -Branch 'armhf' -GitUrl 'https://example.invalid/elspi.git' } 'armhf-final'
+        Assert-Throws 'no main branch: the plain [branch] refusal' { Assert-OnBranch -RepoRoot $FixRoot -Sha $FixSha -Branch 'main' -GitUrl 'https://example.invalid/elspi.git' } "could not read GitHub's main tip"
+    } finally { $global:NoBranch = $false }
 } finally {
     Remove-Item -Recurse -Force -LiteralPath $FixRoot -ErrorAction SilentlyContinue
 }

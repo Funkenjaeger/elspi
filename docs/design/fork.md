@@ -16,8 +16,8 @@ one line (`qemu-arm-static` vs `qemu-aarch64-static`). The upstream sync
 
 ## Syncing with upstream
 
-`master` (frozen legacy armhf) takes no more upstream merges. `arm64` is the
-line that syncs, and upstream's own pattern is master → arm64 (upstream merges
+`main` (named `arm64` until 2026-09-27, decision D10) is the line that syncs,
+merging from `upstream/arm64`; armhf is retired, and upstream's own pattern is master → arm64 (upstream merges
 `master` into `arm64`, so `upstream/arm64` already contains
 `upstream/master`):
 
@@ -47,8 +47,8 @@ in a config file does nothing. We mirror upstream's structure:
 
 | Branch | ARCH | Status |
 |---|---|---|
-| `master` | `armhf` | Frozen legacy line. No more elspi work or upstream merges land here; it stays rebuildable on demand for as long as the armhf rollback card is in service. |
-| `arm64` | `arm64` | **Current: the main line**, carrying default-branch and release status (decision D1, 2026-09-26), gated on the ordered migration plan's gate G. |
+| `main` | `arm64` | **The line**: the default branch and the one releases are cut from. It was named `arm64` until 2026-09-27 (decision D10), matching upstream's branch. |
+| tag `armhf-final` | `armhf` | The retired 32-bit line: `master`'s last tip (`edf1d34`), kept as a tag when the branch was deleted on 2026-09-27 (D10). It still builds on demand (`gh workflow run image --ref armhf-final`). To work on armhf again, make a branch from it. |
 
 **Migrated 2026-09-26.** elspi was originally a Raspberry Pi 5 running a
 64-bit kernel with a **32-bit userland** (`uname -m` = `aarch64`,

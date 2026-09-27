@@ -1,5 +1,22 @@
 # Decisions
 
+## 2026-09-27 `arm64` becomes `main`; `master` retires to the tag `armhf-final`
+
+- **D10 — rename and retire.** The 64-bit line is renamed `main`. It had been named
+  `arm64` to match upstream pi-gen's branch. `master`, the frozen armhf line, is deleted
+  as a branch and kept as the tag `armhf-final` at its last tip (`edf1d34`). That tip is an
+  ancestor of `main`, so no commit is lost. This supersedes D2: a frozen `master` sitting
+  beside a main line named `arm64` was not a real layout. The maintainer's words: "let's not
+  erase it from history, but I don't plan to do any more 32-bit anything as long as 64-bit
+  doesn't screw us."
+- armhf stays buildable on demand from the tag (`gh workflow run image --ref armhf-final`).
+  `tools/promote-release.ps1` looks for its release line on a branch named `armhf`, which
+  exists only if armhf is revived from that tag. Until then an armhf release is refused,
+  and the refusal names the tag.
+- Upstream syncs still merge from `upstream/arm64`; only elspi's own branch name changed.
+- The workflows accept both `main` and `arm64` for the one commit that spans the rename; a
+  follow-up commit drops `arm64`.
+
 ## 2026-09-26 releases are promoted test builds, not tag-triggered rebuilds
 
 Choice: a release is a test build (`ci-test.conf`, xz -1) that passed the bench,

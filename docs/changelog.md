@@ -4,7 +4,12 @@ Releases of the elspi image. Each entry names the commit the image was built
 from, because the image is the artifact and the commit is the only thing that
 says what is in it.
 
-## Unreleased on arm64 — the main line moves to 64-bit
+## Unreleased on main
+
+**2026-09-27: `arm64` is renamed `main`, and `master` is retired** to the tag
+`armhf-final` (decision D10). No more 32-bit work is planned unless 64-bit fails us.
+
+## 2026-09-26 — the main line moves to 64-bit
 
 **2026-09-26: `arm64` becomes the main line** (decision D1) and
 freeze `master` as a legacy armhf line (decision D2). Hardware evidence to
@@ -16,7 +21,7 @@ one more arm64 build carrying a reflex UI fix, then a full end-to-end
 flash-and-restore test on the lathe — not yet run as of this entry. See
 `docs/design/fork.md` for the branch table and the migration's status.
 
-## Unreleased on master (armhf, frozen) — a fresh card boots straight into the UI
+## Never released: armhf (`master`, retired 2026-09-27 as the tag `armhf-final`) — a fresh card boots straight into the UI
 
 On `master` (merged from `feat/first-boot-ui`), not yet released as an image.
 **Verified on hardware 2026-09-26:** the CI image from run 36244494844 (tip

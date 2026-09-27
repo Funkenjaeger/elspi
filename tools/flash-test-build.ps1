@@ -3,7 +3,7 @@
 #
 #   tools\flash-test-build.ps1 -Branch feat/first-boot-ui
 #   tools\flash-test-build.ps1 -RunId 36244494844
-#   tools\flash-test-build.ps1 -Branch arm64 -Dest D:\cards\test-builds
+#   tools\flash-test-build.ps1 -Branch main -Dest D:\cards\test-builds
 #   tools\flash-test-build.ps1 -Branch feat/first-boot-ui -DryRun
 #
 #   # Same thing from a Forgejo instance's CI instead of GitHub's (see FORGEJO
@@ -11,7 +11,7 @@
 #   $env:ELSPI_FORGEJO_URL     = 'https://forgejo.example'
 #   $env:ELSPI_FORGEJO_REPO    = 'owner/repo'
 #   $env:ELSPI_FORGEJO_PACKAGE = 'pkgowner/pkgname'
-#   tools\flash-test-build.ps1 -Source forgejo -Branch arm64
+#   tools\flash-test-build.ps1 -Source forgejo -Branch main
 #   tools\flash-test-build.ps1 -Source forgejo -RunId 42
 #   tools\flash-test-build.ps1 -Source forgejo -Sha <40-hex package sha> -DryRun
 #   tools\flash-test-build.ps1 -Source forgejo -RunId 5 -ElspiSha <40-hex elspi sha>
