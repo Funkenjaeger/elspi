@@ -18,7 +18,7 @@
 # with no GPU, so whether a mode actually takes DRM master is a hardware
 # question and stays one. That is why the substage ships SELECTABLE drop-ins
 # plus a switcher rather than one baked-in answer, because of the constraint
-# that dominates everything about this machine: EVAN HAS NO TERMINAL ON ELSPI.
+# that dominates everything about this machine: THERE IS NO TERMINAL ON ELSPI.
 # It is a touchscreen. A wrong guess that ships as the only option costs a
 # reflash and a lathe power cycle per attempt. With the switcher, the flash
 # session tries a mode over SSH with

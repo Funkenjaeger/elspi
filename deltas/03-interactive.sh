@@ -8,7 +8,7 @@
 # same way it does to phase 1; a standalone run falls back to the path the
 # image manifest declares, and says UNKNOWN if there is neither.
 #
-# Checklist item 13, Evan's hard requirement: an interactive portion for
+# Checklist item 13, a hard requirement: an interactive portion for
 # anything that must not be hard-coded -- credentials, and any config depending
 # on machines or infrastructure OUTSIDE this Pi. Nothing machine-specific in
 # the repo.

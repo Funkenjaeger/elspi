@@ -56,7 +56,7 @@ in a config file does nothing. We mirror upstream's structure:
 32-bit-on-Pi-5 arrangement, not a misconfiguration — and `master` was the
 like-for-like rebuild target while the fork was proved out. That proof is
 done: an arm64 build (workflow run `36253822753`, commit `a699073`) has
-booted and run on the lathe's hardware. Evan decided the same day to make
+booted and run on the lathe's hardware. The same-day decision was to make
 `arm64` the main line (decision D1) and freeze `master` (decision D2) rather
 than maintain both ABIs. GitHub's default-branch setting and the first
 promoted arm64 release wait on gate G — one more build carrying a reflex UI

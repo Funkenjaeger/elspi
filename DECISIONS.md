@@ -94,7 +94,7 @@ change: the bound's "list it in the report instead of moving it" clause did not 
 
 ## 2026-09-26 arm64 is the main line
 
-Following the arm64 migration entry below, Evan reviewed the full migration plan
+Following the arm64 migration entry below, the maintainer reviewed the full migration plan
 (`claude-working/drafts/elspi-arm64-mainline-plan-2026-09-26.md`) and decided arm64
 becomes elspi's main line, not just a working branch. Recorded here as the decisions
 the plan's ordered steps and this repository's docs now assume:
@@ -123,10 +123,10 @@ the plan's ordered steps and this repository's docs now assume:
   arch-aware first.
 - **D8 — yes.** Tag convention: a bare CalVer tag (`vYYYY.MM.DD`) means arm64; any
   armhf tag carries an explicit `-armhf` suffix.
-- **D9 — "from now on."** The lathe's future is 64-bit only. Evan will not use the
-  lathe again until the arm64 build is tested (gate G) and released; the gate-G card,
-  restored from his gist, becomes the lathe's card. No separate move step, no armhf
-  interim.
+- **D9 — "from now on."** The lathe's future is 64-bit only. The lathe stays out of
+  use until the arm64 build is tested (gate G) and released; the gate-G card,
+  restored from a gist backup, becomes the lathe's card. No separate move step, no
+  armhf interim.
 
 This entry records the decisions; it does not itself flip the default branch,
 promote a release, or touch master. Those are later, separate steps in the plan,
@@ -134,7 +134,7 @@ each gated on the ones before it.
 
 ## 2026-09-26 arm64 migration
 
-Evan decided 2026-09-26 to migrate elspi to a 64-bit userland. The branch is the
+The 2026-09-26 decision migrates elspi to a 64-bit userland. The branch is the
 architecture (docs/design/fork.md): master stays armhf, and everything below lives on
 `arm64` except where noted. Every entry says why it is arm64-specific.
 
@@ -158,7 +158,7 @@ published `.sha256` and the GitHub release asset digest, which agree). The post-
 old check was a bare `ARM`, which either ABI passes. An unset or unknown ARCH is
 FATAL. The file is written so it reads correctly on both branches, which means it can
 be merged to master as-is to remove this divergence. That is a master change, so it
-stays Evan's call.
+stays the maintainer's call.
 
 **tests/dry-run-stages.sh exports ARCH, read from build.sh.** It runs 07-uv outside
 pi-gen, so it now has to export ARCH the way build.sh does. Otherwise the stage
@@ -205,7 +205,7 @@ branch adds merge surface for a local-build or docs path that has no arm64 user 
 
 ## 2026-09-26 image.yml: the runner follows build.sh's ARCH; arm64 builds natively
 
-Evan asked for elspi's arm64 image to build on GitHub's native arm64 runners instead of
+Elspi's arm64 image now builds on GitHub's native arm64 runners instead of
 under qemu on x86. The change is in `.github/workflows/image.yml` only, on master, and
 reaches arm64 by merge. No pi-gen file is touched, so the merge surface
 (docs/design/fork.md) does not grow.
@@ -260,8 +260,8 @@ of the 2026-09-13 decision.
 `v1.2.0-rc.3` (`43ac7c5`). Now `REFLEX_COMMIT` is `f776eae0a1782ede3e7a3882ce7ad85742ebff20`
 (tag `v1.2.0`, released 2026-09-25) and both files are reflex's `ui/pyproject.toml` and
 `ui/uv.lock` at that tag, byte-identical (same git blob ids). The only dependency change
-is `segno` (added in reflex 2026-09-17 for the device-flow QR). Why: Evan's gate of
-2026-09-22 was "cut v1.2.0 from main BEFORE the first image bake", so the image the
+is `segno` (added in reflex 2026-09-17 for the device-flow QR). Why: the 2026-09-22
+gate was "cut v1.2.0 from main BEFORE the first image bake", so the image the
 first card is baked from pairs its venv with v1.2.0 — the same release `10a-app-checkout`
 selects as the newest full release — rather than with a pre-release two weeks older.
 `tests/test-lockfile-drift.sh` against a checkout of reflex at `v1.2.0`: `RESULT: in sync`.

@@ -70,5 +70,5 @@ the same underlying path (`modbus-flash.py`) that a manual re-flash would.
 ## Wiring the ST-Link (to be written at the bench)
 
 *Placeholder.* The pinout, the connector, and any board-revision caveats are
-Evan's to fill in once he is at the bench with the hardware in hand — this
+the operator's to fill in once at the bench with the hardware in hand — this
 page intentionally says nothing about them yet.

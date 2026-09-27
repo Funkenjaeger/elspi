@@ -6,7 +6,7 @@ says what is in it.
 
 ## Unreleased on arm64 — the main line moves to 64-bit
 
-**2026-09-26: Evan decided to make `arm64` the main line** (decision D1) and
+**2026-09-26: `arm64` becomes the main line** (decision D1) and
 freeze `master` as a legacy armhf line (decision D2). Hardware evidence to
 date: the CI image from run
 [`36253822753`](https://github.com/Funkenjaeger/elspi/actions/runs/36253822753)

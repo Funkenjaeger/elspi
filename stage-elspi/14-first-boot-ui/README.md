@@ -1,7 +1,7 @@
 # `14-first-boot-ui` — a fresh card boots straight into the UI
 
 *A fresh elspi card boots straight into the UI: no SSH, no mandatory backup.*
-Decided by Evan 2026-09-13; this substage was a trigger-only scaffold from
+Decided 2026-09-13; this substage was a trigger-only scaffold from
 2026-09-20 until 2026-09-26, when the converge/start branch was written.
 `DECISIONS.md`, "2026-09-26 first-boot-ui", has every choice below and its
 alternative.

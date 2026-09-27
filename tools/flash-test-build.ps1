@@ -208,7 +208,7 @@ param(
     [string] $ForgejoTokenFile = $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'elspi\forgejo-token' } else { '' }),
 
     # Base cache directory. The actual download goes to $Dest\<run-id>\. Fixed
-    # per Evan's approval of this tool's design -- override with -Dest for a
+    # per the maintainer's approval of this tool's design -- override with -Dest for a
     # one-off elsewhere.
     [string] $Dest = 'C:\projects\claude-working\elspi-test-builds',
 

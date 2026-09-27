@@ -401,7 +401,7 @@ try {
     $elspiSha = 'e' * 40   # the elspi commit it was built from
 
     # -- auth: the token file gate ------------------------------------------
-    Assert-Throws 'forgejo: missing token file -> fails, telling Evan how to mint one' {
+    Assert-Throws 'forgejo: missing token file -> fails, telling the operator how to mint one' {
         Get-ForgejoAuthHeader -TokenFile (Join-Path $fjDir 'no-such-token')
     } 'read:package and read:repository'
     Assert-Throws 'forgejo: missing token file -> the message names the path' {

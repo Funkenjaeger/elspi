@@ -1,6 +1,6 @@
 # Where the image ends and provisioning begins
 
-**Status: DECIDED 2026-08-22.** Ratified by Evan in full — the criterion, the
+**Status: DECIDED 2026-08-22.** Ratified in full — the criterion, the
 proposed line, and all three contested calls — with one amendment to call 3,
 recorded there. Superseded reasoning is left in place rather than deleted: the
 value of this document is that the parts he *could* have disagreed with are
@@ -106,7 +106,7 @@ Two consequences to accept honestly:
 
 #### AMENDMENT 2026-09-21 — the image carries the latest FULL RELEASE of the app
 
-**Ratified by Evan 2026-09-21.** Call 1's *criterion* is unchanged and is what
+**Ratified 2026-09-21.** Call 1's *criterion* is unchanged and is what
 this amendment rests on: recovery must not depend on the outside world for the
 expensive part. What is withdrawn is the second clause — "but not `reflex-ui`
 itself".
@@ -116,7 +116,7 @@ development `rc.*`, not a floating branch: the tag `.github/workflows/
 release.yml` published — the same one-version-both-halves object the in-app
 updater installs.
 
-**Evan's reasoning, recorded because it is what makes this safe.** Full
+**The reasoning, recorded because it is what makes this safe.** Full
 releases are infrequent, so the thing going into the image is not the
 fast-moving thing; and in-app updating is now good enough that closing the gap
 between the baked release and the current one is low-friction. The image
@@ -194,7 +194,7 @@ flip, because git history keeps what you commit.
 
 #### AMENDMENT 2026-09-12 — credentials arrive in the Imager seed, not the interactive phase
 
-**Ratified by Evan (design (a)).** The *criterion* of call 2 is unchanged and is
+**Ratified (design (a)).** The *criterion* of call 2 is unchanged and is
 exactly what this amendment protects: **no credential enters this repo, and the
 image ships none.** What changes is *where the credential comes from at flash
 time.*
@@ -251,7 +251,7 @@ why this needed shipped code rather than only a documentation change:
 
 #### AMENDMENT 2026-09-23 — the image is keyless, and SSH auth is the operator's choice
 
-**Decided by Evan.** Until now every build baked a public key into
+**Decided.** Until now every build baked a public key into
 `~default/.ssh/authorized_keys` (`ELSPI_PUBKEY`, a repository variable in CI),
 and set `PUBKEY_ONLY_SSH=1`. Both are gone:
 
@@ -285,7 +285,7 @@ length of the first boot.*
 ### 3. The firmware toolchain is a real choice, not an oversight
 
 **RATIFIED 2026-08-22 WITH AN AMENDMENT — "optional" means offered at PROVISION
-time, not chosen at image-build time.** Evan's wording: the option is presented
+time, not chosen at image-build time.** The option is presented
 during the interactive provision phase.
 
 That is a change of *when the human is asked*, and it collides with test 2 if

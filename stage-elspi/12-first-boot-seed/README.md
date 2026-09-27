@@ -1,6 +1,6 @@
 # `12-first-boot-seed` — Imager's customisation page as the supported seed
 
-**Design (a), ratified by Evan 2026-09-12.** Raspberry Pi Imager 2.x's
+**Design (a), ratified 2026-09-12.** Raspberry Pi Imager 2.x's
 OS-customisation page is the supported way to seed this image at flash time,
 and this substage ships what the fork needs for that to actually work.
 

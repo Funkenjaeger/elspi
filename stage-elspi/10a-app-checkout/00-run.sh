@@ -3,7 +3,7 @@
 # THE APPLICATION ITSELF -- a real git checkout of the reflex monorepo, at the
 # latest FULL release, at the app root the app's own unit already hardcodes.
 #
-# docs/design/seam.md, AMENDMENT 2026-09-21, RATIFIED by Evan: call 1's second
+# docs/design/seam.md, AMENDMENT 2026-09-21, RATIFIED: call 1's second
 # clause ("but not reflex-ui itself") is withdrawn. "The image now ships the
 # app, pinned to the latest FULL release. Not a development `rc.*`, not a
 # floating branch." Full releases are infrequent, and in-app updating closes

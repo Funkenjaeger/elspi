@@ -61,7 +61,7 @@ have come out differently.
 
 ## Nothing machine-specific lives in this directory
 
-Evan's hard requirement (checklist item 13), and `docs/design/seam.md` call 2
+A hard requirement (checklist item 13), and `docs/design/seam.md` call 2
 adds: no credential enters this repo, because it is going public.
 
 So: no IP addresses, no hostnames of other machines, no keys, no passwords, no

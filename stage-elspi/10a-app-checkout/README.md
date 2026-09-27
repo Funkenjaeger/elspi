@@ -1,6 +1,6 @@
 # 10a-app-checkout — the application, baked at the latest full release
 
-`docs/design/seam.md`, **amendment 2026-09-21, ratified by Evan**: the image
+`docs/design/seam.md`, **amendment 2026-09-21, ratified**: the image
 ships the app pinned to the **latest FULL release** — never a development
 `rc.*`, never a branch tip. Full releases are infrequent and in-app updating
 closes the gap cheaply, so the image only has to be *a* good starting point

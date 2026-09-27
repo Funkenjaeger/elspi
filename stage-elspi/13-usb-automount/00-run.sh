@@ -12,7 +12,7 @@
 # subprocess, no polkit prompt, no udisks dependency). So without this
 # stage the Setup screen's Export/Import buttons can never find a stick.
 #
-# DECIDED (Evan): a udev rule plus systemd-mount baked into the image, with
+# DECIDED: a udev rule plus systemd-mount baked into the image, with
 # NO udisks2 and no mount logic in the app. stage2/01-sys-tweaks/00-packages
 # already installs udisks2 (for its own reasons, unrelated to this stage);
 # this design does not use it. See files/90-elspi-usb-automount.rules for

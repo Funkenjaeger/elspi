@@ -5,7 +5,7 @@
 #   select-release.sh check  <tag>        0 iff <tag> is a full release tag
 #   select-release.sh list   <source>     every full release tag, oldest first
 #
-# docs/design/seam.md, AMENDMENT 2026-09-21, ratified by Evan: the image ships
+# docs/design/seam.md, AMENDMENT 2026-09-21, ratified: the image ships
 # the app pinned to the LATEST FULL RELEASE -- "not a development `rc.*`, not
 # a floating branch". This script is the only thing in the repo that decides
 # what that means, so that the answer is testable without a 2-3 hour pi-gen

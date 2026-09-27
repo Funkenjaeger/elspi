@@ -156,7 +156,7 @@ rather than copying elspi's current state, which would faithfully reproduce a bu
 ## Open decisions — do not resolve these silently
 
 1. **The image-vs-deltas seam.** Everything above has to land on one side or the
-   other. This is the first blocking decision and it is Evan's.
+   other. This is the first blocking decision and it is the maintainer's.
 2. **`uv` or `python3-venv` + `pip`?** The machine uses `uv` (unpackaged, hand
    placed, pinned nowhere). ospi uses `python3-virtualenv` + `pip install .`.
    Falling back to pip resolves versions differently from `uv.lock`.
@@ -168,7 +168,7 @@ rather than copying elspi's current state, which would faithfully reproduce a bu
 
 ## Decided 2026-09-01: the image runs `reflex-ui` as a NON-ROOT service user
 
-Evan's call, on a closeloops card: *"is there any reason we need to / should
+The maintainer's call, on a closeloops card: *"is there any reason we need to / should
 persist the OSPI decision to run the UI as root? that feels like it's been a pain
 in the ass on a regular basis because agents don't have access to read configs and
 junk, and even I have to do sudo shenanigans when I'm ssh'ed in."* He chose to
@@ -210,7 +210,7 @@ session on tty1 plus a user service, or an explicit grant.
 Not by picking one. The stage installs each option as a systemd drop-in under
 `/usr/share/elspi/drm-modes/` plus a switcher, `/usr/local/sbin/elspi-drm-mode`.
 
-The reason is the constraint that dominates this machine: **Evan has no
+The reason is the constraint that dominates this machine: **there is no
 terminal on elspi.** Choosing one option and baking it in makes every wrong
 guess cost a reflash and a lathe power cycle. With the switcher, an attempt
 costs one SSH command:
@@ -323,16 +323,16 @@ the service and can still write into a `default`-owned tree, so the change is
 inert to the running application and purely removes the `sudo` friction.
 
 **Sequencing note, and it is not optional:** the log directory must exist and be
-writable *before* `KCFG_KIVY_LOG_DIR` moves. Evan has no terminal on elspi — the
+writable *before* `KCFG_KIVY_LOG_DIR` moves. There is no terminal on elspi — the
 machine is a touchscreen — so a UI that fails to start is recovered by physically
 power-cycling a lathe. Nothing here is worth that.
 
 ### This also dissolves an existing blind spot
 
 `/root/.kivy/config.ini` was carried in this document for weeks as an UNKNOWN
-needing Evan's hands, precisely because the SSH user could not read it. It is
+needing operator hands, precisely because the SSH user could not read it. It is
 root-only **because the service is root**. Under a non-root service user the file
-lives in that user's home, readable by Evan and by any rebuild. The fix removes
+lives in that user's home, readable by the operator and by any rebuild. The fix removes
 the blind spot rather than documenting around it.
 
 ## Resolved: `/root/.kivy/config.ini` exists, and is stock

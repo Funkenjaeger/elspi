@@ -23,7 +23,7 @@
 #
 # It also gates the placeholder contract: the physical half must stay a named
 # placeholder with no pin numbers, connector names, or board-rev claims in it
-# -- those are Evan's, from the bench, not something to guess into a doc.
+# -- those are the operator's, from the bench, not something to guess into a doc.
 
 set -uo pipefail
 
