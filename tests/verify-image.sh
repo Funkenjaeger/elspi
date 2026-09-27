@@ -313,7 +313,7 @@ pkg_installed() {
 	' "${DPKG_STATUS}" 2>/dev/null
 }
 
-# Required. The graphics-critical ones are named in stage-elspi/00-graphics
+# Required. The graphics-critical ones are named in stage-elspi-pkgs/00-graphics
 # precisely so they stop arriving by resolution accident.
 for p in libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-ttf-2.0-0 libmtdev1t64 \
          libgbm1 libdrm2 libgl1-mesa-dri network-manager \
@@ -350,7 +350,7 @@ section "Executables the runtime shells out to"
 # recovery path, which is the one thing the baked venv exists to remove.
 #
 # git is asserted twice on purpose. As a PACKAGE above (that is the contract
-# stage-elspi/08-venv/00-packages declares) and as a BINARY here at the path
+# stage-elspi-pkgs/03-git/00-packages declares) and as a BINARY here at the path
 # every one of those callers resolves. The two can disagree: a package can be
 # installed-but-unconfigured, and dpkg status is a claim about a database
 # while this is a claim about the filesystem.

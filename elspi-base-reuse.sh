@@ -3,7 +3,9 @@
 #
 # SOURCED, and sourcing it only DEFINES functions:
 #   - elspi.conf calls elspi_base_prepare  (decide, and set up the stage SKIPs)
-#   - stage-elspi/prerun.sh calls elspi_base_record  (mark the base reusable)
+#   - stage-elspi-pkgs/prerun.sh calls elspi_base_record  (mark the base reusable)
+#   - stage-elspi/prerun.sh calls elspi_pkgs_record  (mark the package layer
+#     reusable; see THE PACKAGE LAYER)
 # EXECUTED only for two read-only queries, which need no BASE_DIR, work on a
 # plain checkout, and write nothing:
 #   bash elspi-base-reuse.sh --print-inputs   # the paths the fingerprint reads, and this file
@@ -16,9 +18,10 @@
 # those change, the pre-warm cannot list the inputs and falls back to
 # rebuilding every night. The output is a SUPERSET of what the fingerprint
 # reads: every path it reads, plus this file, which it does not hash (see
-# _ELSPI_BASE_VERSION). So a consumer that diffs the listed paths can see a
-# change the fingerprint does not -- an edit here costs it at most one
-# night-time build, which then reuses -- but never miss one it does.
+# _ELSPI_BASE_VERSION), plus the package layer's stage, which the package
+# layer's own fingerprint reads. So a consumer that diffs the listed paths can
+# see a change the base fingerprint does not -- an edit here costs it at most
+# one night-time build, which then reuses -- but never miss one it does.
 #
 # WHY. stage0-2 are pi-gen's stock Lite base and, with arm64 emulated under
 # qemu, the dominant cost of a build. Nothing elspi changes between builds
@@ -106,9 +109,34 @@
 # debootstrap, needlessly early. An adopted base already 7 days old is FULL
 # on age like any other, and the decision line says so.
 #
+# THE PACKAGE LAYER (2026-09-26): a second reused layer, on top of the base.
+# stage-elspi-pkgs holds elspi's package-only substages (graphics, toolchain,
+# firmware-dev, git): about 6 of stage-elspi's 7.5 emulated minutes, and lists
+# that rarely change. It is active when it is the stage right after stage2 in
+# STAGE_LIST (elspi.conf); then it is REUSED -- ${BASE_DIR}/stage-elspi-pkgs/SKIP,
+# so build.sh keeps ${WORK_DIR}/stage-elspi-pkgs/rootfs and stage-elspi copies
+# it -- only when ALL of these hold:
+#   - the base is REUSED in this run (a base being rebuilt rebuilds the layer);
+#   - ${WORK_DIR}/stage-elspi-pkgs/rootfs exists, and next to it a fingerprint
+#     that equals one computed now over: _ELSPI_PKGS_VERSION, the BASE
+#     fingerprint, STAGE_LIST through stage-elspi-pkgs, and every file under
+#     stage-elspi-pkgs (path, content hash, executable bit), its own SKIP aside;
+#   - that fingerprint is under 7 days old.
+# Otherwise the layer is BUILT again, from the base, never patched: its old
+# fingerprint is deleted before any stage runs, and elspi_pkgs_record (called
+# from stage-elspi/prerun.sh, i.e. once the layer has completed) writes the new
+# one. So a changed package list costs one rebuild of this layer (~6 min
+# emulated) and never a FULL, and a dropped package cannot linger: the layer
+# is rebuilt from the base whenever its lists differ at all. Nothing is kept
+# aside and there is no ADOPT for it: rebuilding it costs minutes, not an hour.
+# The base's fingerprint hashes STAGE_LIST only THROUGH stage2, so adding a
+# stage after stage2 no longer rebuilds the base (_ELSPI_BASE_VERSION 2).
+# With the layer inactive (a STAGE_LIST without it right after stage2) nothing
+# changes from before it existed: stage-elspi/prerun.sh records the base.
+#
 # ALWAYS, in build.sh's shell: CLEAN=1, so stage-elspi and export-image
-# rebuild from a fresh copy of stage2's rootfs rather than stacking on the
-# last run's (stage-elspi/prerun.sh copies only when its rootfs is ABSENT);
+# rebuild from a fresh copy of the layer below rather than stacking on the
+# last run's (their preruns copy only when their rootfs is ABSENT);
 # and deploy/ is emptied, because build-docker.sh:154 copies the whole deploy
 # volume out and a leftover image fails image.yml's "exactly one image" gate.
 #
@@ -135,7 +163,15 @@ _ELSPI_BASE_MAX_AGE_S=$((7 * 86400))
 # the new ones. tests/test-base-reuse.sh pins a hash of this file's code
 # (comments and blank lines stripped) and fails on any code change until the
 # pin is updated, so that the decision is made at review, not skipped.
-_ELSPI_BASE_VERSION=1
+#   1  2026-09-26  the version replaces this file's text.
+#   2  2026-09-26  STAGE_LIST hashed only through stage2 (THE PACKAGE LAYER).
+_ELSPI_BASE_VERSION=2
+
+# THE PACKAGE LAYER's version, hashed into ITS fingerprint only. Raise it, and
+# only then, when a change here alters what _elspi_pkgs_manifest reads, how the
+# layer is skipped, or how it is recorded.
+_ELSPI_PKGS_VERSION=1
+_ELSPI_PKGS_STAGE=stage-elspi-pkgs
 
 # =============================================================================
 # WHAT SHAPES STAGES 0-2, and why the repo's configs are NOT hashed raw
@@ -195,7 +231,7 @@ _ELSPI_BASE_VERSION=1
 # Hashed by value, in this order. Where each is read, stage-side:
 _ELSPI_BASE_VARS=(
 	RELEASE                        # stage0/prerun.sh:9 (debootstrap suite), stage0/00-configure-apt/00-run.sh:6-7,18
-	STAGE_LIST                     # build.sh:320,330: which stages run
+	STAGE_LIST                     # build.sh:320,330: which stages run (hashed only THROUGH stage2: _elspi_base_var_lines)
 	TARGET_HOSTNAME                # stage1/02-net-tweaks/00-run.sh:3-4
 	FIRST_USER_NAME                # stage1/01-sys-tweaks/00-run.sh:6-12, stage2/01-sys-tweaks/01-run.sh, stage2/02-net-tweaks/01-run.sh:16
 	DISABLE_FIRST_BOOT_USER_RENAME # build.sh:292-301 (checks only; export-image reads it) -- kept, conservative
@@ -242,13 +278,16 @@ _ELSPI_BASE_VARS=(
 #                       guard, so a config that sets one must classify it.
 _ELSPI_BASE_NONBASE_VARS=(IMG_NAME DEPLOY_COMPRESSION COMPRESSION_LEVEL)
 
-# THE ONE LIST OF INPUT PATHS. The fingerprint reads exactly the raw, conf,
-# private and site paths (plus the config build.sh was given with -c, when
-# that is not a byte-copy of a repo config); --print-inputs prints those AND
-# this file. Both go through _elspi_base_inputs, so they cannot diverge.
+# THE ONE LIST OF INPUT PATHS. The base fingerprint reads exactly the raw,
+# conf, private and site paths (plus the config build.sh was given with -c,
+# when that is not a byte-copy of a repo config); the package layer's reads
+# the layer path; --print-inputs prints all of those AND this file. All go
+# through _elspi_base_inputs, so they cannot diverge.
 #   raw     hashed whole: path, content hash and executable bit, recursively.
 #   conf    the repo's configs: scanned by the guard, reduced to _ELSPI_BASE_VARS.
 #   listed  printed, never hashed: this file, which _ELSPI_BASE_VERSION covers.
+#   layer   the package layer's stage: hashed whole, like raw, into the PACKAGE
+#           LAYER's fingerprint and not the base's.
 _ELSPI_BASE_RAW_INPUTS=(stage0 stage1 stage2 scripts build.sh Dockerfile)
 _ELSPI_BASE_LISTED_ONLY=(elspi-base-reuse.sh)
 _ELSPI_BASE_REPO_CONFS=(elspi.conf ci.conf ci-test.conf)
@@ -260,6 +299,7 @@ _elspi_base_inputs() {
 	local root="$1" p
 	for p in "${_ELSPI_BASE_RAW_INPUTS[@]}"; do echo "raw ${p}"; done
 	for p in "${_ELSPI_BASE_LISTED_ONLY[@]}"; do echo "listed ${p}"; done
+	echo "layer ${_ELSPI_PKGS_STAGE}"
 	for p in "${_ELSPI_BASE_REPO_CONFS[@]}"; do echo "conf ${p}"; done
 	if [ -f "${root}/config" ]; then echo "private config"; fi
 	if [ -n "${ELSPI_SITE_CONF:-}" ]; then echo "site ${ELSPI_SITE_CONF}"; fi
@@ -394,10 +434,41 @@ _elspi_base_workdir() {
 	printf '%s' "${WORK_DIR:-${BASE_DIR}/work/${IMG_NAME:-raspios-${RELEASE:-trixie}-arm64}}"
 }
 
-# The hashed values, one `declare -p` line (or "unset NAME") each.
+# STAGE_LIST's words up to and including the first whose basename is $1 (all
+# of them if none is), as written: split like build.sh:330 splits it, but not
+# globbed, since the decision runs before build.sh's cwd is settled.
+_elspi_stage_list_through() {
+	local - w out=""
+	set -f
+	for w in ${STAGE_LIST:-}; do
+		out="${out:+${out} }${w}"
+		[ "$(basename "${w}")" = "$1" ] && break
+	done
+	printf '%s' "${out}"
+}
+
+# The basename of the STAGE_LIST word right after the first whose basename is
+# $1; empty if there is none.
+_elspi_stage_after() {
+	local - w hit=0
+	set -f
+	for w in ${STAGE_LIST:-}; do
+		if [ "${hit}" = 1 ]; then basename "${w}"; return 0; fi
+		[ "$(basename "${w}")" = "$1" ] && hit=1
+	done
+	return 0
+}
+
+# The hashed values, one `declare -p` line (or "unset NAME") each. STAGE_LIST
+# is hashed only THROUGH stage2: the stages after it do not shape the base, so
+# adding one (THE PACKAGE LAYER) must not rebuild it.
 _elspi_base_var_lines() {
 	local _ebv
 	for _ebv in "${_ELSPI_BASE_VARS[@]}"; do
+		if [ "${_ebv}" = STAGE_LIST ] && [ -n "${STAGE_LIST+set}" ]; then
+			echo "STAGE_LIST through stage2: $(_elspi_stage_list_through stage2)"
+			continue
+		fi
 		declare -p "${_ebv}" 2>/dev/null || echo "unset ${_ebv}"
 	done
 }
@@ -429,6 +500,7 @@ _elspi_base_manifest() {
 		case "${cls}" in
 			raw)     raw+=("${p}") ;;
 			listed)  ;;
+			layer)   ;;
 			conf)    conf+=("${p}") ;;
 			private) priv+=("${root}/${p}") ;;
 			site)    priv+=("${p}") ;;
@@ -482,6 +554,33 @@ _elspi_base_manifest() {
 		h="$(sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "${f}" | sha256sum)" || return 1
 		echo "C ${h%% *}"
 	done
+}
+
+# THE PACKAGE LAYER's fingerprint text; $1 = the base fingerprint. Returns
+# non-zero, and the layer is built, if its stage holds no file or any file
+# cannot be hashed.
+_elspi_pkgs_manifest() {
+	local root="${BASE_DIR}" f h x n=0
+	echo "ELSPI_PKGS_VERSION=${_ELSPI_PKGS_VERSION}"
+	echo "BASE $1"
+	echo "STAGE_LIST through ${_ELSPI_PKGS_STAGE}: $(_elspi_stage_list_through "${_ELSPI_PKGS_STAGE}")"
+	while IFS= read -r -d '' f; do
+		case "${f}" in
+			"${_ELSPI_PKGS_STAGE}/SKIP"|"${_ELSPI_PKGS_STAGE}/SKIP_IMAGES") continue ;;
+		esac
+		if [ -L "${root}/${f}" ]; then
+			printf 'L %s -> %s\n' "${f}" "$(readlink "${root}/${f}")"
+		else
+			h="$(sha256sum < "${root}/${f}")" || return 1
+			h="${h%% *}"
+			[ "${#h}" -eq 64 ] || return 1
+			x=-
+			[ -x "${root}/${f}" ] && x=x
+			printf 'F %s %s %s\n' "${x}" "${h}" "${f}"
+		fi
+		n=$((n + 1))
+	done < <(cd "${root}" && find "${_ELSPI_PKGS_STAGE}" \( -type f -o -type l \) -print0 | LC_ALL=C sort -z)
+	[ "${n}" -gt 0 ]
 }
 
 _ELSPI_BASE_FP_NAME=.elspi-base-fingerprint
@@ -539,6 +638,73 @@ _elspi_base_adopt() {
 		return 1
 	fi
 	echo "elspi base: ADOPT stage2 rootfs as fingerprint ${fp} (previous: ${prev}), dated $(date -u -d "@${t}" '+%Y-%m-%d %H:%M:%S UTC') from ${from}"
+}
+
+# THE PACKAGE LAYER's decision (see the header), made once the base's is:
+# $1 = the work dir, $2 = the base's mode, $3 = the base fingerprint ("" when
+# none could be computed, or the config guard failed). Sets and SKIPs; prints
+# one decision line. Sets ELSPI_PKGS_MODE to REUSE, BUILD or OFF.
+_elspi_pkgs_prepare() {
+	local work="$1" bmode="$2" bfp="$3" dir fp_file fp="" manifest m=BUILD reason stored age_s days
+	local skip="${BASE_DIR}/${_ELSPI_PKGS_STAGE}/SKIP"
+	dir="${work}/${_ELSPI_PKGS_STAGE}"
+	fp_file="${dir}/${_ELSPI_BASE_FP_NAME}"
+	ELSPI_PKGS_MODE=OFF
+	ELSPI_PKGS_FINGERPRINT=""
+	ELSPI_PKGS_FP_FILE=""
+
+	if [ ! -d "${BASE_DIR}/${_ELSPI_PKGS_STAGE}" ] || [ "$(_elspi_stage_after stage2)" != "${_ELSPI_PKGS_STAGE}" ]; then
+		# Inactive. A SKIP left from an active run must not skip the stage
+		# wherever else STAGE_LIST puts it.
+		if [ -e "${skip}" ]; then
+			rm -f "${skip}"
+			[ ! -e "${skip}" ] || { echo "FATAL: could not remove ${skip}"; exit 1; }
+		fi
+		echo "elspi base: package layer OFF (${_ELSPI_PKGS_STAGE} is not the stage after stage2 in STAGE_LIST)"
+		return 0
+	fi
+
+	if [ -n "${bfp}" ] && manifest="$(_elspi_pkgs_manifest "${bfp}")"; then
+		fp="$(printf '%s\n' "${manifest}" | sha256sum)"
+		fp="${fp%% *}"
+	fi
+	if [ "${bmode}" != REUSE ]; then
+		reason="the stage2 base under it is built in this run"
+	elif [ "${#fp}" -ne 64 ]; then
+		reason="could not compute its fingerprint"
+	elif [ ! -d "${dir}/rootfs" ]; then
+		reason="no ${_ELSPI_PKGS_STAGE} rootfs in ${work}"
+	elif [ ! -f "${fp_file}" ]; then
+		reason="no fingerprint: never recorded, or its build did not finish"
+	elif ! stored="$(cat "${fp_file}")" || [ "${stored}" != "${fp}" ]; then
+		reason="fingerprint mismatch: its package lists, the base under it, or STAGE_LIST through it changed"
+	else
+		age_s="$(_elspi_base_age_s "${fp_file}")" || age_s=-1
+		days="$(awk -v s="${age_s}" 'BEGIN { printf "%.1f", s / 86400 }')"
+		if [ "${age_s}" -lt 0 ]; then
+			reason="fingerprint is dated in the future"
+		elif [ "${age_s}" -ge "${_ELSPI_BASE_MAX_AGE_S}" ]; then
+			reason="fingerprint ${days} days old, limit 7"
+		else
+			m=REUSE
+			reason="fingerprint match, ${days} days old"
+		fi
+	fi
+	[ "${#fp}" -eq 64 ] || fp=""
+
+	if [ "${m}" = REUSE ]; then
+		touch "${skip}"
+		[ -f "${skip}" ] || { echo "FATAL: could not create ${skip}"; exit 1; }
+	else
+		# Before any stage runs: from here until elspi_pkgs_record, the layer
+		# is not known to be complete.
+		rm -f "${fp_file}" "${skip}"
+		[ ! -e "${fp_file}" ] && [ ! -e "${skip}" ] || { echo "FATAL: could not clear ${fp_file} or ${skip}"; exit 1; }
+	fi
+	ELSPI_PKGS_MODE="${m}"
+	ELSPI_PKGS_FINGERPRINT="${fp}"
+	ELSPI_PKGS_FP_FILE="${fp_file}"
+	echo "elspi base: package layer ${m} (${reason})${fp:+ fingerprint ${fp:0:12}}"
 }
 
 elspi_base_prepare() {
@@ -672,15 +838,25 @@ elspi_base_prepare() {
 	ELSPI_BASE_FINGERPRINT="${fp}"
 	ELSPI_BASE_FP_FILE="${fp_file}"
 	ELSPI_BASE_LASTGOOD="${lastgood}"
-	# Exported: stage-elspi/prerun.sh is a CHILD of build.sh and reads them.
+	echo "elspi base: ${mode} (${reason}${ignored:+; adopt marker ignored: ${ignored}})${fp:+ fingerprint ${fp:0:12}}"
+	# The package layer's fingerprint needs the base's; under a failed guard
+	# there is none, so the layer is built and never recorded.
+	if [ "${guard_ok}" = 1 ]; then
+		_elspi_pkgs_prepare "${work}" "${mode}" "${fp}"
+	else
+		_elspi_pkgs_prepare "${work}" "${mode}" ""
+	fi
+	# Exported: the stage preruns are CHILDREN of build.sh and read them.
 	# (They are in stage 0-2's environment too; nothing there reads them.)
 	export CLEAN ELSPI_BASE_MODE ELSPI_BASE_FINGERPRINT ELSPI_BASE_FP_FILE ELSPI_BASE_LASTGOOD
-	echo "elspi base: ${mode} (${reason}${ignored:+; adopt marker ignored: ${ignored}})${fp:+ fingerprint ${fp:0:12}}"
+	export ELSPI_PKGS_MODE ELSPI_PKGS_FINGERPRINT ELSPI_PKGS_FP_FILE
 }
 
-# Called from stage-elspi/prerun.sh. Reaching that prerun means build.sh
-# (`#!/bin/bash -e`) has come through stage0-2 without an error, so in a FULL
-# run this is the first point at which the new base is known to be complete.
+# Called from stage-elspi-pkgs/prerun.sh (and, with the package layer
+# inactive, from stage-elspi/prerun.sh via elspi_pkgs_record). Reaching either
+# prerun means build.sh (`#!/bin/bash -e`) has come through stage0-2 without an
+# error, so in a FULL run this is the first point at which the new base is
+# known to be complete.
 elspi_base_record() {
 	case "${ELSPI_BASE_MODE:-}" in
 		REUSE)
@@ -712,6 +888,36 @@ elspi_base_record() {
 			echo "elspi base: WARNING: could not delete ${ELSPI_BASE_LASTGOOD}; the next FULL run that keeps a base replaces it"
 		fi
 	fi
+}
+
+# Called from stage-elspi/prerun.sh. With the package layer active, reaching
+# that prerun means stage-elspi-pkgs completed, so a BUILD run records the
+# layer here; a REUSE run leaves it alone, as for the base. With the layer
+# inactive, the base is recorded here, as before the layer existed.
+elspi_pkgs_record() {
+	case "${ELSPI_PKGS_MODE:-OFF}" in
+		OFF)
+			elspi_base_record
+			return ;;
+		REUSE)
+			echo "elspi base: package layer REUSE run, fingerprint left untouched (a rewrite would restart its 7-day clock)"
+			return 0 ;;
+		BUILD) ;;
+		*)
+			echo "elspi base: unknown package layer mode '${ELSPI_PKGS_MODE}'; not recorded"
+			return 0 ;;
+	esac
+	if [ -z "${ELSPI_PKGS_FINGERPRINT:-}" ] || [ -z "${ELSPI_PKGS_FP_FILE:-}" ]; then
+		echo "elspi base: package layer built without a fingerprint; not marked reusable"
+		return 0
+	fi
+	printf '%s\n' "${ELSPI_PKGS_FINGERPRINT}" > "${ELSPI_PKGS_FP_FILE}.tmp"
+	mv -f "${ELSPI_PKGS_FP_FILE}.tmp" "${ELSPI_PKGS_FP_FILE}"
+	if [ "$(cat "${ELSPI_PKGS_FP_FILE}")" != "${ELSPI_PKGS_FINGERPRINT}" ]; then
+		echo "FATAL: post-write check failed for ${ELSPI_PKGS_FP_FILE}"
+		exit 1
+	fi
+	echo "elspi base: package layer complete, fingerprint ${ELSPI_PKGS_FINGERPRINT:0:12} recorded (reusable for 7 days)"
 }
 
 # EXECUTED (not sourced): the read-only queries. Paths are relative to this

@@ -5,7 +5,7 @@
 #   tests/test-swd-doc.sh
 #
 # The doc's whole premise is "derive the package list from
-# stage-elspi/02-firmware-dev/00-packages, never retype it from the reflex
+# stage-elspi-pkgs/02-firmware-dev/00-packages, never retype it from the reflex
 # page" and "no apt step, because it's already installed". Both of those
 # claims rot silently: 00-packages can gain or lose a package with nobody
 # touching this doc, and a future edit could reintroduce an `apt install`
@@ -22,7 +22,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "${HERE}/.." && pwd)"
 cd "${REPO}" || exit 2
 
-PKG_FILE="stage-elspi/02-firmware-dev/00-packages"
+PKG_FILE="stage-elspi-pkgs/02-firmware-dev/00-packages"
 DOC="docs/swd-first-load.md"
 MKDOCS="mkdocs.yml"
 

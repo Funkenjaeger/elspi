@@ -14,7 +14,7 @@ procedure and is a placeholder below.
 ## What this image already has
 
 The firmware toolchain is baked into the image unconditionally, never behind
-an interactive prompt (`stage-elspi/02-firmware-dev/00-packages`):
+an interactive prompt (`stage-elspi-pkgs/02-firmware-dev/00-packages`):
 
 - `gcc-arm-none-eabi`
 - `cmake`

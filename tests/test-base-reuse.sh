@@ -39,6 +39,15 @@
 # match, with the copy deleted at the FULL start, and with a restore that
 # touches the fingerprint.
 #
+# Section 14 (2026-09-26): THE PACKAGE LAYER, stage-elspi-pkgs, reused on its
+# own fingerprint (the base's, its package lists, STAGE_LIST through it) and
+# otherwise rebuilt from the base; and STAGE_LIST hashed into the base only
+# through stage2. The stub runs the layer's REAL prerun when STAGE_LIST names
+# it. Seen red: (c) with the layer's files left out of its fingerprint; (g)
+# with its fingerprint kept at the start of a BUILD; (h) with STAGE_LIST
+# hashed whole again; (b) with stage-elspi's apt refresh left out for a
+# reused layer.
+#
 # NOT covered, and only a real build can cover them: that pi-gen's own
 # run_stage honours the SKIPs and CLEAN as elspi-base-reuse.sh's header says
 # (build.sh:101-123, read, not executed here), and that a reused base
@@ -71,6 +80,8 @@ make_tree() {
 	cp "${HELPER}" "${t}/pi-gen/elspi-base-reuse.sh"
 	mkdir -p "${t}/pi-gen/stage-elspi"
 	cp -a "${REPO}/stage-elspi/prerun.sh" "${t}/pi-gen/stage-elspi/prerun.sh"
+	cp -a "${REPO}/stage-elspi-pkgs" "${t}/pi-gen/"
+	rm -f "${t}/pi-gen/stage-elspi-pkgs/SKIP"
 	# build-docker.sh:139 mounts the chosen config ALONE at /config.
 	cp "${REPO}/ci-test.conf" "${t}/mnt/config"
 	cat > "${t}/pi-gen/build.sh" <<'STUB'
@@ -94,10 +105,11 @@ if [ ! -f "${BASE_DIR}/stage2/SKIP" ]; then
 	echo "base built $(date +%s%N) ${RANDOM}" > "${WORK_DIR}/stage2/rootfs/etc/marker"
 	[ "${STUB_FAIL_IN_STAGE2:-0}" = 1 ] && { echo "STUB stage2 failed"; exit 1; }
 fi
-# stage-elspi: CLEAN=1 removes its rootfs (build.sh:102-106), and the REAL
-# prerun copies stage2's in: PREV_ROOTFS_DIR as build.sh:91-92,121-123 set it
-# after stage2, run or skipped; copy_previous as scripts/common:34-41, with
-# cp -a for rsync. on_chroot records that it was called.
+# The stages after stage2: CLEAN=1 removes a run stage's rootfs (build.sh:102-
+# 106), and its REAL prerun copies the previous one's in: PREV_ROOTFS_DIR as
+# build.sh:91-92,121-123 set it after the previous stage, run or skipped;
+# copy_previous as scripts/common:34-41, with cp -a for rsync. on_chroot
+# records that it was called.
 export PREV_ROOTFS_DIR="${WORK_DIR}/stage2/rootfs"
 copy_previous() {
 	if [ ! -d "${PREV_ROOTFS_DIR}" ]; then echo "Previous stage rootfs not found"; false; fi
@@ -107,6 +119,21 @@ copy_previous() {
 }
 on_chroot() { cat > /dev/null; echo "STUB on_chroot"; }
 export -f copy_previous on_chroot
+# stage-elspi-pkgs, when STAGE_LIST names it: a SKIPped stage keeps its rootfs;
+# a run one is built by its real prerun plus a marker unique to that build,
+# standing in for its package installs.
+case " ${STAGE_LIST} " in
+	*" stage-elspi-pkgs "*)
+		if [ ! -f "${BASE_DIR}/stage-elspi-pkgs/SKIP" ]; then
+			export ROOTFS_DIR="${WORK_DIR}/stage-elspi-pkgs/rootfs"
+			rm -rf "${ROOTFS_DIR}"
+			( cd "${BASE_DIR}/stage-elspi-pkgs" && ./prerun.sh )
+			echo "pkgs built $(date +%s%N) ${RANDOM}" > "${ROOTFS_DIR}/etc/pkgs-marker"
+			[ "${STUB_FAIL_IN_PKGS:-0}" = 1 ] && { echo "STUB pkgs failed"; exit 1; }
+		fi
+		export PREV_ROOTFS_DIR="${WORK_DIR}/stage-elspi-pkgs/rootfs"
+		;;
+esac
 export ROOTFS_DIR="${WORK_DIR}/stage-elspi/rootfs"
 rm -rf "${ROOTFS_DIR}"
 ( cd "${BASE_DIR}/stage-elspi" && ./prerun.sh )
@@ -120,7 +147,8 @@ build() {
 	local t="$1"
 	shift
 	( cd "${t}/pi-gen" && env -u WORK_DIR -u DEPLOY_DIR -u ELSPI_SITE_CONF -u CLEAN \
-		-u ELSPI_BASE_MODE -u ELSPI_BASE_FINGERPRINT -u ELSPI_BASE_FP_FILE -u ELSPI_BASE_LASTGOOD "$@" \
+		-u ELSPI_BASE_MODE -u ELSPI_BASE_FINGERPRINT -u ELSPI_BASE_FP_FILE -u ELSPI_BASE_LASTGOOD \
+		-u ELSPI_PKGS_MODE -u ELSPI_PKGS_FINGERPRINT -u ELSPI_PKGS_FP_FILE "$@" \
 		./build.sh -c "${t}/mnt/config" ) < /dev/null > "${t}/out" 2>&1
 }
 
@@ -151,6 +179,11 @@ insert_before() {  # file anchor new
 	[ "${hit}" = 1 ]
 }
 reason_is() { grep -q "^elspi base: [A-Z]* ($2" "$1/out"; }
+# The package layer's decision line, and its mode.
+pkgs_line()    { grep -m1 '^elspi base: package layer \(REUSE\|BUILD\|OFF\) ' "$1/out"; }
+pkgs_mode_is() { pkgs_line "$1" | grep -q "^elspi base: package layer $2 "; }
+pkgs_reason()  { pkgs_line "$1" | grep -q "^elspi base: package layer [A-Z]* ($2"; }
+pkgs_rebuilt_on_kept_base() { mode_is "$1" REUSE && pkgs_mode_is "$1" BUILD && pkgs_reason "$1" 'fingerprint mismatch'; }
 
 echo "== helper under test: ${HELPER}"
 
@@ -354,9 +387,9 @@ expect_full "(b) TIMEZONE_DEFAULT" "${EC}" 'TIMEZONE_DEFAULT="Etc/UTC"'   'TIMEZ
 expect_full "(b) an export elspi.conf performs (REFLEX_RELEASE)" "${EC}" \
 	'REFLEX_RELEASE="${REFLEX_RELEASE:-}"' 'REFLEX_RELEASE="${REFLEX_RELEASE:-v9.9.9}"' 'fingerprint mismatch'
 
-echo "  -- (c) STAGE_LIST forces FULL"
-expect_full "(c) STAGE_LIST" "${EC}" 'STAGE_LIST="stage0 stage1 stage2 stage-elspi"' \
-	'STAGE_LIST="stage0 stage1 stage2 stage3 stage-elspi"' 'fingerprint mismatch'
+echo "  -- (c) STAGE_LIST through stage2 forces FULL (after stage2: section 14)"
+expect_full "(c) STAGE_LIST" "${EC}" 'STAGE_LIST="stage0 stage1 stage2 stage-elspi-pkgs stage-elspi"' \
+	'STAGE_LIST="stage0 stage2 stage-elspi-pkgs stage-elspi"' 'fingerprint mismatch'
 
 echo "  -- (c2) a base-affecting value set where the decision cannot see it forces FULL"
 expect_full "(c2) ci.conf sets LOCALE_DEFAULT after elspi.conf returns" "${CC}" 'COMPRESSION_LEVEL=9' \
@@ -479,6 +512,9 @@ for p in "${LISTED[@]}"; do
 		# Listed for the pre-warm, but not hashed: _ELSPI_BASE_VERSION stands
 		# for it (section 11).
 		check "listed ${p} changed -> REUSE (listed only; _ELSPI_BASE_VERSION covers it)" mode_is "${T10}" REUSE
+	elif [ "${p}" = stage-elspi-pkgs ]; then
+		# Read by the package layer's fingerprint, not the base's (section 14).
+		check "listed ${p} changed -> base REUSE, package layer BUILD" pkgs_rebuilt_on_kept_base "${T10}"
 	else
 		check "listed ${p} changed -> FULL"       mode_is "${T10}" FULL
 	fi
@@ -495,7 +531,7 @@ done
 # helper's CODE is pinned here: whole-line comments and blank lines stripped
 # (the rule the helper applies to private configs), CRs dropped so the pin
 # does not depend on the checkout.
-HELPER_PIN=23d2e5227c35f3f6b1c360e021c99e1d35c970eda999ee273bc491fd40e36778
+HELPER_PIN=877a9c8be39fd74a8933aaa515ca92fdd981605c4baf491bbdabcf1f56aab43b
 echo
 echo "== 11. _ELSPI_BASE_VERSION stands for the helper's text"
 code_hash() { tr -d '\r' < "$1" | sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' | sha256sum | cut -c1-64; }
@@ -528,7 +564,7 @@ check "(b) anchor: a code line"                   insert_before "${H11}" '_ELSPI
 build "${T11}"
 echo "     $(logline "${T11}")"
 check "(b) code-only edit, version not raised -> REUSE" mode_is "${T11}" REUSE
-check "(c) anchor: _ELSPI_BASE_VERSION=1"         replace_line "${H11}" '_ELSPI_BASE_VERSION=1' '_ELSPI_BASE_VERSION=2'
+check "(c) anchor: _ELSPI_BASE_VERSION=2"         replace_line "${H11}" '_ELSPI_BASE_VERSION=2' '_ELSPI_BASE_VERSION=3'
 build "${T11}"
 echo "     $(logline "${T11}")"
 check "(c) raising _ELSPI_BASE_VERSION -> FULL"   mode_is "${T11}" FULL
@@ -548,7 +584,7 @@ fp_stamp()  { echo "$(cat "$1") $(mtime "$1")"; }         # content and mtime
 one_copy_at_most() {
 	local n b
 	n="$(find "$(wd_of "$1")" -maxdepth 1 -name '.elspi-base-lastgood*' | wc -l)"
-	b="$(find "$(wd_of "$1")" -path '*/rootfs/etc/marker' ! -path '*/stage-elspi/*' | wc -l)"
+	b="$(find "$(wd_of "$1")" -path '*/rootfs/etc/marker' ! -path '*/stage-elspi/*' ! -path '*/stage-elspi-pkgs/*' | wc -l)"
 	[ "${n}" -le 1 ] && [ "${b}" -le 2 ]
 }
 echo
@@ -790,6 +826,157 @@ echo "     $(logline "${T13}")"
 check "(h2) nothing is restored afterwards -> FULL" mode_is "${T13}" FULL
 check "(h2) no RESTORE"                           no_line "${T13}" '^elspi base: RESTORE'
 check "(h2) one copy at most"                     one_copy_at_most "${T13}"
+
+# --- 14. THE PACKAGE LAYER: reused on an exact match, rebuilt from the base ---
+echo
+echo "== 14. package layer: stage-elspi-pkgs over the base, its own fingerprint"
+T14="$(make_tree pkgs)"
+W14="$(wd_of "${T14}")"
+PK14="${T14}/pi-gen/stage-elspi-pkgs"
+L14="${PK14}/00-graphics/00-packages"
+EC14="${T14}/pi-gen/elspi.conf"
+PFP14="${W14}/stage-elspi-pkgs/.elspi-base-fingerprint"
+cp "${L14}" "${WORK}/l14.orig"
+cp "${EC14}" "${WORK}/elspi.conf.14"
+pkgs_id()  { cat "${W14}/stage-elspi-pkgs/rootfs/etc/pkgs-marker" 2>/dev/null; }
+elspi_pk() { cat "${W14}/stage-elspi/rootfs/etc/pkgs-marker" 2>/dev/null; }
+pkg_skip() { [ -f "${PK14}/SKIP" ]; }
+set_stages() { replace_line "${EC14}" "$(grep '^STAGE_LIST=' "${EC14}")" "STAGE_LIST=\"$1\""; }
+
+echo "  -- (a) fresh tree: the base is FULL, so the layer is BUILT, then recorded"
+build "${T14}"
+echo "     $(logline "${T14}")"
+echo "     $(pkgs_line "${T14}")"
+check "(a) base FULL"                             mode_is "${T14}" FULL
+check "(a) layer BUILD, because the base is built" pkgs_reason "${T14}" 'the stage2 base under it is built in this run'
+check "(a) the layer's rootfs was copied from stage2's" grep -q "^STUB copy_previous from ${W14}/stage2/rootfs$" "${T14}/out"
+check "(a) the finished layer recorded its fingerprint" grep -Eq '^[0-9a-f]{64}$' "${PFP14}"
+check "(a) and said so"                           grep -q '^elspi base: package layer complete, fingerprint [0-9a-f]\{12\} recorded' "${T14}/out"
+check "(a) stage-elspi copied the layer"          test -n "$(pkgs_id)" -a "$(elspi_pk)" = "$(pkgs_id)"
+check "(a) no layer SKIP on a BUILD run"          bash -c "! test -e '${PK14}/SKIP'"
+PFPA="$(fp_stamp "${PFP14}")"
+PIDA="$(pkgs_id)"
+BIDA="$(base_id "${W14}/stage2")"
+
+echo "  -- (b) the same tree again: base REUSE, layer REUSE"
+build "${T14}"
+echo "     $(logline "${T14}")"
+echo "     $(pkgs_line "${T14}")"
+check "(b) base REUSE"                            mode_is "${T14}" REUSE
+check "(b) layer REUSE"                           pkgs_reason "${T14}" 'fingerprint match, 0.0 days old'
+check "(b) the layer's SKIP created"              pkg_skip
+check "(b) the layer was not rebuilt"             test "$(pkgs_id)" = "${PIDA}"
+check "(b) stage-elspi copied the kept layer"     grep -q "^STUB copy_previous from ${W14}/stage-elspi-pkgs/rootfs$" "${T14}/out"
+check "(b) and got its packages"                  test "$(elspi_pk)" = "${PIDA}"
+check "(b) its fingerprint was not rewritten (content and mtime)" test "$(fp_stamp "${PFP14}")" = "${PFPA}"
+check "(b) and it said so"                        grep -q '^elspi base: package layer REUSE run, fingerprint left untouched' "${T14}/out"
+check "(b) stage-elspi refreshed its apt lists (it still installs)" grep -q 'STUB on_chroot' "${T14}/out"
+build "${T14}"
+check "(b2) a third run: still REUSE, its own SKIP not hashed" pkgs_mode_is "${T14}" REUSE
+
+echo "  -- (c) a package list changes: the layer alone is rebuilt, from the kept base"
+echo "libfoo-dev" >> "${L14}"
+build "${T14}"
+echo "     $(logline "${T14}")"
+echo "     $(pkgs_line "${T14}")"
+check "(c) base still REUSE"                      mode_is "${T14}" REUSE
+check "(c) the base was not rebuilt"              test "$(base_id "${W14}/stage2")" = "${BIDA}"
+check "(c) layer BUILD on a mismatch"             pkgs_reason "${T14}" 'fingerprint mismatch'
+check "(c) its SKIP removed"                      bash -c "! test -e '${PK14}/SKIP'"
+check "(c) rebuilt from the base, not patched"    grep -q "^STUB copy_previous from ${W14}/stage2/rootfs$" "${T14}/out"
+check "(c) a new layer"                           test -n "$(pkgs_id)" -a "$(pkgs_id)" != "${PIDA}"
+check "(c) with a new fingerprint recorded"       test "$(cat "${PFP14}")" != "${PFPA% *}"
+check "(c) the layer's prerun refreshed apt (base reused)" grep -q 'STUB on_chroot' "${T14}/out"
+build "${T14}"
+check "(c2) then REUSE"                           pkgs_mode_is "${T14}" REUSE
+cp "${WORK}/l14.orig" "${L14}"
+build "${T14}"
+check "(c3) reverting the list rebuilds again (no copy kept)" pkgs_reason "${T14}" 'fingerprint mismatch'
+build "${T14}"
+check "(c3) then REUSE"                           pkgs_mode_is "${T14}" REUSE
+
+echo "  -- (d) a new file, or an executable bit, in the layer's stage counts"
+mkdir -p "${PK14}/04-extra"
+echo "libbar" > "${PK14}/04-extra/00-packages"
+build "${T14}"
+check "(d) a new substage -> layer BUILD"         pkgs_reason "${T14}" 'fingerprint mismatch'
+rm -rf "${PK14}/04-extra"
+build "${T14}"
+build "${T14}"
+check "(d) precondition: REUSE again"             pkgs_mode_is "${T14}" REUSE
+chmod +x "${L14}"
+build "${T14}"
+check "(d) an executable bit -> layer BUILD"      pkgs_reason "${T14}" 'fingerprint mismatch'
+chmod -x "${L14}"
+build "${T14}"
+build "${T14}"
+
+echo "  -- (e) the layer is over 7 days old: BUILD; the base is untouched"
+touch -d '8 days ago' "${PFP14}"
+build "${T14}"
+echo "     $(pkgs_line "${T14}")"
+check "(e) base REUSE"                            mode_is "${T14}" REUSE
+check "(e) layer BUILD on age"                    pkgs_reason "${T14}" 'fingerprint 8.0 days old, limit 7'
+
+echo "  -- (f) the base is rebuilt: so is the layer, with a new fingerprint"
+PFPF="$(cat "${PFP14}")"
+echo "# changed" >> "${T14}/pi-gen/stage1/prerun.sh"
+build "${T14}"
+check "(f) base FULL"                             mode_is "${T14}" FULL
+check "(f) layer BUILD, naming the base"          pkgs_reason "${T14}" 'the stage2 base under it is built in this run'
+check "(f) its fingerprint follows the base's"    test "$(cat "${PFP14}")" != "${PFPF}"
+
+echo "  -- (g) a layer build that fails leaves no fingerprint, and is never reused"
+build "${T14}"
+check "(g) precondition: REUSE"                   pkgs_mode_is "${T14}" REUSE
+echo "libfoo-dev" >> "${L14}"
+build "${T14}" STUB_FAIL_IN_PKGS=1
+check "(g) precondition: the layer build failed"  grep -q 'STUB pkgs failed' "${T14}/out"
+check "(g) no layer fingerprint left"             test ! -e "${PFP14}"
+cp "${WORK}/l14.orig" "${L14}"
+build "${T14}"
+echo "     $(pkgs_line "${T14}")"
+check "(g) reverted lists do NOT reuse the half-built layer" pkgs_reason "${T14}" 'no fingerprint'
+
+echo "  -- (h) STAGE_LIST: stages after the layer count for neither; its place does"
+build "${T14}"
+check "(h) precondition: REUSE, REUSE"            bash -c "grep -q '^elspi base: REUSE' '${T14}/out' && grep -q '^elspi base: package layer REUSE' '${T14}/out'"
+check "(h1) anchor: a stage after the layer"      set_stages "stage0 stage1 stage2 stage-elspi-pkgs stage3 stage-elspi"
+build "${T14}"
+check "(h1) base REUSE"                           mode_is "${T14}" REUSE
+check "(h1) layer REUSE"                          pkgs_mode_is "${T14}" REUSE
+check "(h2) anchor: a stage between stage2 and the layer" set_stages "stage0 stage1 stage2 stage3 stage-elspi-pkgs stage-elspi"
+build "${T14}"
+echo "     $(pkgs_line "${T14}")"
+check "(h2) base still REUSE (hashed through stage2 only)" mode_is "${T14}" REUSE
+check "(h2) layer OFF"                            pkgs_mode_is "${T14}" OFF
+check "(h2) its stale SKIP removed, so the stage runs where it is" bash -c "! test -e '${PK14}/SKIP'"
+check "(h3) anchor: no layer at all"              set_stages "stage0 stage1 stage2 stage-elspi"
+build "${T14}"
+check "(h3) base REUSE"                           mode_is "${T14}" REUSE
+check "(h3) layer OFF"                            pkgs_mode_is "${T14}" OFF
+check "(h3) stage-elspi copied stage2, as before the layer" grep -q "^STUB copy_previous from ${W14}/stage2/rootfs$" "${T14}/out"
+check "(h3) the base left alone by the REUSE run" grep -q '^elspi base: REUSE run, fingerprint left untouched' "${T14}/out"
+T14b="$(make_tree nolayer)"
+check "(h4) anchor: a fresh tree without the layer" replace_line "${T14b}/pi-gen/elspi.conf" \
+	'STAGE_LIST="stage0 stage1 stage2 stage-elspi-pkgs stage-elspi"' 'STAGE_LIST="stage0 stage1 stage2 stage-elspi"'
+build "${T14b}"
+check "(h4) FULL, layer OFF"                      bash -c "grep -q '^elspi base: FULL' '${T14b}/out' && grep -q '^elspi base: package layer OFF' '${T14b}/out'"
+check "(h4) stage-elspi recorded the base, as before the layer" test -s "$(fp_of "${T14b}")"
+cp "${WORK}/elspi.conf.14" "${EC14}"
+
+echo "  -- (i) a failed config guard: the layer is built and never recorded"
+build "${T14}"
+build "${T14}"
+check "(i) precondition: REUSE"                   pkgs_mode_is "${T14}" REUSE
+check "(i) anchor present" insert_before "${EC14}" 'export ELSPI_USB_MAX_CURRENT ELSPI_SITE_CONF_APPLIED' 'export FOO=bar'
+build "${T14}"
+echo "     $(pkgs_line "${T14}")"
+check "(i) base FULL on the guard"                reason_is "${T14}" 'config guard:'
+check "(i) layer BUILD"                           pkgs_mode_is "${T14}" BUILD
+check "(i) no layer fingerprint recorded"         test ! -e "${PFP14}"
+check "(i) and it said so"                        grep -q '^elspi base: package layer built without a fingerprint; not marked reusable' "${T14}/out"
+cp "${WORK}/elspi.conf.14" "${EC14}"
 
 echo
 if [ "${FAIL}" -eq 0 ] && [ "${PASS}" -gt 0 ]; then

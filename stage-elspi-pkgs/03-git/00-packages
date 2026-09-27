@@ -18,10 +18,13 @@
 #   that same checkout. Without git the button refuses, and that is the one
 #   path that has to work on a machine with no terminal.
 #
-# It lives in THIS substage rather than its own because this is the substage
-# that exists for the app's own half of the image: the venv is built here from
-# the vendored lock, and the checkout git manages is what that venv is
-# eventually synced against.
+# It was installed by stage-elspi/08-venv, the substage for the app's own half
+# of the image (the venv is built there from the vendored lock, and the checkout
+# git manages is what that venv is eventually synced against). Since 2026-09-26
+# it is installed here, in the PACKAGE LAYER (see elspi-base-reuse.sh), with
+# elspi's other package-only substages: a layer that is built once and reused
+# while its package lists are unchanged, so an emulated build does not reinstall
+# them every time. 08-venv still runs after it, and git is on PATH as before.
 #
 # Named as a package rather than assumed: the whole point of 00-graphics'
 # header applies here too -- a dependency that arrives by resolution accident
