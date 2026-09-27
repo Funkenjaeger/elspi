@@ -129,7 +129,7 @@ param(
     [switch] $DryRun,
 
     # Same default as flash-test-build.ps1's -Dest.
-    [string] $Dest = $(if ($env:ELSPI_TEST_BUILD_DIR) { $env:ELSPI_TEST_BUILD_DIR } elseif ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'elspi\test-builds' } else { Join-Path $env:TEMP 'elspi-test-builds' }),
+    [string] $Dest = $(if ($env:ELSPI_TEST_BUILD_DIR) { $env:ELSPI_TEST_BUILD_DIR } elseif ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'elspi\test-builds' } else { Join-Path ([System.IO.Path]::GetTempPath()) 'elspi-test-builds' }),
 
     # Forgejo caches only -- same settings and token file as
     # flash-test-build.ps1 -Source forgejo.
