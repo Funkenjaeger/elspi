@@ -19,7 +19,7 @@ name: docs
 # instructions on the site should describe the image the tags were cut from.
 on:
   push:
-    branches: [main, arm64]  # arm64 only until the 2026-09-27 rename (D10) is done everywhere; then main alone
+    branches: [main]
     paths:
       - "docs/**"
       - "mkdocs.yml"
@@ -62,12 +62,12 @@ jobs:
       # directory upstream pi-gen's .gitignore already ignores. Keep this path
       # and site_dir in step.
       - uses: actions/upload-pages-artifact@v5
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arm64'
+        if: github.ref == 'refs/heads/main'
         with:
           path: deploy/site
 
   deploy:
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/arm64'
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:
