@@ -207,10 +207,10 @@ param(
     # read:repository). Read at run time, never printed.
     [string] $ForgejoTokenFile = $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'elspi\forgejo-token' } else { '' }),
 
-    # Base cache directory. The actual download goes to $Dest\<run-id>\. Fixed
-    # per the maintainer's approval of this tool's design -- override with -Dest for a
+    # Base cache directory. The actual download goes to $Dest\<run-id>\. Set
+    # $env:ELSPI_TEST_BUILD_DIR for a persistent override, or pass -Dest for a
     # one-off elsewhere.
-    [string] $Dest = 'C:\projects\claude-working\elspi-test-builds',
+    [string] $Dest = $(if ($env:ELSPI_TEST_BUILD_DIR) { $env:ELSPI_TEST_BUILD_DIR } elseif ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'elspi\test-builds' } else { Join-Path $env:TEMP 'elspi-test-builds' }),
 
     # Do everything up to and including the y/N confirmation prompt's
     # decision point, then print what each remaining step WOULD do (download,

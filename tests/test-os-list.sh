@@ -227,20 +227,20 @@ echo "== seen-red: the file:// NOTE guard must fire for ANY default URL, not jus
 # A build-host-shaped absolute path: under \$WORK, itself under \$TMPDIR (/tmp
 # or /home -- never /mnt). The OLD guard (base :146, /mnt/[a-z]/* only) would
 # have matched nothing here; that is the defect this build fixes.
-DSERVER_DIR="${WORK}/buildhost-shaped/home/builder"
-mkdir -p "${DSERVER_DIR}"
-case "${DSERVER_DIR}" in
+BUILDHOST_DIR="${WORK}/buildhost-shaped/home/builder"
+mkdir -p "${BUILDHOST_DIR}"
+case "${BUILDHOST_DIR}" in
 	/mnt/*) echo "  UNKNOWN fixture landed under /mnt -- TMPDIR is Windows-mounted here"; exit 2 ;;
 esac
-DSERVER_IMG="${DSERVER_DIR}/image_2026-09-13-elspi.img.xz"
-cp "${IMG}" "${DSERVER_IMG}"
+BUILDHOST_IMG="${BUILDHOST_DIR}/image_2026-09-13-elspi.img.xz"
+cp "${IMG}" "${BUILDHOST_IMG}"
 
 NOTE_OUT="${WORK}/note.out"
-"${GEN}" "${DSERVER_IMG}" --out "${WORK}/note.json" >"${NOTE_OUT}" 2>&1
+"${GEN}" "${BUILDHOST_IMG}" --out "${WORK}/note.json" >"${NOTE_OUT}" 2>&1
 if grep -q "^NOTE:" "${NOTE_OUT}"; then
 	ok "current make-os-list.sh prints a NOTE for a default file:// URL on a non-/mnt path"
 else
-	bad "current make-os-list.sh stayed silent for ${DSERVER_IMG} -- the guard did not widen"
+	bad "current make-os-list.sh stayed silent for ${BUILDHOST_IMG} -- the guard did not widen"
 	sed 's/^/           /' "${NOTE_OUT}"
 fi
 
@@ -252,7 +252,7 @@ if git -C "${REPO}" cat-file -e "${BASE_SHA}" 2>/dev/null; then
 	chmod +x "${BASE_GEN}"
 	cp "${REPO}/tools/os_list.imager-block.json" "${WORK}/os_list.imager-block.json"
 	BASE_NOTE_OUT="${WORK}/base-note.out"
-	"${BASE_GEN}" "${DSERVER_IMG}" --out "${WORK}/base-note.json" >"${BASE_NOTE_OUT}" 2>&1
+	"${BASE_GEN}" "${BUILDHOST_IMG}" --out "${WORK}/base-note.json" >"${BASE_NOTE_OUT}" 2>&1
 	if grep -q "^NOTE:" "${BASE_NOTE_OUT}"; then
 		bad "RED PROOF FAILED: base SHA ${BASE_SHA} ALSO printed a NOTE for a non-/mnt path -- the premise (guard only matches /mnt/[a-z]/*) does not hold here"
 		sed 's/^/           /' "${BASE_NOTE_OUT}"

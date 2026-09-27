@@ -338,8 +338,8 @@ try {
 # =============================================================================
 
 Assert-True 'path conversion: simple path' ((ConvertTo-WslPath 'C:\x\y') -eq '/mnt/c/x/y') "(got '$(ConvertTo-WslPath 'C:\x\y')')"
-Assert-True 'path conversion: nested claude-working path' `
-    ((ConvertTo-WslPath 'C:\projects\claude-working\elspi-test-builds\36244494844\image.img.xz') -eq '/mnt/c/projects/claude-working/elspi-test-builds/36244494844/image.img.xz')
+Assert-True 'path conversion: deeply nested path' `
+    ((ConvertTo-WslPath 'C:\build\cache\elspi-test-builds\36244494844\image.img.xz') -eq '/mnt/c/build/cache/elspi-test-builds/36244494844/image.img.xz')
 Assert-True 'path conversion: lowercases the drive letter' ((ConvertTo-WslPath 'D:\cards\x.json') -eq '/mnt/d/cards/x.json')
 Assert-Throws 'path conversion: rejects a relative path' { ConvertTo-WslPath 'relative\path' } 'not an absolute Windows path'
 

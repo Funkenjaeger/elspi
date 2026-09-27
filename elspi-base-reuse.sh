@@ -156,8 +156,8 @@ _ELSPI_BASE_MAX_AGE_S=$((7 * 86400))
 # layer is rebuilt from _ELSPI_REFRESH_AGE_S (6 days) instead of 7; one younger
 # is reused exactly as without the file. The file is not an input: not hashed,
 # not listed by --print-inputs, and it changes only the age bound of the run
-# it is in. homelab-ops dserver/elspi-ci-prewarm.sh reads the layers' ages
-# on the runner and asks for a refresh build when one is 6 days old.
+# it is in. A pre-warm job on the build host reads the layers' ages on the
+# runner and asks for a refresh build when one is 6 days old.
 _ELSPI_REFRESH_AGE_S=$((6 * 86400))
 _ELSPI_REFRESH_FILE=.elspi-refresh
 _elspi_refresh_run() { [ -e "${BASE_DIR}/${_ELSPI_REFRESH_FILE}" ]; }
