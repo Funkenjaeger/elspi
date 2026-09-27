@@ -6,7 +6,7 @@
 #   - stage-elspi/prerun.sh calls elspi_base_record  (mark the base reusable)
 # EXECUTED only for two read-only queries, which need no BASE_DIR, work on a
 # plain checkout, and write nothing:
-#   bash elspi-base-reuse.sh --print-inputs   # the paths the fingerprint reads
+#   bash elspi-base-reuse.sh --print-inputs   # the paths the fingerprint reads, and this file
 #   bash elspi-base-reuse.sh --check-configs  # the config guard, below
 #
 # --print-inputs IS AN INTERFACE (2026-09-26). A nightly pre-warm on the
@@ -14,7 +14,11 @@
 # whether the base needs rebuilding. Keep this file at the repo root, keep the
 # option name, and keep the output one repo-relative path per line. If any of
 # those change, the pre-warm cannot list the inputs and falls back to
-# rebuilding every night.
+# rebuilding every night. The output is a SUPERSET of what the fingerprint
+# reads: every path it reads, plus this file, which it does not hash (see
+# _ELSPI_BASE_VERSION). So a consumer that diffs the listed paths can see a
+# change the fingerprint does not -- an edit here costs it at most one
+# night-time build, which then reuses -- but never miss one it does.
 #
 # WHY. stage0-2 are pi-gen's stock Lite base and, with arm64 emulated under
 # qemu, the dominant cost of a build. Nothing elspi changes between builds
@@ -45,10 +49,62 @@
 #   - that file is under 7 days old, so Debian and Raspberry Pi archive
 #     updates reach the base within a week with no cleanup timer.
 # The fingerprint is written ONLY by elspi_base_record, i.e. only after
-# stage2 has completed in a FULL run, and NEVER on a REUSE run: a rewrite
-# would refresh its mtime and the 7-day bound would never expire. A FULL run
-# deletes it before stage0 starts, so a base build that dies part way is
-# never marked reusable.
+# stage2 has completed in a FULL run, and by an operator's ADOPT (below),
+# which keeps the base's age -- NEVER on a REUSE run: a rewrite would refresh
+# its mtime and the 7-day bound would never expire. A FULL run takes it out
+# of stage2 before stage0 starts (moving a valid base aside, below), so a
+# base build that dies part way is never marked reusable.
+#
+# THE LAST GOOD BASE (2026-09-26). A FULL run used to delete the fingerprint
+# of the base it was replacing as it began, so a FULL that was then cancelled
+# or failed cost an intact base. Now, at the start of a FULL, if stage2 holds
+# a VALID base -- a rootfs, and next to it a fingerprint of 64 hex digits
+# under 7 days old -- ${WORK_DIR}/stage2 is RENAMED, whole, to
+#   ${WORK_DIR}/.elspi-base-lastgood
+# on the same volume: instant, atomic, and the fingerprint's mtime (its age)
+# travels with it. Exactly ONE copy is kept: a valid base replaces an older
+# copy (whose fingerprint is deleted first, so an interrupted delete never
+# leaves a restorable half), and a stage2 without a valid base -- a partial
+# or failed build -- never touches it. elspi_base_record deletes the copy
+# once a FULL run has recorded its own base, so the volume holds at most one
+# extra base. A later run whose stage2 would not REUSE, but whose copy's
+# fingerprint EQUALS the current one and is under 7 days old, deletes
+# stage2 and renames the copy back (RESTORE), then takes the ordinary REUSE
+# checks. It lands at ${WORK_DIR}/stage2/rootfs, which is where build.sh
+# points PREV_ROOTFS_DIR for a skipped stage2 (:91-92, :121-123) and so where
+# stage-elspi's copy_previous reads it. A restore discards whatever stage2
+# held, even a base valid for other inputs: the current inputs need the
+# restored one, and one spare is the bound.
+# EXCEPT UNDER A FAILED CONFIG GUARD. Then build.sh's shell has run config
+# lines nobody classified, which could have written into either base (the
+# test suite's 9(e2) writes into the kept rootfs), so neither is trusted:
+# stage2 is not kept aside, and an existing copy is discarded.
+#
+# ADOPT (2026-09-26): a one-shot operator override, for a stage2 rootfs that
+# is known good but has no matching fingerprint. The operator creates
+#   ${WORK_DIR}/stage2/.elspi-base-adopt
+# in the persistent work volume, next to the fingerprint file. It is not an
+# input: not in the repo or the configs, not hashed, not listed by
+# --print-inputs. On the next run, if the config guard passes, the
+# fingerprint can be computed, ${WORK_DIR}/stage2/rootfs exists and no
+# RESTORE happened, the CURRENT fingerprint is written as the recorded one
+# ("elspi base: ADOPT ...") and the run takes the ordinary REUSE checks. The
+# marker alone never matches anything: it only lets the current fingerprint
+# be recorded on a rootfs that is already there. A RESTORE beats an ADOPT,
+# being verified where an adopt is only asserted; the two never both fire.
+# The marker is CONSUMED by every run that finds it, used or not, so it can
+# never fire later by surprise; an unused one is named at the end of the
+# decision line ("adopt marker ignored: <why>").
+# An adopted base KEEPS ITS AGE; an adopt never restarts the 7-day bound. The
+# fingerprint file takes the previous one's mtime if there was one, else the
+# newest mtime among the rootfs directory and its top-level entries: when
+# stages 0-2 last created or removed an entry at the top of the tree. That is
+# never later than the base's last write, so an adopt never grants a base
+# more of its 7 days than it had; it can be earlier (an in-place edit deeper
+# down moves no top-level mtime), which only errs toward rebuilding sooner.
+# The rootfs directory's own mtime alone would date the base to stage0's
+# debootstrap, needlessly early. An adopted base already 7 days old is FULL
+# on age like any other, and the decision line says so.
 #
 # ALWAYS, in build.sh's shell: CLEAN=1, so stage-elspi and export-image
 # rebuild from a fresh copy of stage2's rootfs rather than stacking on the
@@ -61,6 +117,25 @@
 # there, and elspi_base_prepare checks again (_elspi_base_in_build_sh).
 
 _ELSPI_BASE_MAX_AGE_S=$((7 * 86400))
+
+# THE BASE VERSION, hashed into the fingerprint in place of this file's text
+# (2026-09-26). This file does not build the base: stages 0-2 do, and they are
+# hashed raw. It only decides whether to rebuild the base, and records it. So
+# hashing its text only made every edit here -- a comment, a message --
+# force a ~50 min FULL. Instead, RAISE THIS NUMBER, and only then, when a
+# change here alters
+#   - WHAT the manifest reads or how the fingerprint is computed from it
+#     (_ELSPI_BASE_RAW_INPUTS, _ELSPI_BASE_REPO_CONFS, _ELSPI_BASE_VARS,
+#     _elspi_base_inputs, _elspi_base_manifest, and the config guard, which
+#     decides what the repo's configs are reduced to); or
+#   - HOW a REUSE skips stages or how the base is recorded, kept, restored
+#     or adopted (the SKIPs and CLEAN in elspi_base_prepare, the fingerprint
+#     file, elspi_base_record, the last good copy, ADOPT),
+# so that a base built or recorded under the old rules is never reused under
+# the new ones. tests/test-base-reuse.sh pins a hash of this file's code
+# (comments and blank lines stripped) and fails on any code change until the
+# pin is updated, so that the decision is made at review, not skipped.
+_ELSPI_BASE_VERSION=1
 
 # =============================================================================
 # WHAT SHAPES STAGES 0-2, and why the repo's configs are NOT hashed raw
@@ -167,13 +242,15 @@ _ELSPI_BASE_VARS=(
 #                       guard, so a config that sets one must classify it.
 _ELSPI_BASE_NONBASE_VARS=(IMG_NAME DEPLOY_COMPRESSION COMPRESSION_LEVEL)
 
-# THE ONE LIST OF INPUT PATHS. The fingerprint reads exactly these (plus the
-# config build.sh was given with -c, when that is not a byte-copy of a repo
-# config), and --print-inputs prints exactly these; both go through
-# _elspi_base_inputs, so they cannot diverge.
-#   raw   hashed whole: path, content hash and executable bit, recursively.
-#   conf  the repo's configs: scanned by the guard, reduced to _ELSPI_BASE_VARS.
-_ELSPI_BASE_RAW_INPUTS=(stage0 stage1 stage2 scripts build.sh Dockerfile elspi-base-reuse.sh)
+# THE ONE LIST OF INPUT PATHS. The fingerprint reads exactly the raw, conf,
+# private and site paths (plus the config build.sh was given with -c, when
+# that is not a byte-copy of a repo config); --print-inputs prints those AND
+# this file. Both go through _elspi_base_inputs, so they cannot diverge.
+#   raw     hashed whole: path, content hash and executable bit, recursively.
+#   conf    the repo's configs: scanned by the guard, reduced to _ELSPI_BASE_VARS.
+#   listed  printed, never hashed: this file, which _ELSPI_BASE_VERSION covers.
+_ELSPI_BASE_RAW_INPUTS=(stage0 stage1 stage2 scripts build.sh Dockerfile)
+_ELSPI_BASE_LISTED_ONLY=(elspi-base-reuse.sh)
 _ELSPI_BASE_REPO_CONFS=(elspi.conf ci.conf ci-test.conf)
 
 # "<class> <path>" per line, $1 = the repo root. Classes as above, plus
@@ -182,6 +259,7 @@ _ELSPI_BASE_REPO_CONFS=(elspi.conf ci.conf ci-test.conf)
 _elspi_base_inputs() {
 	local root="$1" p
 	for p in "${_ELSPI_BASE_RAW_INPUTS[@]}"; do echo "raw ${p}"; done
+	for p in "${_ELSPI_BASE_LISTED_ONLY[@]}"; do echo "listed ${p}"; done
 	for p in "${_ELSPI_BASE_REPO_CONFS[@]}"; do echo "conf ${p}"; done
 	if [ -f "${root}/config" ]; then echo "private config"; fi
 	if [ -n "${ELSPI_SITE_CONF:-}" ]; then echo "site ${ELSPI_SITE_CONF}"; fi
@@ -213,7 +291,7 @@ elspi.conf|0|1) ;;
 elspi.conf|*) echo "FATAL: ELSPI_USB_MAX_CURRENT must be 0 or 1 (got '${ELSPI_USB_MAX_CURRENT}')"; exit 1 ;;
 # SOURCES the private site config, hashed whole (never narrowed).
 elspi.conf|. "${ELSPI_SITE_CONF}"
-# SOURCES this file (hashed raw) and makes the decision. Nothing but `fi`
+# SOURCES this file (covered by _ELSPI_BASE_VERSION) and makes the decision. Nothing but `fi`
 # may follow it: the decision has already read the values.
 elspi.conf|. "${BASE_DIR}/elspi-base-reuse.sh"
 elspi.conf|elspi_base_prepare
@@ -334,6 +412,7 @@ _elspi_base_var_lines() {
 #     bit, because build.sh:67 and :107 SKIP a script without it. Sorted with
 #     LC_ALL=C. stage0-2's own SKIP and SKIP_IMAGES are left out: this file
 #     and elspi.conf create them, and hashing them would flip the result.
+#   - _ELSPI_BASE_VERSION, standing for this file (see its comment).
 #   - ARCH (a constant in build.sh:180) and _ELSPI_BASE_VARS, as the config
 #     has set them so far.
 #   - a private config, whole, with whole-line comments (a '#' after optional
@@ -349,6 +428,7 @@ _elspi_base_manifest() {
 		p="${line#* }"
 		case "${cls}" in
 			raw)     raw+=("${p}") ;;
+			listed)  ;;
 			conf)    conf+=("${p}") ;;
 			private) priv+=("${root}/${p}") ;;
 			site)    priv+=("${p}") ;;
@@ -359,6 +439,7 @@ _elspi_base_manifest() {
 		[ -e "${root}/${p}" ] || { echo "elspi base: missing input ${root}/${p}" >&2; return 1; }
 	done
 
+	echo "ELSPI_BASE_VERSION=${_ELSPI_BASE_VERSION}"
 	echo "ARCH=$(sed -n 's/^export ARCH=//p' "${root}/build.sh")"
 	_elspi_base_var_lines
 
@@ -380,10 +461,10 @@ _elspi_base_manifest() {
 	done < <(cd "${root}" && find "${raw[@]}" \( -type f -o -type l \) -print0 | LC_ALL=C sort -z)
 	[ "${n}" -gt 0 ] || return 1
 
-	# The source stack: build.sh and this file are raw inputs already, and a
-	# byte-copy of a repo config (build-docker.sh mounts the chosen one at
-	# /config) is covered by the guard and the values. Anything else is a
-	# private config.
+	# The source stack: build.sh is a raw input already, this file is covered
+	# by _ELSPI_BASE_VERSION, and a byte-copy of a repo config (build-docker.sh
+	# mounts the chosen one at /config) is covered by the guard and the values.
+	# Anything else is a private config.
 	for p in "${conf[@]}"; do
 		h="$(sha256sum < "${root}/${p}")" || return 1
 		known+=("${h%% *}")
@@ -403,13 +484,73 @@ _elspi_base_manifest() {
 	done
 }
 
+_ELSPI_BASE_FP_NAME=.elspi-base-fingerprint
+
+# Seconds since file $1 was modified; negative if it is dated in the future.
+_elspi_base_age_s() {
+	local m
+	m="$(stat -c %Y "$1")" || return 1
+	echo "$(($(date +%s) - m))"
+}
+
+# True if base directory $1 (${WORK_DIR}/stage2, or the last good copy) holds
+# a VALID base: a rootfs, and next to it a fingerprint of 64 hex digits that
+# is dated neither in the future nor 7 days back -- one that could be reused
+# or restored for the inputs it names.
+_elspi_base_valid() {
+	local f="$1/${_ELSPI_BASE_FP_NAME}" stored a
+	[ -d "$1/rootfs" ] && [ -f "${f}" ] || return 1
+	stored="$(cat "${f}")" || return 1
+	[[ ${stored} =~ ^[0-9a-f]{64}$ ]] || return 1
+	a="$(_elspi_base_age_s "${f}")" || return 1
+	[ "${a}" -ge 0 ] && [ "${a}" -lt "${_ELSPI_BASE_MAX_AGE_S}" ]
+}
+
+# Delete base directory $1, its fingerprint FIRST: a delete that is
+# interrupted leaves a directory nothing will reuse or restore.
+_elspi_base_discard() {
+	[ -e "$1" ] || return 0
+	rm -f "$1/${_ELSPI_BASE_FP_NAME}"
+	rm -rf "$1"
+	[ ! -e "$1" ]
+}
+
+# ADOPT (see the header): record fingerprint $2 for the rootfs in base
+# directory $1, keeping the base's age, and print the ADOPT line.
+_elspi_base_adopt() {
+	local d="$1" fp="$2" f="$1/${_ELSPI_BASE_FP_NAME}" prev=none t from
+	if [ -f "${f}" ]; then
+		prev="$(cat "${f}")" || prev=unreadable
+		t="$(stat -c %Y "${f}")" || t=""
+		from="the previous fingerprint"
+	else
+		t="$(find "${d}/rootfs" -maxdepth 1 -printf '%T@\n' | LC_ALL=C sort -n | tail -n 1)" || t=""
+		t="${t%%.*}"
+		from="the stage2 rootfs (newest top-level mtime)"
+	fi
+	if ! [[ ${t} =~ ^[0-9]+$ ]]; then
+		echo "FATAL: ADOPT could not date the stage2 base from ${from}"
+		return 1
+	fi
+	if ! { printf '%s\n' "${fp}" > "${f}.tmp" && touch -d "@${t}" "${f}.tmp" && mv -f "${f}.tmp" "${f}"; } \
+		|| [ "$(cat "${f}")" != "${fp}" ] || [ "$(stat -c %Y "${f}")" != "${t}" ]; then
+		rm -f "${f}" "${f}.tmp"
+		echo "FATAL: ADOPT could not write ${f} with the base's age kept"
+		return 1
+	fi
+	echo "elspi base: ADOPT stage2 rootfs as fingerprint ${fp} (previous: ${prev}), dated $(date -u -d "@${t}" '+%Y-%m-%d %H:%M:%S UTC') from ${from}"
+}
+
 elspi_base_prepare() {
 	_elspi_base_in_build_sh || return 0
 
 	local work fp_file manifest fp="" stored mode=FULL reason age_s days s guard
 	local deploy="${DEPLOY_DIR:-${BASE_DIR}/deploy}"
+	local lastgood adopt_file adopt=0 adopted=0 restored=0 ignored="" guard_ok=0
 	work="$(_elspi_base_workdir)"
-	fp_file="${work}/stage2/.elspi-base-fingerprint"
+	fp_file="${work}/stage2/${_ELSPI_BASE_FP_NAME}"
+	adopt_file="${work}/stage2/.elspi-base-adopt"
+	lastgood="${work}/.elspi-base-lastgood"
 
 	# deploy/ first: it is emptied on every run, REUSE or FULL. Its CONTENTS,
 	# not the directory, which is a Docker volume mount point (Dockerfile:16).
@@ -421,11 +562,21 @@ elspi_base_prepare() {
 		fi
 	fi
 
+	# The adopt marker is one-shot: consumed here, first, by every run that
+	# finds it, whether it is used below or not.
+	if [ -e "${adopt_file}" ]; then
+		adopt=1
+		rm -f "${adopt_file}"
+		[ ! -e "${adopt_file}" ] || { echo "FATAL: could not remove ${adopt_file}"; exit 1; }
+	fi
+
 	if ! guard="$(_elspi_base_guard "${BASE_DIR}")"; then
 		# No fingerprint: a base built while the guard fails is never reused.
 		printf '%s\n' "${guard}" | sed 's/^/elspi base guard: /'
 		reason="config guard: ${guard%%$'\n'*}"
+		if [ "${adopt}" = 1 ]; then ignored="config guard failed"; fi
 	else
+		guard_ok=1
 		if manifest="$(_elspi_base_manifest)"; then
 			fp="$(printf '%s\n' "${manifest}" | sha256sum)"
 			fp="${fp%% *}"
@@ -434,23 +585,54 @@ elspi_base_prepare() {
 		if [ "${#fp}" -ne 64 ]; then
 			fp=""
 			reason="could not compute the stage0-2 fingerprint"
-		elif [ ! -d "${work}/stage2/rootfs" ]; then
-			reason="no stage2 rootfs in ${work}"
-		elif [ ! -f "${fp_file}" ]; then
-			reason="stage2 rootfs has no fingerprint: never recorded, or its FULL run did not finish"
-		elif ! stored="$(cat "${fp_file}")" || [ "${stored}" != "${fp}" ]; then
-			# An unreadable file counts as a mismatch, never as a match.
-			reason="fingerprint mismatch: stage0-2 inputs changed"
+			if [ "${adopt}" = 1 ]; then ignored="no fingerprint could be computed"; fi
 		else
-			age_s=$(($(date +%s) - $(stat -c %Y "${fp_file}")))
-			days="$(awk -v s="${age_s}" 'BEGIN { printf "%.1f", s / 86400 }')"
-			if [ "${age_s}" -lt 0 ]; then
-				reason="fingerprint is dated in the future"
-			elif [ "${age_s}" -ge "${_ELSPI_BASE_MAX_AGE_S}" ]; then
-				reason="fingerprint ${days} days old, limit 7"
+			# RESTORE, before anything else: stage2 would not reuse, and the
+			# last good copy would. Verified, so it beats an adopt.
+			if ! { _elspi_base_valid "${work}/stage2" && [ "$(cat "${fp_file}")" = "${fp}" ]; } \
+				&& _elspi_base_valid "${lastgood}" \
+				&& [ "$(cat "${lastgood}/${_ELSPI_BASE_FP_NAME}")" = "${fp}" ]; then
+				_elspi_base_discard "${work}/stage2" \
+					|| { echo "FATAL: could not clear ${work}/stage2 to restore the last good base"; exit 1; }
+				mv -T "${lastgood}" "${work}/stage2" && [ ! -e "${lastgood}" ] && [ -d "${work}/stage2/rootfs" ] \
+					|| { echo "FATAL: could not move ${lastgood} back to ${work}/stage2"; exit 1; }
+				restored=1
+				age_s="$(_elspi_base_age_s "${fp_file}")" || age_s=0
+				days="$(awk -v s="${age_s}" 'BEGIN { printf "%.1f", s / 86400 }')"
+				echo "elspi base: RESTORE last good base, fingerprint ${fp:0:12}, ${days} days old, from ${lastgood}"
+			fi
+			if [ "${adopt}" = 1 ]; then
+				if [ "${restored}" = 1 ]; then
+					ignored="restore matched"
+				elif [ ! -d "${work}/stage2/rootfs" ]; then
+					ignored="no stage2 rootfs in ${work}"
+				else
+					_elspi_base_adopt "${work}/stage2" "${fp}" || exit 1
+					adopted=1
+				fi
+			fi
+
+			if [ ! -d "${work}/stage2/rootfs" ]; then
+				reason="no stage2 rootfs in ${work}"
+			elif [ ! -f "${fp_file}" ]; then
+				reason="stage2 rootfs has no fingerprint: never recorded, or its FULL run did not finish"
+			elif ! stored="$(cat "${fp_file}")" || [ "${stored}" != "${fp}" ]; then
+				# An unreadable file counts as a mismatch, never as a match.
+				reason="fingerprint mismatch: stage0-2 inputs changed"
 			else
-				mode=REUSE
-				reason="fingerprint match, ${days} days old"
+				age_s=$(($(date +%s) - $(stat -c %Y "${fp_file}")))
+				days="$(awk -v s="${age_s}" 'BEGIN { printf "%.1f", s / 86400 }')"
+				if [ "${age_s}" -lt 0 ]; then
+					reason="fingerprint is dated in the future"
+				elif [ "${age_s}" -ge "${_ELSPI_BASE_MAX_AGE_S}" ]; then
+					reason="fingerprint ${days} days old, limit 7"
+				else
+					mode=REUSE
+					reason="fingerprint match, ${days} days old"
+				fi
+				if [ "${adopted}" = 1 ] && [ "${mode}" = FULL ]; then
+					reason="${reason}: the adopted base kept its age, so it is rebuilt"
+				fi
 			fi
 		fi
 	fi
@@ -461,6 +643,20 @@ elspi_base_prepare() {
 			[ -f "${BASE_DIR}/${s}/SKIP" ] || { echo "FATAL: could not create ${BASE_DIR}/${s}/SKIP"; exit 1; }
 		done
 	else
+		# Keep a valid base aside as the last good one, in one rename, unless
+		# the config guard failed (see the header).
+		if [ "${guard_ok}" = 0 ]; then
+			if [ -e "${lastgood}" ]; then
+				_elspi_base_discard "${lastgood}" || { echo "FATAL: could not delete ${lastgood}"; exit 1; }
+				echo "elspi base: last good base in ${lastgood} discarded: the config guard failed, so no base in ${work} is known untouched"
+			fi
+		elif _elspi_base_valid "${work}/stage2"; then
+			stored="$(cat "${fp_file}")" || stored=""
+			_elspi_base_discard "${lastgood}" || { echo "FATAL: could not delete ${lastgood}"; exit 1; }
+			mv -T "${work}/stage2" "${lastgood}" && [ ! -e "${work}/stage2" ] \
+				|| { echo "FATAL: could not move ${work}/stage2 aside to ${lastgood}"; exit 1; }
+			echo "elspi base: stage2 base ${stored:0:12} kept aside in ${lastgood} as the last good base, until this run records its own"
+		fi
 		# The old fingerprint goes BEFORE stage0 starts: from here until
 		# elspi_base_record runs, this base is not known to be complete.
 		rm -f "${fp_file}"
@@ -475,10 +671,11 @@ elspi_base_prepare() {
 	ELSPI_BASE_MODE="${mode}"
 	ELSPI_BASE_FINGERPRINT="${fp}"
 	ELSPI_BASE_FP_FILE="${fp_file}"
+	ELSPI_BASE_LASTGOOD="${lastgood}"
 	# Exported: stage-elspi/prerun.sh is a CHILD of build.sh and reads them.
 	# (They are in stage 0-2's environment too; nothing there reads them.)
-	export CLEAN ELSPI_BASE_MODE ELSPI_BASE_FINGERPRINT ELSPI_BASE_FP_FILE
-	echo "elspi base: ${mode} (${reason})${fp:+ fingerprint ${fp:0:12}}"
+	export CLEAN ELSPI_BASE_MODE ELSPI_BASE_FINGERPRINT ELSPI_BASE_FP_FILE ELSPI_BASE_LASTGOOD
+	echo "elspi base: ${mode} (${reason}${ignored:+; adopt marker ignored: ${ignored}})${fp:+ fingerprint ${fp:0:12}}"
 }
 
 # Called from stage-elspi/prerun.sh. Reaching that prerun means build.sh
@@ -505,6 +702,16 @@ elspi_base_record() {
 		exit 1
 	fi
 	echo "elspi base: stage0-2 complete, fingerprint ${ELSPI_BASE_FINGERPRINT:0:12} recorded (reusable for 7 days)"
+	# This run's base is recorded, so the copy kept aside at its start is no
+	# longer the last good one. Only here: a FULL that dies before this line
+	# leaves the copy for the next run to restore.
+	if [ -n "${ELSPI_BASE_LASTGOOD:-}" ] && [ -e "${ELSPI_BASE_LASTGOOD}" ]; then
+		if _elspi_base_discard "${ELSPI_BASE_LASTGOOD}"; then
+			echo "elspi base: last good base in ${ELSPI_BASE_LASTGOOD} deleted, replaced by this run's"
+		else
+			echo "elspi base: WARNING: could not delete ${ELSPI_BASE_LASTGOOD}; the next FULL run that keeps a base replaces it"
+		fi
+	fi
 }
 
 # EXECUTED (not sourced): the read-only queries. Paths are relative to this

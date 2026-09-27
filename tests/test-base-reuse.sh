@@ -16,15 +16,28 @@
 # as a lone file at another path (ci-test.conf -> ci.conf -> elspi.conf).
 # Only build.sh is a STUB: it does build.sh:147-169 (BASE_DIR, then source the
 # -c config) and :190 (WORK_DIR), then stands in for stage0-2 -- a SKIPped
-# stage2 keeps its rootfs, a run one recreates it -- and runs the REAL
-# stage-elspi/prerun.sh, with copy_previous and on_chroot stubbed.
+# stage2 keeps its rootfs, a run one recreates it with a marker unique to
+# that build -- and runs the REAL stage-elspi/prerun.sh on a CLEANed rootfs,
+# so copy_previous (scripts/common:34-41, with cp -a for rsync) copies from
+# PREV_ROOTFS_DIR=${WORK_DIR}/stage2/rootfs as build.sh:91-92,121-123 set it;
+# on_chroot is stubbed.
 #
 # Sections 9 and 10 cover the 2026-09-26 narrowing: the repo's configs count
 # only through the variables that reach stages 0-2, a line guard fails closed
-# on anything else, and --print-inputs lists exactly what is read. Seen red:
-# (a) against the helper before the narrowing, (b)/(c) with the variable
-# hashing dropped, (c2)/(d)/(e) with the guard removed, section 10 with an
-# input added to the find but not to the list.
+# on anything else, and --print-inputs lists every path that is read (plus
+# the helper, section 11). Seen red: (a) against the helper before the
+# narrowing, (b)/(c) with the variable hashing dropped, (c2)/(d)/(e) with the
+# guard removed, section 10 with an input added to the find but not to the
+# list.
+#
+# Sections 11-13 (2026-09-26): _ELSPI_BASE_VERSION in place of the helper's
+# own text, with a pin on its code; the one-shot ADOPT marker; and the last
+# good base kept aside by a FULL run and RESTOREd on an exact match. Seen red:
+# all of 11-13 against the helper before them; 11(a) with the helper hashed
+# raw again; 12 with an adopt dated now, with the marker left in place, and
+# with an adopt allowed without a rootfs; 13 with a restore on no fingerprint
+# match, with the copy deleted at the FULL start, and with a restore that
+# touches the fingerprint.
 #
 # NOT covered, and only a real build can cover them: that pi-gen's own
 # run_stage honours the SKIPs and CLEAN as elspi-base-reuse.sh's header says
@@ -78,16 +91,24 @@ echo "STUB CLEAN=${CLEAN:-}"
 if [ ! -f "${BASE_DIR}/stage2/SKIP" ]; then
 	rm -rf "${WORK_DIR}/stage2/rootfs"
 	mkdir -p "${WORK_DIR}/stage2/rootfs/etc"
-	echo "base built" > "${WORK_DIR}/stage2/rootfs/etc/marker"
+	echo "base built $(date +%s%N) ${RANDOM}" > "${WORK_DIR}/stage2/rootfs/etc/marker"
 	[ "${STUB_FAIL_IN_STAGE2:-0}" = 1 ] && { echo "STUB stage2 failed"; exit 1; }
 fi
-# stage-elspi: the REAL prerun, with its rootfs present so copy_previous is
-# not reached, and on_chroot recording that it was called.
-copy_previous() { echo "STUB copy_previous"; }
+# stage-elspi: CLEAN=1 removes its rootfs (build.sh:102-106), and the REAL
+# prerun copies stage2's in: PREV_ROOTFS_DIR as build.sh:91-92,121-123 set it
+# after stage2, run or skipped; copy_previous as scripts/common:34-41, with
+# cp -a for rsync. on_chroot records that it was called.
+export PREV_ROOTFS_DIR="${WORK_DIR}/stage2/rootfs"
+copy_previous() {
+	if [ ! -d "${PREV_ROOTFS_DIR}" ]; then echo "Previous stage rootfs not found"; false; fi
+	mkdir -p "${ROOTFS_DIR}"
+	cp -a "${PREV_ROOTFS_DIR}/." "${ROOTFS_DIR}/"
+	echo "STUB copy_previous from ${PREV_ROOTFS_DIR}"
+}
 on_chroot() { cat > /dev/null; echo "STUB on_chroot"; }
 export -f copy_previous on_chroot
 export ROOTFS_DIR="${WORK_DIR}/stage-elspi/rootfs"
-mkdir -p "${ROOTFS_DIR}"
+rm -rf "${ROOTFS_DIR}"
 ( cd "${BASE_DIR}/stage-elspi" && ./prerun.sh )
 STUB
 	chmod +x "${t}/pi-gen/build.sh"
@@ -99,7 +120,7 @@ build() {
 	local t="$1"
 	shift
 	( cd "${t}/pi-gen" && env -u WORK_DIR -u DEPLOY_DIR -u ELSPI_SITE_CONF -u CLEAN \
-		-u ELSPI_BASE_MODE -u ELSPI_BASE_FINGERPRINT -u ELSPI_BASE_FP_FILE "$@" \
+		-u ELSPI_BASE_MODE -u ELSPI_BASE_FINGERPRINT -u ELSPI_BASE_FP_FILE -u ELSPI_BASE_LASTGOOD "$@" \
 		./build.sh -c "${t}/mnt/config" ) < /dev/null > "${t}/out" 2>&1
 }
 
@@ -204,6 +225,10 @@ echo
 echo "== 6. REUSE-able tree, inputs change, the FULL run fails in stage2, inputs revert"
 T6="$(make_tree failedfull)"
 build "${T6}"
+# Too old to be kept aside as the last good base, so nothing can be restored
+# and the question is only whether the half-built one is reused (section 13
+# covers the restore).
+touch -d '8 days ago' "$(fp_of "${T6}")"
 cp "${T6}/pi-gen/stage1/prerun.sh" "${WORK}/prerun.orig"
 echo "# changed" >> "${T6}/pi-gen/stage1/prerun.sh"
 build "${T6}" STUB_FAIL_IN_STAGE2=1
@@ -394,13 +419,15 @@ echo "     $(logline "${T9}")"
 check "(f) a site line no stage reads still counts -> FULL" mode_is "${T9}" FULL
 check "(f) reason is a mismatch"                  reason_is "${T9}" 'fingerprint mismatch'
 
-# --- 10. --print-inputs: the paths the fingerprint reads, exactly -----------
-# Both directions, by behaviour: changing any LISTED path forces FULL, and
-# changing anything else in the tree keeps REUSE. The tree carries extra
-# repo content (export-image, stage3, ...) so the second half has something
-# to change. A helper that reads a path it does not list fails here.
+# --- 10. --print-inputs: the paths the fingerprint reads, and the helper ---
+# Both directions, by behaviour: changing any LISTED path forces FULL (except
+# the helper itself, listed for the pre-warm but covered by
+# _ELSPI_BASE_VERSION), and changing anything else in the tree keeps REUSE.
+# The tree carries extra repo content (export-image, stage3, ...) so the
+# second half has something to change. A helper that reads a path it does not
+# list fails here.
 echo
-echo "== 10. --print-inputs lists exactly what the fingerprint reads"
+echo "== 10. --print-inputs lists what the fingerprint reads, and the helper"
 T10="$(make_tree inputs)"
 P="${T10}/pi-gen"
 cp -a "${REPO}/export-image" "${REPO}/stage3" "${REPO}/README.md" "${REPO}/build-docker.sh" "${P}/"
@@ -448,12 +475,321 @@ for p in "${LISTED[@]}"; do
 	cp -p "${f}" "${WORK}/probe.orig"
 	echo ": probe" >> "${f}"
 	build "${T10}"
-	check "listed ${p} changed -> FULL"           mode_is "${T10}" FULL
+	if [ "${p}" = elspi-base-reuse.sh ]; then
+		# Listed for the pre-warm, but not hashed: _ELSPI_BASE_VERSION stands
+		# for it (section 11).
+		check "listed ${p} changed -> REUSE (listed only; _ELSPI_BASE_VERSION covers it)" mode_is "${T10}" REUSE
+	else
+		check "listed ${p} changed -> FULL"       mode_is "${T10}" FULL
+	fi
 	cp -p "${WORK}/probe.orig" "${f}"
 	build "${T10}"
 	build "${T10}"
 	check "  ${p} restored -> REUSE again"        mode_is "${T10}" REUSE
 done
+
+# --- 11. _ELSPI_BASE_VERSION stands for the helper; a pin forces the choice -
+# The helper does not build the base, so its text is not hashed: an edit to
+# it keeps REUSE, and only raising _ELSPI_BASE_VERSION forces FULL. So that
+# the decision to raise it is made at review rather than forgotten, the
+# helper's CODE is pinned here: whole-line comments and blank lines stripped
+# (the rule the helper applies to private configs), CRs dropped so the pin
+# does not depend on the checkout.
+HELPER_PIN=23d2e5227c35f3f6b1c360e021c99e1d35c970eda999ee273bc491fd40e36778
+echo
+echo "== 11. _ELSPI_BASE_VERSION stands for the helper's text"
+code_hash() { tr -d '\r' < "$1" | sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' | sha256sum | cut -c1-64; }
+pin_ok() {  # file pin
+	[ "$(code_hash "$1")" = "$2" ] && return 0
+	echo "        the helper's code changed: decide whether _ELSPI_BASE_VERSION must be raised, then update this pin (HELPER_PIN=$(code_hash "$1") in tests/test-base-reuse.sh)"
+	return 1
+}
+pin_fails() { ! pin_ok "$@" > /dev/null; }
+check "the helper's code matches HELPER_PIN"      pin_ok "${HELPER}" "${HELPER_PIN}"
+SELF_PIN="$(code_hash "${HELPER}")"
+cp "${HELPER}" "${WORK}/pin.sh"
+printf '\n# a comment-only edit\n   \n\t# an indented one\n' >> "${WORK}/pin.sh"
+check "pin: anchor for a mid-file comment"        insert_before "${WORK}/pin.sh" '_ELSPI_BASE_MAX_AGE_S=$((7 * 86400))' '# a mid-file comment'
+check "the pin guard passes a comment-only edit"  pin_ok "${WORK}/pin.sh" "${SELF_PIN}"
+check "pin: anchor for a code edit"               insert_before "${WORK}/pin.sh" '_ELSPI_BASE_MAX_AGE_S=$((7 * 86400))' '_elspi_base_code_only_edit=1'
+check "the pin guard fails a code edit"           pin_fails "${WORK}/pin.sh" "${SELF_PIN}"
+
+T11="$(make_tree version)"
+H11="${T11}/pi-gen/elspi-base-reuse.sh"
+build "${T11}"
+build "${T11}"
+check "precondition: unchanged tree reuses"       mode_is "${T11}" REUSE
+printf '\n# a comment-only edit to the helper\n' >> "${H11}"
+check "(a) anchor: a mid-file comment"            insert_before "${H11}" '_ELSPI_BASE_MAX_AGE_S=$((7 * 86400))' '# a mid-file comment'
+build "${T11}"
+echo "     $(logline "${T11}")"
+check "(a) comment-only edit to the helper -> REUSE" mode_is "${T11}" REUSE
+check "(b) anchor: a code line"                   insert_before "${H11}" '_ELSPI_BASE_MAX_AGE_S=$((7 * 86400))' '_elspi_base_code_only_edit=1'
+build "${T11}"
+echo "     $(logline "${T11}")"
+check "(b) code-only edit, version not raised -> REUSE" mode_is "${T11}" REUSE
+check "(c) anchor: _ELSPI_BASE_VERSION=1"         replace_line "${H11}" '_ELSPI_BASE_VERSION=1' '_ELSPI_BASE_VERSION=2'
+build "${T11}"
+echo "     $(logline "${T11}")"
+check "(c) raising _ELSPI_BASE_VERSION -> FULL"   mode_is "${T11}" FULL
+check "(c) reason is a mismatch"                  reason_is "${T11}" 'fingerprint mismatch'
+build "${T11}"
+check "(c) the raised version then reuses"        mode_is "${T11}" REUSE
+
+# --- 12. ADOPT: a one-shot marker next to the fingerprint -------------------
+wd_of()     { echo "$1/pi-gen/work/elspi"; }
+lg_of()     { echo "$1/pi-gen/work/elspi/.elspi-base-lastgood"; }
+marker_of() { echo "$1/pi-gen/work/elspi/stage2/.elspi-base-adopt"; }
+base_id()   { cat "$1/rootfs/etc/marker" 2>/dev/null; }   # $1: a base dir
+mtime()     { stat -c %Y "$1"; }
+no_line()   { ! grep -q "$2" "$1/out"; }
+fp_stamp()  { echo "$(cat "$1") $(mtime "$1")"; }         # content and mtime
+# Never more than one last good copy, nor more than two bases in all.
+one_copy_at_most() {
+	local n b
+	n="$(find "$(wd_of "$1")" -maxdepth 1 -name '.elspi-base-lastgood*' | wc -l)"
+	b="$(find "$(wd_of "$1")" -path '*/rootfs/etc/marker' ! -path '*/stage-elspi/*' | wc -l)"
+	[ "${n}" -le 1 ] && [ "${b}" -le 2 ]
+}
+echo
+echo "== 12. ADOPT marker: records the current fingerprint on the rootfs present"
+T12="$(make_tree adopt)"
+W12="$(wd_of "${T12}")"
+FP12F="$(fp_of "${T12}")"
+EC12="${T12}/pi-gen/elspi.conf"
+cp "${EC12}" "${WORK}/elspi.conf.12"
+build "${T12}"
+FP12="$(cat "${FP12F}")"
+ID12="$(base_id "${W12}/stage2")"
+check "precondition: the fresh tree recorded a base" test "${#FP12}" = 64
+
+echo "  -- (a) an intact rootfs whose fingerprint a FULL start deleted, and the marker"
+rm -f "${FP12F}"
+mkdir -p "${W12}/stage2/rootfs/usr"
+touch -d '5 days ago' "${W12}/stage2/rootfs/usr"
+touch -d '2 days ago' "${W12}/stage2/rootfs/etc"
+touch -d '4 days ago' "${W12}/stage2/rootfs"
+WANT="$(mtime "${W12}/stage2/rootfs/etc")"
+touch "$(marker_of "${T12}")"
+build "${T12}"
+grep '^elspi base: ADOPT' "${T12}/out" | sed 's/^/     /'
+echo "     $(logline "${T12}")"
+check "(a) ADOPT logged, naming the fingerprint written and no previous one" \
+	grep -q "^elspi base: ADOPT stage2 rootfs as fingerprint ${FP12} (previous: none), dated .* from the stage2 rootfs (newest top-level mtime)$" "${T12}/out"
+check "(a) then REUSE"                            mode_is "${T12}" REUSE
+check "(a) the base kept its age (2.0 days), not now" reason_is "${T12}" 'fingerprint match, 2.0 days old'
+check "(a) stage0-2 SKIP created"                 skips_present "${T12}"
+check "(a) the fingerprint file holds the current fingerprint" test "$(cat "${FP12F}")" = "${FP12}"
+check "(a) the decision line names that fingerprint" grep -q "^elspi base: REUSE .* fingerprint ${FP12:0:12}$" "${T12}/out"
+check "(a) its mtime is the rootfs's newest top-level mtime, not now" test "$(mtime "${FP12F}")" = "${WANT}"
+check "(a) the marker is consumed"                test ! -e "$(marker_of "${T12}")"
+check "(a) the rootfs adopted is the one that was there" test "$(base_id "${W12}/stage2")" = "${ID12}"
+
+echo "  -- (a2) the next run, without the marker, is a plain REUSE"
+BEFORE="$(stat -c '%Y %s' "${FP12F}") $(sha256sum < "${FP12F}")"
+build "${T12}"
+AFTER="$(stat -c '%Y %s' "${FP12F}") $(sha256sum < "${FP12F}")"
+check "(a2) REUSE"                                mode_is "${T12}" REUSE
+check "(a2) no ADOPT"                             no_line "${T12}" '^elspi base: ADOPT'
+check "(a2) the fingerprint was not rewritten (mtime and content)" test "${BEFORE}" = "${AFTER}"
+
+echo "  -- (b) a previous fingerprint, for other inputs: the adopt keeps ITS age"
+ZERO="$(printf '%064d' 0)"
+echo "${ZERO}" > "${FP12F}"
+touch -d '4 days ago' "${FP12F}"
+WANT="$(mtime "${FP12F}")"
+touch "$(marker_of "${T12}")"
+build "${T12}"
+echo "     $(logline "${T12}")"
+check "(b) ADOPT names the previous fingerprint" \
+	grep -q "^elspi base: ADOPT stage2 rootfs as fingerprint ${FP12} (previous: ${ZERO}), dated .* from the previous fingerprint$" "${T12}/out"
+check "(b) then REUSE, 4.0 days old"              reason_is "${T12}" 'fingerprint match, 4.0 days old'
+check "(b) the mtime is the previous fingerprint's" test "$(mtime "${FP12F}")" = "${WANT}"
+check "(b) the content is the current fingerprint" test "$(cat "${FP12F}")" = "${FP12}"
+check "(b) the marker is consumed"                test ! -e "$(marker_of "${T12}")"
+
+echo "  -- (c) the marker without a rootfs: FULL, marker consumed and named"
+rm -rf "${W12}/stage2/rootfs"
+check "(c) precondition: no last good copy to restore" test ! -e "$(lg_of "${T12}")"
+touch "$(marker_of "${T12}")"
+build "${T12}"
+echo "     $(logline "${T12}")"
+check "(c) no rootfs -> FULL"                     mode_is "${T12}" FULL
+check "(c) the decision line says the marker was ignored, and why" \
+	grep -q "^elspi base: FULL (no stage2 rootfs in ${W12}; adopt marker ignored: no stage2 rootfs in ${W12}) fingerprint " "${T12}/out"
+check "(c) no ADOPT"                              no_line "${T12}" '^elspi base: ADOPT'
+check "(c) the marker is consumed"                test ! -e "$(marker_of "${T12}")"
+
+echo "  -- (d) the marker under a failed config guard: FULL, marker consumed"
+build "${T12}"
+check "(d) precondition: the tree reuses"         mode_is "${T12}" REUSE
+check "(d) anchor present" insert_before "${EC12}" 'export ELSPI_USB_MAX_CURRENT ELSPI_SITE_CONF_APPLIED' 'export FOO=bar'
+touch "$(marker_of "${T12}")"
+build "${T12}"
+echo "     $(logline "${T12}")"
+check "(d) guard failure -> FULL"                 mode_is "${T12}" FULL
+check "(d) the decision line says the marker was ignored: config guard failed" \
+	grep -q '^elspi base: FULL (config guard: .*; adopt marker ignored: config guard failed)$' "${T12}/out"
+check "(d) no ADOPT"                              no_line "${T12}" '^elspi base: ADOPT'
+check "(d) the marker is consumed"                test ! -e "$(marker_of "${T12}")"
+cp "${WORK}/elspi.conf.12" "${EC12}"
+
+echo "  -- (e) an adopted base already over 7 days old: ADOPT, then FULL on age"
+build "${T12}"
+build "${T12}"
+check "(e) precondition: the tree reuses"         mode_is "${T12}" REUSE
+touch -d '9 days ago' "${FP12F}"
+touch "$(marker_of "${T12}")"
+build "${T12}"
+grep '^elspi base: ADOPT' "${T12}/out" | sed 's/^/     /'
+echo "     $(logline "${T12}")"
+check "(e) the adopt still happens"               grep -q '^elspi base: ADOPT' "${T12}/out"
+check "(e) then FULL on age, saying so plainly" \
+	grep -q '^elspi base: FULL (fingerprint 9.0 days old, limit 7: the adopted base kept its age, so it is rebuilt) fingerprint ' "${T12}/out"
+check "(e) the marker is consumed"                test ! -e "$(marker_of "${T12}")"
+
+# --- 13. the last good base: a FULL that fails never costs it ---------------
+echo
+echo "== 13. last good base: kept aside by a FULL, restored on an exact match"
+T13="$(make_tree lastgood)"
+W13="$(wd_of "${T13}")"
+LG13="$(lg_of "${T13}")"
+FP13F="$(fp_of "${T13}")"
+S13="${T13}/pi-gen/stage1/prerun.sh"
+EC13="${T13}/pi-gen/elspi.conf"
+cp "${S13}" "${WORK}/s13.x"
+cp "${EC13}" "${WORK}/elspi.conf.13"
+partial_in_stage2() { [ ! -e "${FP13F}" ] && [ -n "$(base_id "${W13}/stage2")" ] && [ "$(base_id "${W13}/stage2")" != "$1" ]; }
+build "${T13}"
+build "${T13}"
+check "precondition: base X reuses"               mode_is "${T13}" REUSE
+touch -d '2 days ago' "${FP13F}"
+FPX="$(cat "${FP13F}")"
+IDX="$(base_id "${W13}/stage2")"
+STX="$(fp_stamp "${FP13F}")"
+
+echo "  -- (a) inputs change and the FULL run fails in stage2"
+echo "# changed" >> "${S13}"
+build "${T13}" STUB_FAIL_IN_STAGE2=1
+grep '^elspi base: stage2 base' "${T13}/out" | sed 's/^/     /'
+check "(a) precondition: that run was FULL and failed" grep -q 'STUB stage2 failed' "${T13}/out"
+check "(a) the FULL start kept the valid base aside" \
+	grep -q "^elspi base: stage2 base ${FPX:0:12} kept aside in ${LG13} as the last good base, until this run records its own$" "${T13}/out"
+check "(a) the copy is base X"                    test "$(base_id "${LG13}")" = "${IDX}"
+check "(a) its fingerprint moved with it, content and mtime unchanged" test "$(fp_stamp "${LG13}/.elspi-base-fingerprint")" = "${STX}"
+check "(a) stage2 holds the partial build, with no fingerprint" partial_in_stage2 "${IDX}"
+check "(a) one copy at most"                      one_copy_at_most "${T13}"
+
+echo "  -- (b) inputs revert: the next run RESTOREs base X"
+cp "${WORK}/s13.x" "${S13}"
+build "${T13}"
+grep '^elspi base: RESTORE' "${T13}/out" | sed 's/^/     /'
+echo "     $(logline "${T13}")"
+check "(b) RESTORE logged, with the fingerprint and its age" \
+	grep -qx "elspi base: RESTORE last good base, fingerprint ${FPX:0:12}, 2.0 days old, from ${LG13}" "${T13}/out"
+check "(b) then REUSE"                            mode_is "${T13}" REUSE
+check "(b) at the base's own age, 2.0 days"       reason_is "${T13}" 'fingerprint match, 2.0 days old'
+check "(b) stage0-2 SKIP created"                 skips_present "${T13}"
+check "(b) stage2/rootfs is base X again, not the partial build" test "$(base_id "${W13}/stage2")" = "${IDX}"
+check "(b) copy_previous read it from PREV_ROOTFS_DIR" grep -q "^STUB copy_previous from ${W13}/stage2/rootfs$" "${T13}/out"
+check "(b) and stage-elspi got base X"            test "$(cat "${W13}/stage-elspi/rootfs/etc/marker")" = "${IDX}"
+check "(b) the restore kept the fingerprint's content and mtime" test "$(fp_stamp "${FP13F}")" = "${STX}"
+check "(b) the copy was moved back, not copied"   test ! -e "${LG13}"
+check "(b) the REUSE run left the fingerprint alone" grep -q 'REUSE run, fingerprint left untouched' "${T13}/out"
+
+echo "  -- (c) a FULL run that completes deletes the copy"
+echo "# changed again" >> "${S13}"
+build "${T13}"
+check "(c) FULL"                                  mode_is "${T13}" FULL
+check "(c) its start kept base X aside"           grep -q "^elspi base: stage2 base ${FPX:0:12} kept aside in ${LG13}" "${T13}/out"
+check "(c) once it recorded its own base, the copy was deleted" test ! -e "${LG13}"
+check "(c) and it said so"                        grep -qx "elspi base: last good base in ${LG13} deleted, replaced by this run's" "${T13}/out"
+check "(c) the new base Y is recorded"            test -s "${FP13F}"
+FPY="$(cat "${FP13F}")"
+IDY="$(base_id "${W13}/stage2")"
+
+echo "  -- (d) a copy for other inputs is not restored; a partial build never replaces it"
+echo "# third" >> "${S13}"
+build "${T13}" STUB_FAIL_IN_STAGE2=1
+check "(d) precondition: base Y kept aside"       test "$(cat "${LG13}/.elspi-base-fingerprint")" = "${FPY}"
+build "${T13}" STUB_FAIL_IN_STAGE2=1
+echo "     $(logline "${T13}")"
+check "(d) the copy (Y) does not match -> FULL"   mode_is "${T13}" FULL
+check "(d) no RESTORE"                            no_line "${T13}" '^elspi base: RESTORE'
+check "(d) the partial stage2 did not replace the copy" test "$(cat "${LG13}/.elspi-base-fingerprint") $(base_id "${LG13}")" = "${FPY} ${IDY}"
+check "(d) one copy at most"                      one_copy_at_most "${T13}"
+build "${T13}"
+check "(d) the copy stays until a FULL run records its own base, then goes" test ! -e "${LG13}"
+cp "${S13}" "${WORK}/s13.z"
+
+echo "  -- (e) an expired copy is not restored"
+FPZ="$(cat "${FP13F}")"
+echo "# fourth" >> "${S13}"
+build "${T13}" STUB_FAIL_IN_STAGE2=1
+check "(e) precondition: base Z kept aside"       test "$(cat "${LG13}/.elspi-base-fingerprint")" = "${FPZ}"
+touch -d '8 days ago' "${LG13}/.elspi-base-fingerprint"
+cp "${WORK}/s13.z" "${S13}"
+build "${T13}"
+echo "     $(logline "${T13}")"
+check "(e) the copy matches but is 8 days old -> FULL" mode_is "${T13}" FULL
+check "(e) no RESTORE"                            no_line "${T13}" '^elspi base: RESTORE'
+check "(e) reason: stage2 holds only the partial build" reason_is "${T13}" 'stage2 rootfs has no fingerprint'
+
+echo "  -- (f) a restore and an adopt marker together: the restore wins, the marker is consumed"
+build "${T13}"
+check "(f) precondition: base Z reuses"           mode_is "${T13}" REUSE
+touch -d '1 day ago' "${FP13F}"
+FPZ="$(cat "${FP13F}")"
+echo "# fifth" >> "${S13}"
+build "${T13}" STUB_FAIL_IN_STAGE2=1
+cp "${WORK}/s13.z" "${S13}"
+touch "$(marker_of "${T13}")"
+build "${T13}"
+echo "     $(logline "${T13}")"
+check "(f) RESTORE fired"                         grep -q "^elspi base: RESTORE last good base, fingerprint ${FPZ:0:12}, 1.0 days old" "${T13}/out"
+check "(f) ADOPT did not"                         no_line "${T13}" '^elspi base: ADOPT'
+check "(f) the decision line: marker ignored, restore matched" \
+	grep -qx "elspi base: REUSE (fingerprint match, 1.0 days old; adopt marker ignored: restore matched) fingerprint ${FPZ:0:12}" "${T13}/out"
+check "(f) the marker is consumed"                test ! -e "$(marker_of "${T13}")"
+
+echo "  -- (g) a newer valid base replaces the copy; never more than one"
+echo "# sixth" >> "${S13}"
+build "${T13}" STUB_FAIL_IN_STAGE2=1
+check "(g) precondition: base Z kept aside"       test "$(cat "${LG13}/.elspi-base-fingerprint")" = "${FPZ}"
+touch "$(marker_of "${T13}")"
+build "${T13}"
+check "(g) precondition: the partial stage2 adopted, and reused" \
+	bash -c "grep -q '^elspi base: ADOPT' '${T13}/out' && grep -q '^elspi base: REUSE' '${T13}/out'"
+FPR="$(cat "${FP13F}")"
+check "(g) the adopt left the copy (Z) alone"     test "$(cat "${LG13}/.elspi-base-fingerprint")" = "${FPZ}"
+echo "# seventh" >> "${S13}"
+build "${T13}" STUB_FAIL_IN_STAGE2=1
+check "(g) the newer valid base replaced Z as the copy" test "$(cat "${LG13}/.elspi-base-fingerprint")" = "${FPR}"
+check "(g) one copy at most"                      one_copy_at_most "${T13}"
+
+echo "  -- (h) under a failed config guard nothing is kept, and the copy is discarded"
+check "(h) anchor present" insert_before "${EC13}" 'export ELSPI_USB_MAX_CURRENT ELSPI_SITE_CONF_APPLIED' 'export FOO=bar'
+build "${T13}"
+echo "     $(logline "${T13}")"
+check "(h) FULL on the guard"                     reason_is "${T13}" 'config guard:'
+check "(h) the copy was discarded"                test ! -e "${LG13}"
+check "(h) and it said so" \
+	grep -q "^elspi base: last good base in ${LG13} discarded: the config guard failed" "${T13}/out"
+cp "${WORK}/elspi.conf.13" "${EC13}"
+build "${T13}"
+build "${T13}"
+check "(h2) precondition: the tree reuses"        mode_is "${T13}" REUSE
+check "(h2) anchor present" insert_before "${EC13}" 'ELSPI_SITE_CONF_APPLIED=0' 'touch "${BASE_DIR}/work/elspi/stage2/rootfs/etc/tampered"'
+build "${T13}"
+echo "     $(logline "${T13}")"
+check "(h2) a write into the base fails the guard -> FULL" reason_is "${T13}" 'config guard:'
+check "(h2) the (tampered) base was not kept aside" test ! -e "${LG13}"
+cp "${WORK}/elspi.conf.13" "${EC13}"
+build "${T13}"
+echo "     $(logline "${T13}")"
+check "(h2) nothing is restored afterwards -> FULL" mode_is "${T13}" FULL
+check "(h2) no RESTORE"                           no_line "${T13}" '^elspi base: RESTORE'
+check "(h2) one copy at most"                     one_copy_at_most "${T13}"
 
 echo
 if [ "${FAIL}" -eq 0 ] && [ "${PASS}" -gt 0 ]; then
