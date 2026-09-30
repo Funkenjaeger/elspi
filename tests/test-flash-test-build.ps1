@@ -53,6 +53,24 @@ function Assert-Throws {
     }
 }
 
+# The fake checkout's remotes and `git config`, shared by the stubs below:
+# --get-regexp lists the remotes, --get <key> answers from $script:fakeConfig and
+# exits 1 when the key is not set, exactly as git does. This is how a stub lets
+# the home-remote resolver read a LOCAL setting, as it would in a real checkout.
+$script:fakeRemotes = [ordered]@{}
+$script:fakeConfig = @{}
+function Invoke-FakeGitConfig {
+    param([Parameter(Mandatory)] [string[]] $Arguments)
+    if ($Arguments -contains '--get-regexp') {
+        $global:LASTEXITCODE = 0
+        return @($script:fakeRemotes.Keys | ForEach-Object { "remote.$_.url $($script:fakeRemotes[$_])" })
+    }
+    $key = $Arguments[-1]
+    if ($script:fakeConfig.Contains($key)) { $global:LASTEXITCODE = 0; return $script:fakeConfig[$key] }
+    $global:LASTEXITCODE = 1
+    return @()
+}
+
 # =============================================================================
 # 1. Run resolution: newest successful run on the branch, failed runs ignored.
 # =============================================================================
@@ -269,10 +287,17 @@ try {
     Assert-True 'the fetched content carries the build''s own device tags' ($written -match 'pi5-64bit') "(got: $written)"
 
     # Commit not present locally -> fetch, then retry -- succeeds on the
-    # second `git show`.
+    # second `git show`. The fetch must name the RESOLVED home remote: the
+    # checkout here calls its home remote 'homegit' and GitHub 'origin', so a
+    # fetch of 'origin' would go to the wrong place.
     $script:showCallCount = 0
+    $script:fetchArgs = @()
+    $script:fakeRemotes = [ordered]@{ homegit = 'ssh://git@example.com/team/elspi.git'; origin = "https://github.com/$Repo.git" }
+    $script:fakeConfig = @{ 'elspi.homeRemote' = 'homegit' }
     function git {
         param([Parameter(ValueFromRemainingArguments)] [string[]] $Arguments)
+        if ($Arguments[2] -eq 'config') { return (Invoke-FakeGitConfig -Arguments $Arguments) }
+        if ($Arguments[2] -eq 'fetch') { $script:fetchArgs += , @($Arguments[3..($Arguments.Count - 1)]) }
         if ($Arguments[2] -eq 'show') {
             $script:showCallCount++
             if ($script:showCallCount -eq 1) {
@@ -290,15 +315,24 @@ try {
     }
     $out2 = Join-Path $makeOsListTestDir 'fetched-then-found.sh'
     Get-CommitFile -RepoRoot 'C:\fake\repo' -Sha 'notlocalsha123' -RepoPath 'tools/make-os-list.sh' -OutFile $out2
-    Assert-True 'commit not local -> fetches from origin, then succeeds' `
+    Assert-True 'commit not local -> fetches from the home remote, then succeeds' `
         ((Get-Content -LiteralPath $out2 -Raw) -match 'FETCHED-THEN-FOUND') "(showCallCount=$script:showCallCount)"
+    Assert-True 'Get-CommitFile fetches from the RESOLVED home remote, never the literal origin' `
+        ((@($script:fetchArgs).Count -eq 1) -and ($script:fetchArgs[0][0] -eq 'homegit') -and ($script:fetchArgs[0][1] -eq 'notlocalsha123')) `
+        "(fetches: $(@($script:fetchArgs | ForEach-Object { $_ -join ' ' }) -join ' | '))"
 
     # Commit not present locally AND the fetch fails -> loud failure, no
     # silent fallback to the checkout's own copy.
+    $script:fetchArgs = @()
     function git {
         param([Parameter(ValueFromRemainingArguments)] [string[]] $Arguments)
+        if ($Arguments[2] -eq 'config') { return (Invoke-FakeGitConfig -Arguments $Arguments) }
         if ($Arguments[2] -eq 'show') { $global:LASTEXITCODE = 128; return "fatal: invalid object name." }
-        if ($Arguments[2] -eq 'fetch') { $global:LASTEXITCODE = 1; return 'fatal: could not read from remote repository.' }
+        if ($Arguments[2] -eq 'fetch') {
+            $script:fetchArgs += , @($Arguments[3..($Arguments.Count - 1)])
+            $global:LASTEXITCODE = 1
+            return 'fatal: could not read from remote repository.'
+        }
         throw "unexpected git call in Get-CommitFile test 3: $($Arguments -join ' ')"
     }
     $out3 = Join-Path $makeOsListTestDir 'unreachable.sh'
@@ -332,6 +366,115 @@ try {
 } finally {
     Remove-Item -LiteralPath $makeOsListTestDir -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+# =============================================================================
+# 3d. The home remote. A fetch of a commit this checkout does not have has to
+# go to the server the build ran on, and the remote NAME cannot say which that
+# is -- `origin` is the home remote in one checkout and GitHub in another, so a
+# hard-coded 'origin' reaches the wrong place in half of them. It is a LOCAL
+# setting of the checkout (elspi.homeRemote), read with git config, and it is
+# the ONLY input: no URL is matched against anything, so a public repo carries
+# neither a host name nor a path. Unset, or naming a remote that is not there,
+# is a refusal that prints the command to fix it, never a guess.
+#
+# The URLs below are placeholders (example.com, /srv/example.git) and none of
+# them is ever looked at by the resolver -- which is the point of the fixtures
+# that follow.
+# =============================================================================
+
+$script:fetchArgs = @()
+function git {
+    param([Parameter(ValueFromRemainingArguments)] [string[]] $Arguments)
+    if ($Arguments[2] -eq 'config') { return (Invoke-FakeGitConfig -Arguments $Arguments) }
+    if ($Arguments[2] -eq 'cat-file') {
+        # The commit is never here, so every case reaches the fetch.
+        $global:LASTEXITCODE = 128
+        return "fatal: Not a valid object name $($Arguments[4])"
+    }
+    if ($Arguments[2] -eq 'fetch') {
+        $script:fetchArgs += , @($Arguments[3..($Arguments.Count - 1)])
+        $global:LASTEXITCODE = 1
+        return 'fatal: remote error'
+    }
+    throw "unexpected git call in the home-remote test: $($Arguments -join ' ')"
+}
+
+$GhUrl = "https://github.com/$Repo.git"
+
+# The setting names the remote, whatever its URL looks like.
+$script:fakeRemotes = [ordered]@{ upstream = 'https://git.example.com/team/elspi.git'; origin = $GhUrl }
+$script:fakeConfig = @{ 'elspi.homeRemote' = 'upstream' }
+$picked = Resolve-HomeRemote -RepoRoot 'C:\fake\repo' -Quiet
+Assert-True 'home remote: elspi.homeRemote names it' `
+    (($picked.Name -eq 'upstream') -and ($picked.Url -eq 'https://git.example.com/team/elspi.git') -and ($picked.Source -eq 'elspi.homeRemote')) `
+    "(got $($picked.Name) -> $($picked.Url) from $($picked.Source))"
+
+# ... even when that remote is the one called origin, which no URL rule could
+# have picked out of two plausible-looking ones.
+$script:fakeRemotes = [ordered]@{ origin = 'ssh://git@example.com/team/elspi.git'; github = $GhUrl }
+$script:fakeConfig = @{ 'elspi.homeRemote' = 'origin' }
+Assert-True 'home remote: the setting can name origin as home' ((Resolve-HomeRemote -RepoRoot 'C:\fake\repo' -Quiet).Name -eq 'origin')
+
+# ... and a remote whose URL is a bare repository path, which no earlier rule
+# would have distinguished from any other local path.
+$script:fakeRemotes = [ordered]@{ bare = '/srv/example.git'; origin = $GhUrl }
+$script:fakeConfig = @{ 'elspi.homeRemote' = 'bare' }
+$picked = Resolve-HomeRemote -RepoRoot 'C:\fake\repo' -Quiet
+Assert-True 'home remote: the setting can name a bare repository path' `
+    (($picked.Name -eq 'bare') -and ($picked.Url -eq '/srv/example.git')) "(got $($picked.Name) -> $($picked.Url))"
+
+# A setting pointing at a remote that is not there refuses and says how to fix it.
+$script:fakeRemotes = [ordered]@{ origin = $GhUrl }
+$script:fakeConfig = @{ 'elspi.homeRemote' = 'typo' }
+Assert-Throws 'home remote red: the setting names a remote that does not exist' { Resolve-HomeRemote -RepoRoot 'C:\fake\repo' -Quiet } "is set to 'typo'"
+Assert-Throws 'home remote red: ... and the refusal prints the config command' { Resolve-HomeRemote -RepoRoot 'C:\fake\repo' -Quiet } 'config elspi.homeRemote <remote-name>'
+
+# UNSET is a refusal naming the setting -- never a fall back to a URL rule, and
+# never a guess, however recognisable the remotes may look.
+$script:fakeRemotes = [ordered]@{ bare = '/srv/example.git'; upstream = 'https://git.example.com/team/elspi.git'; origin = $GhUrl }
+$script:fakeConfig = @{}
+Assert-Throws 'home remote red: unset is a refusal that names the setting' `
+    { Resolve-HomeRemote -RepoRoot 'C:\fake\repo' -Quiet } 'elspi.homeRemote is not set'
+Assert-Throws 'home remote red: ... and it says exactly how to set the home remote' `
+    { Resolve-HomeRemote -RepoRoot 'C:\fake\repo' -Quiet } 'config elspi.homeRemote <remote-name>'
+Assert-Throws 'home remote red: ... and it lists the remotes it could not choose between' `
+    { Resolve-HomeRemote -RepoRoot 'C:\fake\repo' -Quiet } 'bare -> /srv/example.git'
+
+# A checkout with no remotes at all is the same refusal, not a crash.
+$script:fakeRemotes = [ordered]@{}
+$script:fakeConfig = @{}
+Assert-Throws 'home remote red: no remotes at all is the same refusal' `
+    { Resolve-HomeRemote -RepoRoot 'C:\fake\repo' -Quiet } 'Remotes: none'
+
+# Assert-CommitAvailable: the fetch names the resolved remote, never 'origin'.
+$script:fakeRemotes = [ordered]@{ homegit = 'ssh://git@example.com/team/elspi.git'; origin = $GhUrl }
+$script:fakeConfig = @{ 'elspi.homeRemote' = 'homegit' }
+$script:fetchArgs = @()
+$missingSha = 'c' * 40
+Assert-Throws 'Assert-CommitAvailable: a commit that never arrives is a refusal' `
+    { Assert-CommitAvailable -RepoRoot 'C:\fake\repo' -Sha $missingSha } 'is not in this checkout'
+Assert-True 'Assert-CommitAvailable fetches from the RESOLVED home remote, never the literal origin' `
+    ((@($script:fetchArgs).Count -eq 1) -and ($script:fetchArgs[0][0] -eq 'homegit') -and ($script:fetchArgs[0][1] -eq $missingSha)) `
+    "(fetches: $(@($script:fetchArgs | ForEach-Object { $_ -join ' ' }) -join ' | '))"
+Assert-Throws 'Assert-CommitAvailable: the refusal quotes the resolved remote, not origin' `
+    { Assert-CommitAvailable -RepoRoot 'C:\fake\repo' -Sha $missingSha } "git fetch homegit $missingSha"
+
+# With the setting absent and nothing matching, the fetch is never attempted:
+# the refusal is about the unset home remote and says how to set it.
+$script:fakeRemotes = [ordered]@{ origin = $GhUrl }
+$script:fakeConfig = @{}
+$script:fetchArgs = @()
+Assert-Throws 'Assert-CommitAvailable: no home remote -> refuses before fetching anything' `
+    { Assert-CommitAvailable -RepoRoot 'C:\fake\repo' -Sha $missingSha } 'config elspi.homeRemote <remote-name>'
+Assert-True 'Assert-CommitAvailable: ... and nothing was fetched' (@($script:fetchArgs).Count -eq 0) "(fetches: $(@($script:fetchArgs | ForEach-Object { $_ -join ' ' }) -join ' | '))"
+
+# Nothing in either tool may name a remote 'origin' for a fetch again.
+foreach ($f in @('tools\flash-test-build.ps1', 'tools\promote-release.ps1')) {
+    $src = Get-Content -LiteralPath (Join-Path $repoRoot $f) -Raw
+    Assert-True "$f : no 'fetch' 'origin' left in the source" ($src -notmatch "'fetch'\s*,?\s*'origin'") '(the remote is resolved, never named)'
+}
+
+Remove-Item Function:\git -ErrorAction SilentlyContinue
 
 # =============================================================================
 # 4. Path conversion: C:\x\y -> /mnt/c/x/y
@@ -567,8 +710,13 @@ try {
     }
     $script:gitSpecs = @()
     $script:elspiInCheckout = $true
+    # This checkout names its home remote in the local setting, as an operator
+    # would; the fetch below has to use THAT, not the literal 'origin'.
+    $script:fakeRemotes = [ordered]@{ homegit = 'ssh://git@example.com/team/elspi.git'; origin = "https://github.com/$Repo.git" }
+    $script:fakeConfig = @{ 'elspi.homeRemote' = 'homegit' }
     function git {
         param([Parameter(ValueFromRemainingArguments)] [string[]] $Arguments)
+        if ($Arguments[2] -eq 'config') { return (Invoke-FakeGitConfig -Arguments $Arguments) }
         if ($Arguments[2] -eq 'cat-file') {
             $script:gitSpecs += $Arguments[4]
             if ($Arguments[3] -ne '-t') { throw "unexpected cat-file form: $($Arguments -join ' ')" }
@@ -576,7 +724,7 @@ try {
             $global:LASTEXITCODE = 128
             return "fatal: Not a valid object name $($Arguments[4])"
         }
-        if ($Arguments[2] -eq 'fetch') { $script:gitSpecs += "fetch $($Arguments[4])"; $global:LASTEXITCODE = 1; return 'fatal: remote error' }
+        if ($Arguments[2] -eq 'fetch') { $script:gitSpecs += "fetch $($Arguments[3]) $($Arguments[4])"; $global:LASTEXITCODE = 1; return 'fatal: remote error' }
         throw "unexpected git call: $($Arguments -join ' ')"
     }
     $imageUrl = "$script:fjBase/api/packages/pkgowner/generic/pkgname/$script:pkgSha/image_2026-09-26-elspi.img.xz"
@@ -610,7 +758,8 @@ try {
 
     Reset-Served; $script:elspiInCheckout = $false; $script:gitSpecs = @()
     Assert-Throws 'forgejo red: elspi sha not in this checkout (even after fetch) -> refused' { Invoke-Resolve } 'not in this checkout'
-    Assert-True 'forgejo: ... and it fetched the ELSPI sha, not the package sha' ($script:gitSpecs -contains "fetch $elspiSha") "(git saw: $($script:gitSpecs -join ', '))"
+    Assert-True 'forgejo: ... and it fetched the ELSPI sha from the resolved home remote, not the package sha and not origin' `
+        ($script:gitSpecs -contains "fetch homegit $elspiSha") "(git saw: $($script:gitSpecs -join ', '))"
     $script:elspiInCheckout = $true
 
     # Legacy version: no elspi-commit.txt, .info stamped with the SNAPSHOT sha.

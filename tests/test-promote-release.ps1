@@ -9,6 +9,17 @@
 # the .artifact-info.json marker, and the bench os_list.json. Each red case
 # breaks exactly one thing and expects the gate that owns it, by its [label].
 #
+# The fake git carries a small model of tag state -- a store per place a tag can
+# exist ('local' plus one per remote pushed to), a list of the checkout's remotes
+# with their URLs, and the checkout's git config -- because the tag is now made
+# HERE and pushed home before GitHub, and WHICH remote is home is a local
+# setting ($global:GitConfig, read as elspi.homeRemote), never a name, a host or
+# a path written in the repo. Every git and gh call is appended to
+# $global:CallLog in order, which is how "made, then home, then GitHub, then the
+# release" is asserted; $global:CorruptPushTo and $global:PushFail make a remote
+# disagree or refuse. Every URL in here is a placeholder, and none of them is
+# ever read by the resolver.
+#
 # Run:     pwsh tests\test-promote-release.ps1
 # Mutants: pwsh tests\test-promote-release.ps1 -ScriptUnderTest <copy.ps1>
 #          (the copy needs flash-test-build.ps1 beside it)
@@ -140,21 +151,55 @@ function Reset-Fakes {
     $global:GhCalls = @()
     $global:GhWrites = @()
     $global:GitWrites = @()
+    $global:CallLog = @()              # every git and gh call, in order
     $global:ReadHostCalls = 0
     $global:Answer = ''
     $global:CommitArch = 'arm64'
     $global:MergeBaseExit = 0
     $global:XzExit = 0
     $global:UsedTags = @('v2026.09.13')
+    $global:HomeTags = @()
     $global:LatestTag = 'v2026.09.13'
     $global:RunHeadSha = $FixSha
     $global:Release = $null
-    $global:RefSha = $null
+    # The remotes of the fake checkout. Neither name says which is which, and
+    # neither URL is recognisable to the script: the default fixture names its
+    # home remote in the local setting below, which is the whole point.
+    $global:Remotes = [ordered]@{ home = 'git@example.com:team/elspi.git'; origin = "https://github.com/$FixRepo.git" }
+    # git config of the fake checkout -- elspi.homeRemote is a LOCAL setting, so
+    # a test sets it the way an operator would.
+    $global:GitConfig = @{ 'elspi.homeRemote' = 'home' }
+    # Tag objects, per store: 'local' plus one per remote the fake was pushed to.
+    $global:TagStore = @{}
+    $global:NextTagObject = ('b' * 40)
+    $global:CorruptPushTo = @()         # remotes that store a DIFFERENT tag object
+    $global:PushFail = @()              # remotes whose push exits non-zero
+    $global:RefTypeOverride = $null     # what GitHub says refs/tags/<tag> is
+}
+
+# tag -> @{ Object; Commit } for one store ('local' or a remote name/url).
+function Get-FakeTagStore {
+    param([Parameter(Mandatory)] [string] $Key)
+    if (-not $global:TagStore.Contains($Key)) { $global:TagStore[$Key] = @{} }
+    return $global:TagStore[$Key]
+}
+
+function Get-FakeRemoteUrl {
+    param([string] $Remote)
+    if ($global:Remotes.Contains($Remote)) { return $global:Remotes[$Remote] }
+    return $Remote
+}
+
+# Which store the GitHub side pushed to, whatever it is called.
+function Get-FakeGithubStoreKey {
+    foreach ($k in @($global:TagStore.Keys)) { if ((Get-FakeRemoteUrl $k) -match 'github\.com') { return $k } }
+    return 'origin'
 }
 
 function gh {
     param([Parameter(ValueFromRemainingArguments)] [string[]] $A)
     $global:GhCalls += , ($A -join ' ')
+    $global:CallLog += , ('gh ' + ($A -join ' '))
     $global:LASTEXITCODE = 0
     $j = $A -join ' '
     if ($j -eq 'auth status') { return 'Logged in' }
@@ -176,7 +221,11 @@ function gh {
             assets = @($files | ForEach-Object { [PSCustomObject]@{ name = (Split-Path -Leaf $_); size = (Get-Item -LiteralPath $_).Length; digest = "sha256:$(Get-FixHash $_)" } })
         }
         $global:StagedOsList = @($files | Where-Object { $_ -like '*os_list.json' })[0]
-        $global:RefSha = $A[([array]::IndexOf($A, '--target') + 1)]
+        # --verify-tag: gh refuses when the tag is not on the remote already.
+        if (($A -contains '--verify-tag') -and -not (Get-FakeTagStore (Get-FakeGithubStoreKey)).Contains($A[2])) {
+            $global:LASTEXITCODE = 1
+            return "fake gh: --verify-tag: tag $($A[2]) does not exist in the remote"
+        }
         return 'created'
     }
     if ($A[0] -eq 'api' -and $A[1] -like '*/releases?per_page=100') { return (ConvertTo-Json -InputObject @($global:Release) -Depth 5) }
@@ -186,7 +235,19 @@ function gh {
         if ($A -contains '--latest') { $global:LatestTag = $A[2] }
         return 'edited'
     }
-    if ($A[0] -eq 'api' -and $A[1] -like '*/git/ref/tags/*') { return (@{ object = @{ type = 'commit'; sha = $global:RefSha } } | ConvertTo-Json) }
+    if ($A[0] -eq 'api' -and $A[1] -like '*/git/ref/tags/*') {
+        $t = ($A[1] -split '/')[-1]
+        $store = Get-FakeTagStore (Get-FakeGithubStoreKey)
+        if (-not $store.Contains($t)) { $global:LASTEXITCODE = 1; return 'Not Found' }
+        $type = if ($global:RefTypeOverride) { $global:RefTypeOverride } else { 'tag' }
+        return (@{ object = @{ type = $type; sha = $store[$t].Object } } | ConvertTo-Json)
+    }
+    if ($A[0] -eq 'api' -and $A[1] -like '*/git/tags/*') {
+        $o = ($A[1] -split '/')[-1]
+        $hit = @((Get-FakeTagStore (Get-FakeGithubStoreKey)).Values | Where-Object { $_.Object -eq $o })
+        if ($hit.Count -ne 1) { $global:LASTEXITCODE = 1; return 'Not Found' }
+        return (@{ object = @{ type = 'commit'; sha = $hit[0].Commit } } | ConvertTo-Json)
+    }
     if ($A[0] -eq 'api' -and $A[1] -like '*/releases/tags/*') { return ($global:Release | ConvertTo-Json -Depth 5) }
     $global:GhWrites += , "UNEXPECTED: $j"
     $global:LASTEXITCODE = 99
@@ -196,17 +257,69 @@ function gh {
 function git {
     param([Parameter(ValueFromRemainingArguments)] [string[]] $A)
     $global:LASTEXITCODE = 0
+    $global:CallLog += , ('git ' + ($A -join ' '))
     $a2 = if ($A[0] -eq '-C') { @($A[2..($A.Count - 1)]) } else { $A }
     switch ($a2[0]) {
+        'config' {
+            # git config --get-regexp ^remote\..*\.url$
+            if ($a2 -contains '--get-regexp') {
+                return @($global:Remotes.Keys | ForEach-Object { "remote.$_.url $($global:Remotes[$_])" })
+            }
+            # git config --get <key>: exit 1 when the key is not set, as git does.
+            $key = $a2[-1]
+            if ($global:GitConfig.Contains($key)) { return $global:GitConfig[$key] }
+            $global:LASTEXITCODE = 1
+            return @()
+        }
         'ls-remote' {
-            if ($a2 -contains '--tags') { return @($global:UsedTags | ForEach-Object { "$OtherSha`trefs/tags/$_" }) }
+            $remote = if ($a2 -contains '--tags') { $a2[-1] } else { $a2[1] }
+            if ($a2 -contains '--tags') {
+                # Anything that is not GitHub is the home remote here.
+                if ((Get-FakeRemoteUrl $remote) -notmatch 'github\.com') {
+                    return @($global:HomeTags | ForEach-Object { "$OtherSha`trefs/tags/$_" })
+                }
+                return @($global:UsedTags | ForEach-Object { "$OtherSha`trefs/tags/$_" })
+            }
             $ref = $a2[-1]
+            if ($ref -like 'refs/tags/*') {
+                $t = $ref.Substring('refs/tags/'.Length)
+                $store = Get-FakeTagStore $remote
+                if (-not $store.Contains($t)) { return @() }
+                return @("$($store[$t].Object)`t$ref", "$($store[$t].Commit)`t$ref^{}")
+            }
             if ($global:NoBranch) { return @() }
             return "$('f' * 40)`t$ref"
         }
         'cat-file' { if ($a2 -contains '-t') { return 'commit' }; return '' }
         'fetch' { return '' }
         'merge-base' { $global:LASTEXITCODE = $global:MergeBaseExit; return '' }
+        'rev-parse' {
+            $ref = "$($a2[1])"
+            $t = ($ref -replace '\^\{commit\}$', '') -replace '^refs/tags/', ''
+            $store = Get-FakeTagStore 'local'
+            if (-not $store.Contains($t)) { $global:LASTEXITCODE = 128; return "fatal: unknown revision $ref" }
+            if ($ref -like '*^{commit}') { return $store[$t].Commit }
+            return $store[$t].Object
+        }
+        'tag' {
+            if ($a2 -contains '--list') { return @((Get-FakeTagStore 'local').Keys) }
+            $global:GitWrites += , ($A -join ' ')
+            if ($a2[1] -ne '-a') { $global:LASTEXITCODE = 1; return 'fake git: the release tag must be annotated' }
+            $lstore = Get-FakeTagStore 'local'
+            $lstore[$a2[2]] = [PSCustomObject]@{ Object = $global:NextTagObject; Commit = $a2[3] }
+            return ''
+        }
+        'push' {
+            $global:GitWrites += , ($A -join ' ')
+            $remote = $a2[1]
+            if ($global:PushFail -contains $remote) { $global:LASTEXITCODE = 1; return "fake git: push to $remote refused" }
+            $t = $a2[2].Substring('refs/tags/'.Length)
+            $src = (Get-FakeTagStore 'local')[$t]
+            $obj = if ($global:CorruptPushTo -contains $remote) { 'c' * 40 } else { $src.Object }
+            $dest = Get-FakeTagStore $remote
+            $dest[$t] = [PSCustomObject]@{ Object = $obj; Commit = $src.Commit }
+            return ''
+        }
         'show' {
             if ($a2[1] -like '*:build.sh') { return @('#!/bin/bash', "export ARCH=$global:CommitArch", 'echo') }
             return @('#!/bin/bash', 'echo fake')
@@ -265,11 +378,25 @@ try {
     $r = Invoke-Case -Dir $dir -Dry
     Assert-True 'dry run: tag is the image date, bare CalVer for arm64' ($r.Tag -eq 'v2026.09.26') "(got $($r.Tag))"
     Assert-True 'dry run: arm64 is marked latest' ($r.Latest -and ($r.Commands.Publish -contains '--latest') -and ($r.Commands.Publish -contains '--prerelease=false'))
-    Assert-True 'dry run: create targets the build commit as a draft' (($r.Commands.Create -join ' ') -match "--target $FixSha --draft")
+    Assert-True 'dry run: create is from the existing tag -- --verify-tag, never --target' `
+        ((($r.Commands.Create -join ' ') -match '--verify-tag --draft') -and -not (($r.Commands.Create -join ' ') -match '--target'))
     Assert-True 'dry run: three assets (image, .info, os_list.json)' ((@($r.Assets | ForEach-Object { $_.name }) -join ',') -eq 'image_2026-09-26-elspi.img.xz,2026-09-26-elspi.info,os_list.json')
-    Assert-True 'dry run: no gh write, no git write' (($global:GhWrites.Count -eq 0) -and ($global:GitWrites.Count -eq 0)) "(gh: $($global:GhWrites -join ' | '); git: $($global:GitWrites -join ' | '))"
+    Assert-True 'dry run: no gh write, no git write, no tag made' `
+        (($global:GhWrites.Count -eq 0) -and ($global:GitWrites.Count -eq 0) -and ((Get-FakeTagStore 'local').Count -eq 0)) `
+        "(gh: $($global:GhWrites -join ' | '); git: $($global:GitWrites -join ' | '))"
     Assert-True 'dry run: never asks for confirmation' ($global:ReadHostCalls -eq 0)
     Assert-True 'dry run: not published' (-not $r.Published)
+
+    # The tag steps and their order live in ONE list, printed and then walked.
+    Assert-True 'dry run: tag steps are make, push home, push GitHub -- in that order' `
+        ((@($r.TagCommands.Steps | ForEach-Object { $_.Label }) -join ',') -eq 'tag,push home,push github') `
+        "(got $(@($r.TagCommands.Steps | ForEach-Object { $_.Label }) -join ','))"
+    Assert-True 'dry run: the tag is annotated, on the promoted commit' `
+        ((($r.TagCommands.Steps[0].Arguments) -join ' ') -match "tag -a v2026\.09\.26 $FixSha -m elspi v2026\.09\.26$")
+    Assert-True 'dry run: home is the remote the local setting named' `
+        (($r.HomeRemote.Name -eq 'home') -and (($r.TagCommands.Steps[1].Arguments) -join ' ') -match 'push home refs/tags/v2026\.09\.26$')
+    Assert-True 'dry run: GitHub is pushed to after home' `
+        ((($r.TagCommands.Steps[2].Arguments) -join ' ') -match 'push origin refs/tags/v2026\.09\.26$')
 
     # Second release of the day gets .1.
     Reset-Fakes
@@ -359,11 +486,27 @@ try {
     $r = Invoke-Case -Dir $dir
     Assert-True 'publish: draft created, then published latest' ($r.Published -and $global:GhWrites.Count -eq 2 -and $global:GhWrites[0] -match '^release create v2026.09.26 .*--draft' -and $global:GhWrites[1] -match '--latest$' -and $global:LatestTag -eq 'v2026.09.26') "(writes: $($global:GhWrites -join ' | '))"
 
+    # The ORDER, read off the stubs: the tag is made, pushed home, pushed to
+    # GitHub, and only then does gh see it.
+    $seq = @()
+    foreach ($c in $global:CallLog) {
+        if ($c -match ' tag -a ') { $seq += 'tag' }
+        elseif ($c -match ' push (\S+) ') { $seq += "push $($Matches[1])" }
+        elseif ($c -match '^gh release create ') { $seq += 'gh create' }
+    }
+    Assert-True 'publish: tag made, pushed home, pushed to GitHub, THEN the release' `
+        (($seq -join ' -> ') -eq 'tag -> push home -> push origin -> gh create') "(got: $($seq -join ' -> '))"
+    Assert-True 'publish: the tag object is the same on both remotes and here' `
+        (($r.TagObject -eq ('b' * 40)) -and ((Get-FakeTagStore 'home')['v2026.09.26'].Object -eq $r.TagObject) -and ((Get-FakeTagStore 'origin')['v2026.09.26'].Object -eq $r.TagObject))
+    Assert-True 'publish: the tag peels to the promoted commit on both remotes' `
+        (((Get-FakeTagStore 'home')['v2026.09.26'].Commit -eq $FixSha) -and ((Get-FakeTagStore 'origin')['v2026.09.26'].Commit -eq $FixSha))
+
     Reset-Fakes
     $dir = New-GithubFixture
     $global:Answer = 'y'
     $r = Invoke-Case -Dir $dir
-    Assert-True 'publish: anything but the tag aborts with nothing sent' ((-not $r.Published) -and $global:GhWrites.Count -eq 0 -and $global:ReadHostCalls -eq 1)
+    Assert-True 'publish: anything but the tag aborts with nothing sent, and no tag made' `
+        ((-not $r.Published) -and $global:GhWrites.Count -eq 0 -and $global:GitWrites.Count -eq 0 -and ((Get-FakeTagStore 'local').Count -eq 0) -and $global:ReadHostCalls -eq 1)
 
     Reset-Fakes
     $dir = New-GithubFixture
@@ -427,6 +570,148 @@ try {
         Assert-Throws 'no armhf branch: the refusal names the tag armhf-final' { Assert-OnBranch -RepoRoot $FixRoot -Sha $FixSha -Branch 'armhf' -GitUrl 'https://example.invalid/elspi.git' } 'armhf-final'
         Assert-Throws 'no main branch: the plain [branch] refusal' { Assert-OnBranch -RepoRoot $FixRoot -Sha $FixSha -Branch 'main' -GitUrl 'https://example.invalid/elspi.git' } "could not read GitHub's main tip"
     } finally { $global:NoBranch = $false }
+
+    # =========================================================================
+    # 8. The home remote comes from a LOCAL SETTING of the checkout and from
+    #    nothing else. "origin" is the home remote in some checkouts and GitHub
+    #    in others, so a name in the source would be a guess; and a host name or
+    #    a path in the source of a PUBLIC repo is one operator's setup shipped
+    #    to everybody, so no URL is matched against anything either. The
+    #    operator names the remote once with `git config elspi.homeRemote`, and
+    #    unset is a refusal. Every URL here is a placeholder that the resolver
+    #    never looks at.
+    # =========================================================================
+
+    # The setting names the remote. Its URL is recognisable to nothing: that is
+    # what proves the SETTING was read, and not some rule about the URL.
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:Remotes = [ordered]@{ upstream = 'https://git.example.com/team/elspi.git'; github = "https://github.com/$FixRepo.git" }
+    $global:GitConfig = @{ 'elspi.homeRemote' = 'upstream' }
+    $r = Invoke-Case -Dir $dir -Dry
+    Assert-True 'home remote: elspi.homeRemote names it, whatever its URL looks like' `
+        (($r.HomeRemote.Name -eq 'upstream') -and ($r.HomeRemote.Url -eq 'https://git.example.com/team/elspi.git') -and ($r.HomeRemote.Source -eq 'elspi.homeRemote')) `
+        "(got $($r.HomeRemote.Name) -> $($r.HomeRemote.Url) from $($r.HomeRemote.Source))"
+    Assert-True 'home remote: GitHub is the remote that names the repo, whatever it is called' ($r.GitHubRemote -eq 'github') "(got $($r.GitHubRemote))"
+    Assert-True 'home remote: home is still pushed first' `
+        ((@($r.TagCommands.Steps | ForEach-Object { ($_.Arguments -join ' ') }) -join ' ; ') -match 'push upstream refs/tags/v2026\.09\.26 ; .* push github refs/tags/v2026\.09\.26')
+
+    # The setting even picks the remote called origin, which no rule about URLs
+    # could have told from the GitHub one with any confidence.
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:Remotes = [ordered]@{ origin = 'ssh://git@example.com/team/elspi.git'; github = "https://github.com/$FixRepo.git" }
+    $global:GitConfig = @{ 'elspi.homeRemote' = 'origin' }
+    $r = Invoke-Case -Dir $dir -Dry
+    Assert-True 'home remote: the setting can name origin as home' `
+        (($r.HomeRemote.Name -eq 'origin') -and ($r.GitHubRemote -eq 'github')) "(got $($r.HomeRemote.Name) / $($r.GitHubRemote))"
+
+    # ... and a bare repository path, which is just another URL to the resolver.
+    # With no remote naming the repo on GitHub, the https URL is pushed to.
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:Remotes = [ordered]@{ bare = '/srv/example.git' }
+    $global:GitConfig = @{ 'elspi.homeRemote' = 'bare' }
+    $r = Invoke-Case -Dir $dir -Dry
+    Assert-True 'home remote: the setting can name a bare repository path; with no GitHub remote the https URL is pushed to' `
+        (($r.HomeRemote.Name -eq 'bare') -and ($r.HomeRemote.Url -eq '/srv/example.git') -and ($r.GitHubRemote -eq "https://github.com/$FixRepo.git")) `
+        "(got $($r.HomeRemote.Name) -> $($r.HomeRemote.Url) / $($r.GitHubRemote))"
+
+    # A setting pointing at a remote that is not there is a refusal that repeats
+    # the command to fix it -- never a silent fall back to a guess.
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:GitConfig = @{ 'elspi.homeRemote' = 'typo' }
+    Assert-Throws 'red: elspi.homeRemote names a remote that does not exist' { Invoke-Case -Dir $dir -Dry } "is set to 'typo', but"
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:GitConfig = @{ 'elspi.homeRemote' = 'typo' }
+    Assert-Throws 'red: ... and the refusal prints the config command' { Invoke-Case -Dir $dir -Dry } 'config elspi.homeRemote <remote-name>'
+
+    # UNSET is the refusal this whole design turns on: the checkout below has a
+    # perfectly plausible home remote and the script still will not pick it.
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:Remotes = [ordered]@{ bare = '/srv/example.git'; upstream = 'https://git.example.com/team/elspi.git'; github = "https://github.com/$FixRepo.git" }
+    $global:GitConfig = @{}
+    Assert-Throws 'red: elspi.homeRemote unset is a refusal naming the setting' { Invoke-Case -Dir $dir -Dry } 'elspi.homeRemote is not set'
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:Remotes = [ordered]@{ bare = '/srv/example.git'; upstream = 'https://git.example.com/team/elspi.git'; github = "https://github.com/$FixRepo.git" }
+    $global:GitConfig = @{}
+    Assert-Throws 'red: ... and it says exactly how to set the home remote' { Invoke-Case -Dir $dir -Dry } 'config elspi.homeRemote <remote-name>'
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:Remotes = [ordered]@{ bare = '/srv/example.git'; upstream = 'https://git.example.com/team/elspi.git'; github = "https://github.com/$FixRepo.git" }
+    $global:GitConfig = @{}
+    Assert-Throws 'red: ... and nothing is made or sent when it is unset' { Invoke-Case -Dir $dir } '[home remote]'
+    Assert-True 'unset home remote: no tag was made and nothing was sent' `
+        (((Get-FakeTagStore 'local').Count -eq 0) -and ($global:GitWrites.Count -eq 0) -and ($global:GhWrites.Count -eq 0)) `
+        "(git: $($global:GitWrites -join ' | '); gh: $($global:GhWrites -join ' | '))"
+
+    # The refusal comes BEFORE the confirmation prompt, so an operator with an
+    # unconfigured checkout is never asked to type a tag that cannot be made.
+    Assert-True 'unset home remote: refused before the typed confirmation' ($global:ReadHostCalls -eq 0) "(prompts: $global:ReadHostCalls)"
+
+    # =========================================================================
+    # 9. One tag object everywhere, or nothing is released.
+    # =========================================================================
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:Answer = 'v2026.09.26'
+    $global:CorruptPushTo = @('origin')
+    Assert-Throws 'red: GitHub ends up with a different tag object than home' { Invoke-Case -Dir $dir } '[tag object]'
+    Assert-True 'tag object: a GitHub mismatch releases nothing' ($global:GhWrites.Count -eq 0) "(writes: $($global:GhWrites -join ' | '))"
+
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:Answer = 'v2026.09.26'
+    $global:CorruptPushTo = @('home')
+    Assert-Throws 'red: home ends up with a different tag object' { Invoke-Case -Dir $dir } '[tag object]'
+    Assert-True 'tag object: a home mismatch stops before GitHub is pushed at all' `
+        ((@($global:GitWrites | Where-Object { $_ -match 'push origin' }).Count -eq 0) -and $global:GhWrites.Count -eq 0) "(git: $($global:GitWrites -join ' | '))"
+
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:Answer = 'v2026.09.26'
+    $global:PushFail = @('home')
+    Assert-Throws 'red: the push home fails -- the tag exists only in the checkout' { Invoke-Case -Dir $dir } 'exists only in this checkout'
+    Assert-True 'push home: a failed home push never reaches GitHub' `
+        ((@($global:GitWrites | Where-Object { $_ -match 'push origin' }).Count -eq 0) -and $global:GhWrites.Count -eq 0)
+
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:Answer = 'v2026.09.26'
+    $global:NextTagObject = $FixSha          # a lightweight tag: no tag object
+    Assert-Throws 'red: a tag that is not annotated is refused' { Invoke-Case -Dir $dir } 'is not an annotated tag'
+    Assert-True 'annotated: the check happens before anything is pushed' `
+        ((@($global:GitWrites | Where-Object { $_ -match ' push ' }).Count -eq 0) -and $global:GhWrites.Count -eq 0) "(git: $($global:GitWrites -join ' | '))"
+
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:Answer = 'v2026.09.26'
+    $global:RefTypeOverride = 'commit'       # as if gh had made the tag itself
+    Assert-Throws "read-back: GitHub's tag must be the annotated object that was pushed" { Invoke-Case -Dir $dir } '[read-back] tag v2026.09.26 on GitHub is commit'
+
+    # =========================================================================
+    # 10. The tag has to be free in all three places it is about to exist.
+    # =========================================================================
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:HomeTags = @('v2026.09.26')
+    Assert-Throws 'red: -Tag already on the home remote' { Invoke-Case -Dir $dir -TagArg 'v2026.09.26' -Dry } 'already exists on the home remote home'
+
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $global:HomeTags = @('v2026.09.26')
+    $r = Invoke-Case -Dir $dir -Dry
+    Assert-True 'tag: a day taken only on the home remote gets .1' ($r.Tag -eq 'v2026.09.26.1') "(got $($r.Tag))"
+
+    Reset-Fakes
+    $dir = New-GithubFixture
+    $localStore = Get-FakeTagStore 'local'
+    $localStore['v2026.09.26'] = [PSCustomObject]@{ Object = ('b' * 40); Commit = $FixSha }
+    Assert-Throws 'red: -Tag already in this checkout, from a run that stopped half-way' { Invoke-Case -Dir $dir -TagArg 'v2026.09.26' -Dry } 'already exists in this checkout'
 } finally {
     Remove-Item -Recurse -Force -LiteralPath $FixRoot -ErrorAction SilentlyContinue
 }

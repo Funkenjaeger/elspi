@@ -129,7 +129,8 @@
 #          sha. With -ElspiSha the same equality is required, so a legacy
 #          .info that names the snapshot sha is refused.
 #   commit the elspi sha must exist in THIS checkout (git cat-file, fetching
-#          origin once if not), still before the image download.
+#          the HOME REMOTE once if not -- see THE HOME REMOTE below), still
+#          before the image download.
 #   verify the image (an uncompressed .img.xz, not a zip) goes to
 #          <name>.partial, is checked for size AND sha256 against the listing,
 #          and only then is renamed into place, next to its .info (where
@@ -262,6 +263,89 @@ function Invoke-Git {
     [PSCustomObject]@{ Output = $out; ExitCode = $LASTEXITCODE }
 }
 
+# =============================================================================
+# THE HOME REMOTE
+#
+# Work is pushed to a home git server and CI runs there; GitHub gets deliberate
+# pushes of tested `main` and of release tags. The tools that have to reach that
+# server -- fetching a commit this checkout does not have, pushing a release tag
+# -- need to know which remote it is, and that cannot be read off a NAME:
+# `origin` is the home remote in one checkout and GitHub in another, so
+# `git fetch origin <sha>` reaches the wrong place in half of them.
+#
+# It cannot be read off a URL either, because this repo is public. A host name,
+# or a path on somebody's machine, written into the source, the tests or the
+# docs is one operator's setup shipped to everybody -- and it would be wrong for
+# everybody else. So the answer is ASKED FOR, once per checkout, as a LOCAL git
+# config setting, which lives in .git/config and is therefore never committed:
+#
+#   git -C <checkout> config elspi.homeRemote <remote-name>
+#
+# That setting is the only input. There is no URL matching, no built-in default
+# and no guess: unset, or naming a remote the checkout does not have, is a
+# refusal that prints the command above.
+# =============================================================================
+
+$script:HomeRemoteKey = 'elspi.homeRemote'
+
+function Get-HomeRemoteHowTo {
+    param([Parameter(Mandatory)] [string] $RepoRoot)
+    return ("name it once in this checkout -- it stays in .git/config, out of the repo: " +
+        "git -C $RepoRoot config $script:HomeRemoteKey <remote-name>")
+}
+
+# Every remote of the checkout as @{ Name; Url }, from git config -- pushurl is
+# deliberately not read: a remote is used BY NAME once it has been picked, so
+# whatever transport and credentials already work keep working.
+function Get-RemoteUrls {
+    param([Parameter(Mandatory)] [string] $RepoRoot)
+    $r = Invoke-Git '-C' $RepoRoot 'config' '--get-regexp' '^remote\..*\.url$'
+    # git config exits 1 when nothing matched, which is "no remotes", not a fault.
+    if ($r.ExitCode -notin 0, 1) { throw "[home remote] git config --get-regexp failed (exit $($r.ExitCode)): $(@($r.Output) -join ' / ')" }
+    $out = @()
+    foreach ($line in @($r.Output | ForEach-Object { "$_" })) {
+        if ($line -match '^remote\.(?<name>.+)\.url\s+(?<url>\S.*)$') {
+            $out += [PSCustomObject]@{ Name = $Matches['name']; Url = $Matches['url'].Trim() }
+        }
+    }
+    return @($out)
+}
+
+function Format-RemoteList {
+    param([AllowEmptyCollection()] [object[]] $Remotes)
+    if (@($Remotes).Count -eq 0) { return 'none' }
+    return (@($Remotes | ForEach-Object { "$($_.Name) -> $($_.Url)" }) -join ', ')
+}
+
+# One `git config --get <key>`. Exit 1 is "not set", which is not a fault.
+function Get-GitConfigValue {
+    param([Parameter(Mandatory)] [string] $RepoRoot, [Parameter(Mandatory)] [string] $Key)
+    $r = Invoke-Git '-C' $RepoRoot 'config' '--get' $Key
+    if ($r.ExitCode -eq 1) { return '' }
+    if ($r.ExitCode -ne 0) { throw "[home remote] git config --get $Key failed (exit $($r.ExitCode)): $(@($r.Output) -join ' / ')" }
+    return "$(@($r.Output) -join '')".Trim()
+}
+
+# Which remote of $RepoRoot is the home one. The local setting is the whole
+# rule: no URL is looked at, so nothing here depends on what anybody's server is
+# called or where its repositories sit. Returns @{ Name; Url; Source }; unset,
+# or naming a remote that is not there, is a refusal that says how to set it.
+function Resolve-HomeRemote {
+    param([Parameter(Mandatory)] [string] $RepoRoot, [switch] $Quiet)
+    $all = Get-RemoteUrls -RepoRoot $RepoRoot
+    $named = Get-GitConfigValue -RepoRoot $RepoRoot -Key $script:HomeRemoteKey
+    if (-not $named) {
+        throw "[home remote] $script:HomeRemoteKey is not set in $RepoRoot, so this tool does not know which of its remotes is home -- refusing rather than guessing. Remotes: $(Format-RemoteList $all). Set it: $(Get-HomeRemoteHowTo -RepoRoot $RepoRoot)"
+    }
+    $hit = @($all | Where-Object { $_.Name -eq $named })
+    if ($hit.Count -ne 1) {
+        throw "[home remote] $script:HomeRemoteKey is set to '$named', but that matched $($hit.Count) remotes of $RepoRoot. Remotes: $(Format-RemoteList $all). Fix it: $(Get-HomeRemoteHowTo -RepoRoot $RepoRoot)"
+    }
+    $pick = $hit[0]
+    if (-not $Quiet) { Write-Host "  [home remote]    OK  $($pick.Name) -> $($pick.Url)  (from $script:HomeRemoteKey)" }
+    return [PSCustomObject]@{ Name = $pick.Name; Url = $pick.Url; Source = $script:HomeRemoteKey }
+}
+
 function Assert-CommandAvailable {
     param(
         [Parameter(Mandatory)] [string] $Name,
@@ -375,10 +459,12 @@ function Get-ArtifactInfo {
 # the exact commit the artifact was built from, regardless of what branch
 # this checkout itself happens to be on.
 #
-# Falls back to fetching the commit from origin when it is not present
-# locally (a shallow checkout, or a checkout that hasn't fetched the
+# Falls back to fetching the commit from the HOME REMOTE when it is not
+# present locally (a shallow checkout, or a checkout that hasn't fetched the
 # artifact's branch), and fails loudly -- never silently falls back to the
-# checkout's own copy -- if the commit still cannot be obtained.
+# checkout's own copy -- if the commit still cannot be obtained. The remote is
+# resolved, not named: `origin` is the home remote in one checkout and GitHub in
+# another, and a build's commit may not be on GitHub at all yet.
 function Get-CommitFile {
     [CmdletBinding()]
     param(
@@ -390,10 +476,11 @@ function Get-CommitFile {
     $blobSpec = "${Sha}:${RepoPath}"
     $result = Invoke-Git '-C' $RepoRoot 'show' $blobSpec
     if ($result.ExitCode -ne 0) {
-        Write-Host "commit $Sha not found locally -- fetching from origin ..."
-        $fetch = Invoke-Git '-C' $RepoRoot 'fetch' 'origin' $Sha
+        $homeRemote = Resolve-HomeRemote -RepoRoot $RepoRoot -Quiet
+        Write-Host "commit $Sha not found locally -- fetching from the home remote $($homeRemote.Name) ..."
+        $fetch = Invoke-Git '-C' $RepoRoot 'fetch' $homeRemote.Name $Sha
         if ($fetch.ExitCode -ne 0) {
-            throw "[make-os-list] commit $Sha's $RepoPath is not available locally, and fetching it from origin failed (exit $($fetch.ExitCode)): $($fetch.Output -join "`n")"
+            throw "[make-os-list] commit $Sha's $RepoPath is not available locally, and fetching it from the home remote $($homeRemote.Name) ($($homeRemote.Url)) failed (exit $($fetch.ExitCode)): $($fetch.Output -join "`n")"
         }
         $result = Invoke-Git '-C' $RepoRoot 'show' $blobSpec
         if ($result.ExitCode -ne 0) {
@@ -676,10 +763,13 @@ function Assert-CommitAvailable {
         return ($r.ExitCode -eq 0 -and "$(@($r.Output) -join '')".Trim() -eq 'commit')
     }
     if (& $isCommit) { return }
-    Write-Host "commit $Sha not found locally -- fetching from origin ..."
-    $fetch = Invoke-Git '-C' $RepoRoot 'fetch' 'origin' $Sha
+    # Resolved, never the literal name `origin`: the commit lives on the server
+    # the build ran on, which is not GitHub, and `origin` names either one.
+    $homeRemote = Resolve-HomeRemote -RepoRoot $RepoRoot -Quiet
+    Write-Host "commit $Sha not found locally -- fetching from the home remote $($homeRemote.Name) ..."
+    $fetch = Invoke-Git '-C' $RepoRoot 'fetch' $homeRemote.Name $Sha
     if (-not (& $isCommit)) {
-        throw "[commit] elspi commit $Sha is not in this checkout even after 'git fetch origin $Sha' (fetch exit $($fetch.ExitCode)). Its tools/make-os-list.sh is what describes the image. Refusing to download."
+        throw "[commit] elspi commit $Sha is not in this checkout even after 'git fetch $($homeRemote.Name) $Sha' (fetch exit $($fetch.ExitCode)). Its tools/make-os-list.sh is what describes the image. Refusing to download."
     }
 }
 

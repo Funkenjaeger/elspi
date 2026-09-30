@@ -377,8 +377,8 @@ A release is a test build that passed the bench, published **byte for byte**.
 Nothing is rebuilt, and pushing a tag builds nothing. From a checkout of this
 repo, with `gh` logged in:
 
-1. **Build:** `gh workflow run image --ref arm64`.
-2. **Flash:** `tools\flash-test-build.ps1 -Branch arm64` (or `-Source forgejo`).
+1. **Build:** `gh workflow run image --ref main`.
+2. **Flash:** `tools\flash-test-build.ps1 -Branch main` (or `-Source forgejo`).
    It caches the build under `<Dest>\<run-id>\` (Forgejo:
    `<Dest>\forgejo-<sha>\`).
 3. **Bench** the card on the machine.
@@ -391,17 +391,53 @@ repo, with `gh` logged in:
 
 `promote-release.ps1` re-verifies the cached bytes (the artifact's digest, that
 the image is the one in the artifact, `xz -t`), reads the architecture from
-the image's own package list, and checks that the commit is on `arm64` and the
+the image's own package list, and checks that the commit is on `main` and the
 tag is unused. It then writes `os_list.json` with that commit's
 `make-os-list.sh` and compares it with the list the bench card was flashed from.
-It shows the tag, commit, architecture and every asset, and publishes only
-after you type the tag back. The tag is created at the build's commit, named
-for the image's date: `v2026.09.26`, then `v2026.09.26.1` for a second release
-that day, and `-armhf` for an armhf image. An arm64 release becomes `latest`.
-An armhf one never does, and `-Prerelease` publishes a pre-release that is not
-`latest`. Afterwards it reads the release back, including an anonymous download
-of `os_list.json`. `-DryRun` does every check, prints the exact `gh` commands,
-and publishes nothing. The script's header lists each check.
+It shows the tag, commit, architecture, the home remote and every asset, and
+goes ahead only after you type the tag back.
+
+**The tag is made at home, not on GitHub.** The script creates it in your
+checkout — annotated, on the build's own commit, named for the image's date:
+`v2026.09.26`, then `v2026.09.26.1` for a second release that day, and `-armhf`
+for an armhf image — pushes it to the home remote, and pushes it to GitHub only
+then. The GitHub release is created from that existing tag (`gh --verify-tag`),
+so `gh` never invents a tag of its own. After each push the remote's tag object
+is read back: it has to be the same annotated object as the local one, peeling
+to the promoted commit, or the run stops. A release once existed on GitHub while
+home had no tag for it at all, until it was fetched back; this is what stops
+that happening again.
+
+**Telling it where home is.** Which remote of your checkout is the home one is a
+setting of that checkout, not something this repo knows — the name alone says
+nothing, since `origin` is the home remote in one checkout and GitHub in
+another. Name it once:
+
+```
+git config elspi.homeRemote <remote-name>
+```
+
+That lives in `.git/config`, so it is never committed and never published. It is
+also the only thing the script will use: it matches no URLs and has no default,
+because a URL rule shipped in a public repo is a guess about everybody's setup
+made from one person's. With the setting missing, or naming a remote your
+checkout does not have, the script refuses before it does any work and prints
+the command above. The same setting is what `flash-test-build.ps1` uses when it
+has to fetch a build's commit that your checkout does not have yet.
+
+The tag name has to be free in all three places it is about to exist: your
+checkout, the home remote, and GitHub.
+
+An arm64 release becomes `latest`. An armhf one never does, and `-Prerelease`
+publishes a pre-release that is not `latest`. Afterwards it reads the release
+back, including an anonymous download of `os_list.json`. `-DryRun` does every
+check, prints the exact `git` and `gh` commands, and creates nothing — not even
+the local tag. The script's header lists each check.
+
+If a run stops part-way, its message says how far it got: the tag may exist in
+your checkout only, or in the checkout and at home. Delete it where it exists
+(`git tag -d <tag>`, and on the remote) before re-running, or finish the release
+from the tag by hand — the script refuses a tag name that is already taken.
 
 A release image is xz `-1`, like every test build: about 1.1 GB to download.
 

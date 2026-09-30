@@ -20,8 +20,30 @@
 # Until 2026-09-26 a pushed v-tag made .github/workflows/image.yml build the
 # image AGAIN and publish that second build. The bytes released were never the
 # bytes tested (and the reflex release a build bakes can move between two
-# builds). image.yml no longer reacts to tags at all; this script creates the
-# tag, pointing at the build's own commit, as part of publishing the release.
+# builds). image.yml no longer reacts to tags at all; the tag is made here, as
+# part of publishing the release.
+#
+# WHERE THE TAG IS MADE (plan decision 11, "D")
+#
+# Release tags are made at home. Work is pushed to a home git server and CI runs
+# there; GitHub gets deliberate pushes of tested main and of release tags, never
+# a push mirror. So the tag is created LOCALLY -- annotated, on the promoted
+# commit -- pushed to the HOME remote first, pushed to GitHub only then, and the
+# GitHub release is created from that already-existing tag (--verify-tag, no
+# --target: gh is never allowed to invent the tag). An earlier release was born
+# on GitHub and existed nowhere else until it was fetched home afterwards; a tag
+# that never reached home is not a release.
+#
+# WHICH remote is home is a LOCAL setting of your checkout, not something this
+# repo knows -- see THE HOME REMOTE in flash-test-build.ps1, whose resolver this
+# script shares:
+#
+#   git -C <checkout> config elspi.homeRemote <remote-name>
+#
+# A name in the source would be a guess ("origin" is GitHub in some checkouts and
+# home in others), and a host name or a path does not belong in a public repo --
+# so nothing is matched against a URL at all. Unset is a refusal that prints the
+# command above.
 #
 # WHAT IS VERIFIED BEFORE ANYTHING IS SENT -- any failure stops everything
 #
@@ -58,8 +80,15 @@
 #                     release points at the line. An armhf build needs an
 #                     `armhf` branch, which exists only if armhf is revived
 #                     from the tag armhf-final (retired 2026-09-27, D10).
-#   [tag]             the tag is free: no such tag on GitHub, and no release
-#                     (draft included) using that name.
+#   [home remote]     elspi.homeRemote is set in this checkout and names one of
+#                     its remotes.
+#   [tag]             the tag is free everywhere it is about to be made: not in
+#                     this checkout, not on the home remote, not on GitHub, and
+#                     no release (draft included) using that name.
+#   [tag object]      after each push, the remote carries the SAME annotated tag
+#                     object as the local one, peeling to the promoted commit.
+#                     Home is read back before GitHub is pushed at all, and a
+#                     disagreement between the two remotes is a refusal.
 #   [os_list]         os_list.json is written by tools/make-os-list.sh FROM THAT
 #                     COMMIT (git show, as flash-test-build does), with --url
 #                     set to this release's own image asset. It is read back:
@@ -75,7 +104,8 @@
 # `.N` for a second release of one day -- v2026.09.26, v2026.09.26.1,
 # v2026.09.26-armhf. The date is the IMAGE's date (its file name, which is also
 # the release_date inside os_list.json), not today's: the tag names the bytes.
-# -Tag overrides the pick; it is validated the same way.
+# -Tag overrides the pick; it is validated the same way. The tag is annotated,
+# messaged "elspi <tag>", so both remotes can be compared by one object sha.
 #
 # PUBLISH MODE. Default: a full release (not a pre-release); arm64 is marked
 # --latest, which is what .../releases/latest/download/os_list.json in the docs
@@ -85,17 +115,19 @@
 # after publishing, the tag's commit, the assets' digests, releases/latest and
 # an anonymous download of os_list.json are all read back again.
 #
-# NOTHING IS SENT WITHOUT A TYPED CONFIRMATION: the summary shows tag, target
-# commit, arch, mode and every asset's name, size and sha256, and the tag must
-# be typed back. -DryRun runs every check above (the os_list.json and release
-# notes it writes stay in <cache>\promote-<tag>\), prints the exact gh commands,
-# and creates nothing on GitHub.
+# NOTHING IS MADE OR SENT WITHOUT A TYPED CONFIRMATION: the summary shows tag,
+# target commit, arch, home remote, mode and every asset's name, size and
+# sha256, and the tag must be typed back. Nothing exists before that -- not even
+# the local tag. -DryRun runs every check above (the os_list.json and release
+# notes it writes stay in <cache>\promote-<tag>\), prints the exact git and gh
+# commands, and creates nothing anywhere.
 #
 # RELEASE NOTES come from tools/release-notes.sh at the build's commit: one
 # sentence, the two commands pinned to this tag, and one link to the flashing
 # docs at this tag.
 #
-# NEEDS: gh (authenticated, with write access for a real run), git, and WSL
+# NEEDS: gh (authenticated, with write access for a real run), git -- with push
+# access to the home remote and to GitHub for a real run -- and WSL
 # (xz, make-os-list.sh and release-notes.sh run there, as for
 # flash-test-build.ps1). Functions shared with flash-test-build.ps1 are
 # dot-sourced from it rather than copied.
@@ -260,10 +292,39 @@ function Invoke-AnonymousGet {
     } finally { Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue }
 }
 
+function Format-Command {
+    param([Parameter(Mandatory)] [string] $Exe, [Parameter(Mandatory)] [string[]] $Arguments)
+    $parts = foreach ($a in $Arguments) { if ($a -match '[\s"]') { '"' + ($a -replace '"', '\"') + '"' } else { $a } }
+    return "$Exe " + ($parts -join ' ')
+}
+
 function Format-GhCommand {
     param([Parameter(Mandatory)] [string[]] $Arguments)
-    $parts = foreach ($a in $Arguments) { if ($a -match '[\s"]') { '"' + ($a -replace '"', '\"') + '"' } else { $a } }
-    return 'gh ' + ($parts -join ' ')
+    return (Format-Command -Exe 'gh' -Arguments $Arguments)
+}
+
+function Format-GitCommand {
+    param([Parameter(Mandatory)] [string[]] $Arguments)
+    return (Format-Command -Exe 'git' -Arguments $Arguments)
+}
+
+# =============================================================================
+# Remotes. The HOME remote comes from Resolve-HomeRemote in flash-test-build.ps1
+# (dot-sourced above): a local setting of the checkout, never a name written
+# here. Only the GitHub side is resolved in this file, because only this file
+# pushes there.
+# =============================================================================
+
+# Where the GitHub side of the push goes. A remote of this checkout that names
+# this repo is preferred, so an ssh remote and its key are used if that is how
+# the checkout already talks to GitHub; with none, or several, the https URL
+# every read in this script uses is pushed to directly.
+function Resolve-GitHubPushTarget {
+    param([Parameter(Mandatory)] [string] $RepoRoot, [Parameter(Mandatory)] [string] $Repo, [Parameter(Mandatory)] [string] $GitUrl)
+    $pattern = 'github\.com[:/]' + [regex]::Escape($Repo) + '(?:\.git)?/?$'
+    $hits = @((Get-RemoteUrls -RepoRoot $RepoRoot) | Where-Object { $_.Url -match $pattern })
+    if ($hits.Count -eq 1) { return $hits[0].Name }
+    return $GitUrl
 }
 
 # =============================================================================
@@ -506,12 +567,27 @@ function Assert-OnBranch {
     Write-Host "  [branch]         OK  on $Branch (tip $tip)"
 }
 
+# refs/tags/* on a remote, named by URL or by remote name.
+function Get-RemoteTagNames {
+    param([Parameter(Mandatory)] [string] $Remote)
+    $ls = Invoke-Git 'ls-remote' '--tags' '--refs' $Remote
+    if ($ls.ExitCode -ne 0) { throw "[tag] git ls-remote --tags $Remote failed (exit $($ls.ExitCode))" }
+    return @($ls.Output | ForEach-Object { "$_" } | Where-Object { $_ -match 'refs/tags/' } | ForEach-Object { ($_ -split 'refs/tags/', 2)[1].Trim() })
+}
+
+# Tags already in this checkout: the tag is made HERE, so a name taken locally
+# is as blocking as one taken on a remote.
+function Get-LocalTagNames {
+    param([Parameter(Mandatory)] [string] $RepoRoot)
+    $r = Invoke-Git '-C' $RepoRoot 'tag' '--list'
+    if ($r.ExitCode -ne 0) { throw "[tag] git tag --list failed (exit $($r.ExitCode))" }
+    return @($r.Output | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+}
+
 # Every tag on GitHub, plus every release name (drafts have no tag yet).
 function Get-UsedTagNames {
     param([Parameter(Mandatory)] [string] $GitUrl, [Parameter(Mandatory)] [string] $Repo)
-    $ls = Invoke-Git 'ls-remote' '--tags' '--refs' $GitUrl
-    if ($ls.ExitCode -ne 0) { throw "[tag] git ls-remote --tags $GitUrl failed (exit $($ls.ExitCode))" }
-    $tags = @($ls.Output | ForEach-Object { "$_" } | Where-Object { $_ -match 'refs/tags/' } | ForEach-Object { ($_ -split 'refs/tags/', 2)[1].Trim() })
+    $tags = Get-RemoteTagNames -Remote $GitUrl
     $rel = @(Invoke-GhJson 'release' 'list' '--repo' $Repo '--limit' '1000' '--json' 'tagName' | ForEach-Object { $_.tagName })
     return @($tags + $rel | Where-Object { $_ } | Sort-Object -Unique)
 }
@@ -530,9 +606,17 @@ function Select-ReleaseTag {
 }
 
 function Assert-TagFree {
-    param([Parameter(Mandatory)] [string] $Tag, [AllowEmptyCollection()] [string[]] $Used = @())
+    param(
+        [Parameter(Mandatory)] [string] $Tag,
+        [AllowEmptyCollection()] [string[]] $Used = @(),
+        [AllowEmptyCollection()] [string[]] $HomeUsed = @(),
+        [AllowEmptyCollection()] [string[]] $LocalUsed = @(),
+        [string] $HomeName = 'the home remote'
+    )
     if ($Tag -in $Used) { throw "[tag] $Tag already exists on GitHub (as a tag or a release) -- refusing; pick another with -Tag" }
-    Write-Host "  [tag]            OK  $Tag is unused"
+    if ($Tag -in $HomeUsed) { throw "[tag] $Tag already exists on the home remote $HomeName -- refusing; pick another with -Tag" }
+    if ($Tag -in $LocalUsed) { throw "[tag] $Tag already exists in this checkout -- an earlier run made it and stopped before it reached both remotes. Check where it points, then delete it with 'git tag -d $Tag' or pick another with -Tag" }
+    Write-Host "  [tag]            OK  $Tag is unused here, on $HomeName and on GitHub"
 }
 
 function Assert-OsListDescribesImage {
@@ -572,17 +656,109 @@ function Assert-AssetSizes {
 }
 
 # =============================================================================
+# The tag: made here, pushed home, then pushed to GitHub. The ORDER is this one
+# list, walked in order, so there is no second place it could disagree with.
+# =============================================================================
+
+function Get-TagCommands {
+    param(
+        [Parameter(Mandatory)] [string] $Tag, [Parameter(Mandatory)] [string] $Sha,
+        [Parameter(Mandatory)] [string] $RepoRoot, [Parameter(Mandatory)] [string] $HomeRemote,
+        [Parameter(Mandatory)] [string] $GitHubRemote
+    )
+    $steps = @(
+        [PSCustomObject]@{
+            Label = 'tag'
+            Title = "creating the annotated tag $Tag on $Sha"
+            Arguments = @('-C', $RepoRoot, 'tag', '-a', $Tag, $Sha, '-m', "elspi $Tag")
+            Failure = "nothing was pushed anywhere. If the tag was made, delete it with 'git -C $RepoRoot tag -d $Tag'"
+            StateAfter = "$Tag is in this checkout only"
+        },
+        [PSCustomObject]@{
+            Label = 'push home'
+            Title = "pushing $Tag to the home remote $HomeRemote"
+            Arguments = @('-C', $RepoRoot, 'push', $HomeRemote, "refs/tags/$Tag")
+            Failure = "$Tag exists only in this checkout and nothing reached GitHub. Push it home by hand, or delete it with 'git -C $RepoRoot tag -d $Tag'"
+            StateAfter = "$Tag is in this checkout and on $HomeRemote, and not on GitHub"
+        },
+        [PSCustomObject]@{
+            Label = 'push github'
+            Title = "pushing $Tag to GitHub ($GitHubRemote)"
+            Arguments = @('-C', $RepoRoot, 'push', $GitHubRemote, "refs/tags/$Tag")
+            Failure = "$Tag IS on the home remote $HomeRemote and is NOT on GitHub, and no release was created. Fix the push and re-run, or delete the tag on both sides first"
+            StateAfter = "$Tag is in this checkout, on $HomeRemote and on GitHub"
+        }
+    )
+    return [PSCustomObject]@{ Steps = $steps }
+}
+
+# The tag object a remote carries: the sha of refs/tags/<tag> and, for an
+# annotated tag, the commit ls-remote peels it to.
+function Get-RemoteTagObject {
+    param([Parameter(Mandatory)] [string] $Remote, [Parameter(Mandatory)] [string] $Tag)
+    $ls = Invoke-Git 'ls-remote' $Remote "refs/tags/$Tag"
+    if ($ls.ExitCode -ne 0) { throw "[tag object] git ls-remote $Remote refs/tags/$Tag failed (exit $($ls.ExitCode)): $(@($ls.Output) -join ' / ')" }
+    $object = $null
+    $peeled = $null
+    foreach ($line in @($ls.Output | ForEach-Object { "$_" })) {
+        if ($line -match "^(?<sha>[0-9a-f]{40})\s+refs/tags/$([regex]::Escape($Tag))(?<peel>\^\{\})?$") {
+            if ($Matches['peel']) { $peeled = $Matches['sha'] } else { $object = $Matches['sha'] }
+        }
+    }
+    if (-not $object) { throw "[tag object] $Remote does not carry refs/tags/$Tag after the push -- refusing" }
+    return [PSCustomObject]@{ Remote = $Remote; Object = $object; Peeled = $peeled }
+}
+
+function Get-LocalTagObject {
+    param([Parameter(Mandatory)] [string] $RepoRoot, [Parameter(Mandatory)] [string] $Tag)
+    $o = Invoke-Git '-C' $RepoRoot 'rev-parse' "refs/tags/$Tag"
+    $c = Invoke-Git '-C' $RepoRoot 'rev-parse' "refs/tags/$Tag^{commit}"
+    if ($o.ExitCode -ne 0 -or $c.ExitCode -ne 0) { throw "[tag object] the local tag $Tag could not be read back (git rev-parse exit $($o.ExitCode) / $($c.ExitCode))" }
+    $obj = "$(@($o.Output) -join '')".Trim()
+    $commit = "$(@($c.Output) -join '')".Trim()
+    if ($obj -notmatch '^[0-9a-f]{40}$' -or $commit -notmatch '^[0-9a-f]{40}$') { throw "[tag object] the local tag $Tag reads back as '$obj' / '$commit', not two shas" }
+    return [PSCustomObject]@{ Remote = 'this checkout'; Object = $obj; Peeled = $commit }
+}
+
+# One name, one object, everywhere. Called with no remotes right after the tag
+# is made (so a tag that is not annotated, or is on the wrong commit, stops
+# before any push), then with home alone after the home push (so GitHub is never
+# pushed to when home disagrees), then with both. Each remote is compared with
+# the local object, which is also how the two are compared with each other.
+function Assert-TagObjectsAgree {
+    param(
+        [Parameter(Mandatory)] $LocalTag,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $RemoteTags,
+        [Parameter(Mandatory)] [string] $Tag, [Parameter(Mandatory)] [string] $Sha
+    )
+    if ($LocalTag.Object -eq $LocalTag.Peeled) { throw "[tag object] the local $Tag is not an annotated tag: it points straight at commit $($LocalTag.Peeled)" }
+    if ($LocalTag.Peeled -ne $Sha) { throw "[tag object] the local $Tag peels to $($LocalTag.Peeled), not the promoted commit $Sha" }
+    foreach ($r in @($RemoteTags)) {
+        if ($r.Object -ne $LocalTag.Object) {
+            throw "[tag object] $Tag is tag object $($r.Object) on $($r.Remote) but $($LocalTag.Object) here -- the remotes do not carry the same tag object; refusing"
+        }
+        if ($r.Peeled -and $r.Peeled -ne $Sha) {
+            throw "[tag object] $Tag on $($r.Remote) peels to $($r.Peeled), not the promoted commit $Sha -- refusing"
+        }
+    }
+    $where = if (@($RemoteTags).Count) { " here and on $(@(@($RemoteTags) | ForEach-Object { $_.Remote }) -join ' and ')" } else { ' here' }
+    Write-Host "  [tag object]     OK  $Tag is $($LocalTag.Object)$where, peeling to $Sha"
+}
+
+# =============================================================================
 # The gh commands
 # =============================================================================
 
 function Get-PublishCommands {
     param(
-        [Parameter(Mandatory)] [string] $Tag, [Parameter(Mandatory)] [string] $Sha, [Parameter(Mandatory)] [string] $Arch,
+        [Parameter(Mandatory)] [string] $Tag, [Parameter(Mandatory)] [string] $Arch,
         [Parameter(Mandatory)] [string] $Repo, [Parameter(Mandatory)] [string] $NotesPath,
         [Parameter(Mandatory)] [string[]] $Files, [bool] $Prerelease
     )
     $latest = ($Arch -eq 'arm64') -and -not $Prerelease
-    $create = @('release', 'create', $Tag, '--repo', $Repo, '--target', $Sha, '--draft')
+    # --verify-tag, and no --target: the tag is pushed before this runs, and gh
+    # must fail rather than create a tag of its own on GitHub.
+    $create = @('release', 'create', $Tag, '--repo', $Repo, '--verify-tag', '--draft')
     if ($Prerelease) { $create += '--prerelease' }
     $create += @('--latest=false', '--title', "elspi $Tag", '--notes-file', $NotesPath) + $Files
     $publish = @('release', 'edit', $Tag, '--repo', $Repo, '--draft=false')
@@ -639,10 +815,16 @@ function Assert-PublishedRelease {
     param(
         [Parameter(Mandatory)] [string] $Repo, [Parameter(Mandatory)] [string] $Tag, [Parameter(Mandatory)] [string] $Sha,
         [Parameter(Mandatory)] [bool] $Prerelease, [Parameter(Mandatory)] [bool] $Latest,
-        [Parameter(Mandatory)] [object[]] $Expected, [Parameter(Mandatory)] [string] $OsListSha256, [Parameter(Mandatory)] [string] $ImageName
+        [Parameter(Mandatory)] [object[]] $Expected, [Parameter(Mandatory)] [string] $OsListSha256, [Parameter(Mandatory)] [string] $ImageName,
+        [Parameter(Mandatory)] [string] $TagObject
     )
+    # The tag was pushed, not created by gh, so GitHub must hold the annotated
+    # tag OBJECT that was pushed -- a ref pointing straight at a commit means
+    # something else made the tag.
     $ref = Invoke-GhJson 'api' "repos/$Repo/git/ref/tags/$Tag"
-    if ($ref.object.type -ne 'commit' -or $ref.object.sha -ne $Sha) { throw "[read-back] tag $Tag points at $($ref.object.type) $($ref.object.sha), not commit $Sha" }
+    if ($ref.object.type -ne 'tag' -or $ref.object.sha -ne $TagObject) { throw "[read-back] tag $Tag on GitHub is $($ref.object.type) $($ref.object.sha), not the annotated tag object $TagObject that was pushed" }
+    $obj = Invoke-GhJson 'api' "repos/$Repo/git/tags/$TagObject"
+    if ($obj.object.type -ne 'commit' -or $obj.object.sha -ne $Sha) { throw "[read-back] the tag object $TagObject points at $($obj.object.type) $($obj.object.sha), not commit $Sha" }
     $rel = Invoke-GhJson 'api' "repos/$Repo/releases/tags/$Tag"
     if ($rel.draft) { throw "[read-back] $Tag is still a draft" }
     if ([bool] $rel.prerelease -ne $Prerelease) { throw "[read-back] $Tag prerelease=$($rel.prerelease), expected $Prerelease" }
@@ -680,6 +862,10 @@ function Invoke-PromoteRelease {
     Write-Host "== preflight =="
     Assert-GhAuthenticated -Repo $Repo
     Assert-WslAvailable
+    # Before any work: the tag has to reach home first, so a checkout with no
+    # single home remote stops here rather than after a gigabyte of hashing.
+    $homeRemote = Resolve-HomeRemote -RepoRoot $RepoRoot
+    $githubRemote = Resolve-GitHubPushTarget -RepoRoot $RepoRoot -Repo $Repo -GitUrl $gitUrl
     $dir = Resolve-PromoteCacheDir -CacheDir $CacheDir -RunId $RunId -Sha $Sha -Dest $Dest
     $hasGh = Test-Path -LiteralPath (Join-Path $dir '.artifact-info.json') -PathType Leaf
     $hasFj = Test-Path -LiteralPath (Join-Path $dir '.forgejo-package-info.json') -PathType Leaf
@@ -720,10 +906,15 @@ function Invoke-PromoteRelease {
     Assert-OnBranch -RepoRoot $RepoRoot -Sha $sha -Branch $branch -GitUrl $gitUrl
 
     $imageName = Split-Path -Leaf $imagePath
-    $used = Get-UsedTagNames -GitUrl $gitUrl -Repo $Repo
+    # The tag is made here and lands on both remotes, so the name has to be free
+    # in all three places, and the pick skips a name taken by any of them.
+    $ghUsed = Get-UsedTagNames -GitUrl $gitUrl -Repo $Repo
+    $homeUsed = Get-RemoteTagNames -Remote $homeRemote.Name
+    $localUsed = Get-LocalTagNames -RepoRoot $RepoRoot
+    $used = @(@($ghUsed) + @($homeUsed) + @($localUsed) | Where-Object { $_ } | Sort-Object -Unique)
     $tagName = Select-ReleaseTag -ImageName $imageName -Arch $arch -Used $used -Explicit $Tag
     Assert-TagMatchesArch -Tag $tagName -Arch $arch
-    Assert-TagFree -Tag $tagName -Used $used
+    Assert-TagFree -Tag $tagName -Used $ghUsed -HomeUsed $homeUsed -LocalUsed $localUsed -HomeName $homeRemote.Name
     Write-Host ""
 
     Write-Host "== os_list.json and release notes, from commit $sha =="
@@ -748,41 +939,81 @@ function Invoke-PromoteRelease {
         [PSCustomObject]@{ name = 'os_list.json'; path = $osList; size = (Get-Item -LiteralPath $osList).Length; sha256 = (Get-Sha256OfFile $osList) }
     )
     Assert-AssetSizes -Assets $assets
-    $cmds = Get-PublishCommands -Tag $tagName -Sha $sha -Arch $arch -Repo $Repo -NotesPath $notes -Files @($assets | ForEach-Object { $_.path }) -Prerelease $Prerelease
+    $cmds = Get-PublishCommands -Tag $tagName -Arch $arch -Repo $Repo -NotesPath $notes -Files @($assets | ForEach-Object { $_.path }) -Prerelease $Prerelease
     Assert-NeverLatestArmhf -Commands $cmds -Arch $arch -Prerelease $Prerelease
+    $tagCmds = Get-TagCommands -Tag $tagName -Sha $sha -RepoRoot $RepoRoot -HomeRemote $homeRemote.Name -GitHubRemote $githubRemote
     $prevLatest = Get-LatestTag -Repo $Repo
     Write-Host ""
 
     $mode = if ($Prerelease) { 'PRE-release, not latest' } elseif ($cmds.Latest) { "release, marked LATEST (was: $prevLatest)" } else { "release, NOT latest (latest stays $prevLatest)" }
     Write-Host "== what would be published =="
-    Write-Host ("tag:     {0}" -f $tagName)
+    Write-Host ("tag:     {0} (annotated, made here)" -f $tagName)
     Write-Host ("target:  {0} (on {1})" -f $sha, $branch)
+    Write-Host ("home:    {0} -> {1} (from {2}; the tag is pushed there first)" -f $homeRemote.Name, $homeRemote.Url, $homeRemote.Source)
+    Write-Host ("github:  {0}" -f $githubRemote)
     Write-Host ("arch:    {0}" -f $arch)
     Write-Host ("mode:    {0}" -f $mode)
     foreach ($a in $assets) { Write-Host ("asset:   {0}  {1:N0} bytes  sha256:{2}" -f $a.name, $a.size, $a.sha256) }
     Write-Host ""
     Write-Host "commands:"
+    foreach ($s in $tagCmds.Steps) { Write-Host ("  " + (Format-GitCommand $s.Arguments)) }
+    Write-Host "  (read back after each push: the same annotated tag object, peeling to the commit)"
     Write-Host ("  " + (Format-GhCommand $cmds.Create))
     Write-Host "  (read the draft's assets back by digest)"
     Write-Host ("  " + (Format-GhCommand $cmds.Publish))
-    Write-Host "  (read back: tag -> commit, asset digests, releases/latest, anonymous os_list.json)"
+    Write-Host "  (read back: tag object -> commit, asset digests, releases/latest, anonymous os_list.json)"
     Write-Host ""
 
-    $result = [PSCustomObject]@{ Tag = $tagName; Sha = $sha; Arch = $arch; Latest = $cmds.Latest; Commands = $cmds; Assets = $assets; Published = $false }
+    $result = [PSCustomObject]@{
+        Tag = $tagName; Sha = $sha; Arch = $arch; Latest = $cmds.Latest; Commands = $cmds
+        TagCommands = $tagCmds; HomeRemote = $homeRemote; GitHubRemote = $githubRemote; TagObject = $null
+        Assets = $assets; Published = $false
+    }
     if ($DryRun) {
-        Write-Host "DRY RUN: every check passed; nothing was created on GitHub."
+        Write-Host "DRY RUN: every check passed; no tag was made, and nothing was created on either remote."
         return $result
     }
 
-    $answer = Read-Host "Type the tag ($tagName) to publish it; anything else aborts"
+    $answer = Read-Host "Type the tag ($tagName) to make it and publish; anything else aborts"
     if ($answer -ne $tagName) {
-        Write-Host "Aborted -- nothing was sent."
+        Write-Host "Aborted -- no tag was made and nothing was sent."
         return $result
     }
+
+    Write-Host "== the tag: made here, pushed home, then to GitHub =="
+    $localTag = $null
+    $homeTag = $null
+    foreach ($s in $tagCmds.Steps) {
+        Write-Host "  $($s.Title)"
+        $gitArgs = @($s.Arguments)
+        $r = Invoke-Git @gitArgs
+        if ($r.ExitCode -ne 0) { throw "[$($s.Label)] $(Format-GitCommand $s.Arguments) failed (exit $($r.ExitCode)): $(@($r.Output) -join ' / ') -- $($s.Failure)" }
+        # A refusal here names where the tag got to, because that is what the
+        # next run has to undo.
+        try {
+            switch ($s.Label) {
+                'tag' {
+                    $localTag = Get-LocalTagObject -RepoRoot $RepoRoot -Tag $tagName
+                    Assert-TagObjectsAgree -LocalTag $localTag -RemoteTags @() -Tag $tagName -Sha $sha
+                }
+                'push home' {
+                    $homeTag = Get-RemoteTagObject -Remote $homeRemote.Name -Tag $tagName
+                    Assert-TagObjectsAgree -LocalTag $localTag -RemoteTags @($homeTag) -Tag $tagName -Sha $sha
+                }
+                'push github' {
+                    $ghTag = Get-RemoteTagObject -Remote $githubRemote -Tag $tagName
+                    Assert-TagObjectsAgree -LocalTag $localTag -RemoteTags @($homeTag, $ghTag) -Tag $tagName -Sha $sha
+                }
+            }
+        } catch {
+            throw "$($_.Exception.Message) -- $($s.StateAfter); no release was created"
+        }
+    }
+    $result.TagObject = $localTag.Object
 
     Write-Host "== creating the draft =="
     $rc = Invoke-GhWrite -Arguments $cmds.Create
-    if ($rc -ne 0) { throw "[create] gh release create failed (exit $rc). If a draft $tagName was left behind, inspect it with: gh release view $tagName --repo $Repo" }
+    if ($rc -ne 0) { throw "[create] gh release create failed (exit $rc). The tag $tagName is already on the home remote $($homeRemote.Name) and on GitHub -- a re-run would refuse it as taken, so either delete it on both remotes and here, or finish the release from the existing tag by hand. If a draft was left behind, inspect it with: gh release view $tagName --repo $Repo" }
     Assert-ReleaseAssets -Release (Get-DraftRelease -Repo $Repo -Tag $tagName) -Expected $assets -Stage 'draft'
 
     Write-Host "== publishing =="
@@ -791,10 +1022,10 @@ function Invoke-PromoteRelease {
     $result.Published = $true
     try {
         Assert-PublishedRelease -Repo $Repo -Tag $tagName -Sha $sha -Prerelease $Prerelease -Latest $cmds.Latest `
-            -Expected $assets -OsListSha256 $assets[2].sha256 -ImageName $imageName
+            -Expected $assets -OsListSha256 $assets[2].sha256 -ImageName $imageName -TagObject $localTag.Object
     } catch {
         $undo = if ($cmds.Latest -and $prevLatest) { " To point latest back: gh release edit $prevLatest --repo $Repo --latest" } else { '' }
-        throw "$($_.Exception.Message) -- $tagName IS published.$undo"
+        throw "$($_.Exception.Message) -- $tagName IS published, and the tag is on $($homeRemote.Name) and GitHub.$undo"
     }
     Write-Host ""
     Write-Host "published: https://github.com/$Repo/releases/tag/$tagName"
