@@ -142,7 +142,7 @@ there so a fixture looks like a checkout. A test fixture is the easiest place
 for a real address to end up published by accident, and here there is not even a
 rule that would give one a reason to exist.
 
-## 2026-09-30 order 2026-09-29#2: one config key, and no URL rule at all
+## One config key, and no URL rule at all
 
 Neither a URL-pattern key nor a built-in path rule survives: `elspi.homeRemote`
 is the only input, and unset is a refusal that names it. The key keeps the name
@@ -150,7 +150,7 @@ an earlier round gave it, so a checkout already configured needs no change. The
 cost is one `git config` line per clone; the gain is that nothing in a public
 repo has to describe anybody's machine.
 
-## 2026-09-30 order 2026-09-29#2: placeholder fixtures, and the one URL match left
+## Placeholder fixtures, and the one URL match left
 
 Test fixtures are reserved example names — `example.com`, `/srv/example.git` —
 and nothing reads them, so a real address has no reason to appear in a test.
