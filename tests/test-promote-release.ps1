@@ -528,7 +528,9 @@ try {
     $global:FjDir = New-ForgejoFixture
     $r = Invoke-Case -Dir $global:FjDir -Dry
     Assert-True 'forgejo: dry run fetches the .info and picks the tag' ($r.Tag -eq 'v2026.09.26' -and (Test-Path (Join-Path $global:FjDir '2026-09-26-elspi.info')) -and $global:GhWrites.Count -eq 0)
-    Assert-True 'forgejo: --target is the ELSPI commit, never the snapshot' ($r.Sha -eq $FixSha -and $r.Commands.Create[[array]::IndexOf($r.Commands.Create, '--target') + 1] -eq $FixSha) "(target: $($r.Commands.Create[[array]::IndexOf($r.Commands.Create, '--target') + 1]))"
+    Assert-True 'forgejo: the promoted commit is the ELSPI commit, never the snapshot; create uses --verify-tag, never --target' `
+        (($r.Sha -eq $FixSha) -and ((($r.Commands.Create -join ' ') -match '--verify-tag') -and -not (($r.Commands.Create -join ' ') -match '--target'))) `
+        "(sha: $($r.Sha); create: $($r.Commands.Create -join ' '))"
     Assert-True 'forgejo: the registry is read by the SNAPSHOT (package) sha' (@($global:FjUris | Where-Object { $_ -match "/$SnapSha/" }).Count -ge 2 -and @($global:FjUris | Where-Object { $_ -match $FixSha }).Count -eq 0) "(uris: $($global:FjUris -join ' | '))"
 
     Reset-Fakes
